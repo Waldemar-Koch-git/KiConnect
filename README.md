@@ -1,3 +1,4 @@
+<img width="1217" height="818" alt="grafik" src="https://github.com/user-attachments/assets/791e09c1-4e90-446f-bc8c-57b2514009c8" />
 
 # KI Connect NRW
 
