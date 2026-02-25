@@ -1,6 +1,4 @@
-Hier ist eine README.md für dein KI Connect NRW-Projekt:
 
-```markdown
 # KI Connect NRW
 
 Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthropic/Claude, OpenRouter, KI Connect NRW und eigene OpenAI-kompatible Server). Primär für **persönliche Einzelnutzung** konzipiert – nicht für Enterprise-Deployments.
