@@ -152,9 +152,9 @@ const THINKING_MODELS = new Set([
 const KNOWN_MODELS = {
   // ── Anthropic ──────────────────────────────────────────────────
   'claude-opus-4-6':            { label:'Claude Opus 4.6',           maxOutput:32000,  vision:true  },
-  'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:16000,  vision:true  },
-  'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:8096,   vision:true  },
-  'claude-3-7-sonnet-20250219': { label:'Claude 3.7 Sonnet',         maxOutput:16000,  vision:true  },
+  'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:64000,  vision:true  },
+  'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:16000,  vision:true  },
+  'claude-3-7-sonnet-20250219': { label:'Claude 3.7 Sonnet',         maxOutput:64000,  vision:true  },
   'claude-3-5-sonnet-20241022': { label:'Claude 3.5 Sonnet',         maxOutput:8096,   vision:true  },
   'claude-3-5-haiku-20241022':  { label:'Claude 3.5 Haiku',          maxOutput:8096,   vision:true  },
   'claude-3-opus-20240229':     { label:'Claude 3 Opus',             maxOutput:4096,   vision:true  },
@@ -175,6 +175,32 @@ const KNOWN_MODELS = {
   'o1':                         { label:'o1 (Thinking)',              maxOutput:32768,  vision:false },
   'o1-mini':                    { label:'o1-mini (Thinking)',         maxOutput:65536,  vision:false },
   'o1-pro':                     { label:'o1-pro (Thinking)',          maxOutput:32768,  vision:false },
+  // ── Mistral ───────────────────────────────────────────────────
+  'mistral-large-latest':       { label:'Mistral Large',             maxOutput:131072, vision:true  },
+  'mistral-medium-latest':      { label:'Mistral Medium',            maxOutput:131072, vision:false },
+  'mistral-small-latest':       { label:'Mistral Small',             maxOutput:131072, vision:true  },
+  'codestral-latest':           { label:'Codestral',                 maxOutput:131072, vision:false },
+  'mistral-nemo':               { label:'Mistral Nemo',              maxOutput:131072, vision:false },
+  // ── Gemini ────────────────────────────────────────────────────
+  'gemini-2.0-flash':           { label:'Gemini 2.0 Flash',          maxOutput:8192,   vision:true  },
+  'gemini-2.0-flash-lite':      { label:'Gemini 2.0 Flash Lite',     maxOutput:8192,   vision:true  },
+  'gemini-2.5-pro-preview-05-06':{ label:'Gemini 2.5 Pro',           maxOutput:65536,  vision:true  },
+  'gemini-1.5-pro':             { label:'Gemini 1.5 Pro',            maxOutput:8192,   vision:true  },
+  'gemini-1.5-flash':           { label:'Gemini 1.5 Flash',          maxOutput:8192,   vision:true  },
+  // ── xAI / Grok ───────────────────────────────────────────────
+  'grok-3':                     { label:'Grok 3',                    maxOutput:131072, vision:true  },
+  'grok-3-mini':                { label:'Grok 3 Mini',               maxOutput:131072, vision:false },
+  'grok-2-1212':                { label:'Grok 2',                    maxOutput:131072, vision:true  },
+  // ── Groq-hosted ──────────────────────────────────────────────
+  'llama-3.3-70b-versatile':    { label:'Llama 3.3 70B',             maxOutput:32768,  vision:false },
+  'llama-3.1-8b-instant':       { label:'Llama 3.1 8B',              maxOutput:8000,   vision:false },
+  'llama3-70b-8192':            { label:'Llama 3 70B',               maxOutput:8192,   vision:false },
+  'mixtral-8x7b-32768':         { label:'Mixtral 8x7B',              maxOutput:32768,  vision:false },
+  'gemma2-9b-it':               { label:'Gemma 2 9B',                maxOutput:8192,   vision:false },
+  'deepseek-r1-distill-llama-70b':{ label:'DeepSeek R1 Distill 70B 🧠', maxOutput:8000, vision:false },
+  // ── DeepSeek ─────────────────────────────────────────────────
+  'deepseek-chat':              { label:'DeepSeek V3',               maxOutput:8192,   vision:false },
+  'deepseek-reasoner':          { label:'DeepSeek R1 🧠',            maxOutput:8192,   vision:false },
 };
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
@@ -182,13 +208,40 @@ const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith
 // FIX #7: Maximale Bildgröße für localStorage (500 KB als data-URI ≈ ~375 KB Bild)
 const MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
 
+// ── OpenRouter model-meta cache ───────────────────────────────────
+// Populated during fetchModels() from OpenRouter's /models response.
+// Persisted to localStorage so limits survive page reloads even without network.
+// Schema: { [modelId]: { maxOutput: number, contextLength: number } }
+let _orModelMeta = {};
+(function _loadOrCache() {
+  try {
+    const raw = localStorage.getItem('kic_or_model_meta');
+    if (raw) _orModelMeta = JSON.parse(raw);
+  } catch(e) { _orModelMeta = {}; }
+})();
+function _saveOrCache() {
+  try { localStorage.setItem('kic_or_model_meta', JSON.stringify(_orModelMeta)); } catch(e) {}
+}
+
 function getModelDefaultMax(modelId) {
   if (!modelId) return 8096;
+  // 1. Static KNOWN_MODELS table (highest priority — manually verified)
   const known = KNOWN_MODELS[modelId];
   if (known) return known.maxOutput;
-  if (/70b|llama-3/i.test(modelId)) return 8192;
-  if (/mixtral|mistral/i.test(modelId)) return 4096;
+  // 2. OpenRouter live-fetched cache (covers new/unknown models automatically)
+  const orMeta = _orModelMeta[modelId];
+  if (orMeta?.maxOutput && orMeta.maxOutput > 0) return orMeta.maxOutput;
+  // 3. Regex-based fallback for self-hosted / generic endpoints
+  if (/llama-?3.*70b|llama-?3.*8b|llama-?3\.3/i.test(modelId)) return 32768;
+  if (/llama-?3/i.test(modelId)) return 8192;
+  if (/mixtral/i.test(modelId)) return 32768;
+  if (/mistral/i.test(modelId)) return 32768;
+  if (/gemma.*27b|gemma.*9b/i.test(modelId)) return 8192;
+  if (/deepseek-r|reasoner/i.test(modelId)) return 8192;
   if (/gpt-4/i.test(modelId)) return 8192;
+  if (/gemini-2\.5/i.test(modelId)) return 65536;
+  if (/gemini/i.test(modelId)) return 8192;
+  if (/grok-3/i.test(modelId)) return 131072;
   return 4096;
 }
 function getModelMaxOutput(modelId) {
@@ -967,6 +1020,8 @@ async function fetchModels() {
 
         if (provider.type === 'openrouter') {
           // OpenRouter: use display name from API, mark thinking-capable models
+          // Also extract max_completion_tokens → populate _orModelMeta cache
+          let orCacheUpdated = false;
           rawModels
             .filter(m => m.id && !m.id.includes(':free') === false || true) // show all including free
             .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
@@ -974,7 +1029,15 @@ async function fetchModels() {
               const isThinking = THINKING_MODELS.has(m.id) || /thinking|reason|qwq|r1/i.test(m.id);
               const lbl = (m.name || m.id) + (isThinking ? ' 🧠' : '');
               groupModels.push({ fullId: makeModelId(provider.id, m.id), label: lbl, modelId: m.id });
+              // Cache token limits from OpenRouter metadata
+              const maxOut = m.top_provider?.max_completion_tokens || m.per_request_limits?.max_completion_tokens || 0;
+              const ctxLen = m.context_length || 0;
+              if ((maxOut > 0 || ctxLen > 0) && !KNOWN_MODELS[m.id]) {
+                _orModelMeta[m.id] = { maxOutput: maxOut || 0, contextLength: ctxLen };
+                orCacheUpdated = true;
+              }
             });
+          if (orCacheUpdated) _saveOrCache();
         } else {
           // Generic: use known labels where available
           rawModels.forEach(m => {
