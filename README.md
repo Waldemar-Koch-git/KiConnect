@@ -57,6 +57,8 @@ python ./comm/kiconnect-proxy.py
 pause
 ```
 
+Wenn dies `.bat` datei blockiert wird: Neue Textdatei erstellen und den Inhalt der einfügen und abspeichern. Die Textdatei endung umbenennen in `START_kiconnect.bat`. Im Anschluss doppelklicken auf diese Datei.
+
 Öffne dann: **http://localhost:5000**
 
 ## Manuelle Installation
@@ -70,7 +72,7 @@ pause
 
 ```bash
 # 1. Repository klonen
-git clone https://github.com/dein-username/kiconnect-nrw.git 
+git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect-nrw
 
 # 2. Abhängigkeiten installieren
