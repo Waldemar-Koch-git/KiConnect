@@ -568,7 +568,7 @@ window.MathJax = {
   <!-- Custom Model Dropdown (ersetzt natives select wegen overflow:hidden-Clipping) -->
   <div class="cm-wrap" id="cmWrap">
     <div class="cm-trigger" id="cmTrigger" title="Modell auswählen">
-      <span class="cm-label" id="cmLabel">— Open settings —</span>
+      <span class="cm-label" id="cmLabel" data-i18n="js.selectModel">— Open settings —</span>
       <span class="cm-arrow">▼</span>
     </div>
     <div class="cm-panel" id="cmPanel">
@@ -579,7 +579,7 @@ window.MathJax = {
     </div>
   </div>
   <!-- Verstecktes select als Datenspeicher / Kompatibilität -->
-  <select class="model-select" id="modelSelector"><option value="">— Open settings —</option></select>
+  <select class="model-select" id="modelSelector"><option value="" data-i18n="js.selectModel">— Open settings —</option></select>
 
   <!-- Thinking: direkt rechts vom Modell-Dropdown -->
   <div class="thinking-group" id="thinkingGroup" style="display:none;">
@@ -700,12 +700,20 @@ function applyTranslations() {
   if (btn) btn.textContent = LANGUAGES[currentLang]?.code || currentLang.toUpperCase();
   document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
+  // Custom-Dropdown Placeholder synchronisieren (falls noch kein Modell gewählt)
+  if (typeof syncCustomDropdown === 'function') {
+    const hiddenSel = document.getElementById('modelSelector');
+    if (hiddenSel && !hiddenSel.value) syncCustomDropdown();
+  }
 }
 function setLang(code) {
   currentLang = code;
   localStorage.setItem('kic_lang', code);
   applyTranslations();
   retranslateBubbleButtons();
+  retranslateSuggestionChips();
+  // Custom-Dropdown Placeholder aktualisieren
+  if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   renderLangDropdown();
   closeLangDropdown();
 }
@@ -742,6 +750,22 @@ function retranslateBubbleButtons() {
     if (keyMap[action]) btn.textContent = t(keyMap[action]);
   });
 }
+// Retranslate suggestion chips when language changes
+function retranslateSuggestionChips() {
+  const suggestions = [
+    { i18n: 'empty.quantum', msgKey: 'empty.quantumMsg' },
+    { i18n: 'empty.python',  msgKey: 'empty.pythonMsg' },
+    { i18n: 'empty.mlvsdl',  msgKey: 'empty.mlvsdlMsg' },
+    { i18n: 'empty.integral',msgKey: 'empty.integralMsg' },
+  ];
+  const chipsContainer = document.getElementById('suggestionChips');
+  if (!chipsContainer) return;
+  const chips = chipsContainer.querySelectorAll('.suggestion-chip');
+  chips.forEach((chip, i) => {
+    if (suggestions[i]) chip.textContent = t(suggestions[i].i18n);
+  });
+}
+
 document.addEventListener('click', e => {
   const switcher = document.getElementById('langSwitcher');
   if (switcher && !switcher.contains(e.target)) closeLangDropdown();
@@ -2348,7 +2372,7 @@ async function sendMessageCore(text, att) {
 
   const idx=chat.messages.length-1;
   const msgEl=buildMsgEl({role:'user',content:text||null,_files:att.map(a=>a.name)},idx);
-  document.getElementById('messages').appendChild(msgEl);
+  appendToMessages(msgEl);
   scrollToBottom();
 
   const typingId=showTyping();
@@ -2482,7 +2506,7 @@ async function sendMessageCore(text, att) {
   } catch(e) {
     removeTyping(typingId);
     if(e.name==='AbortError'){if(!assistantText)assistantText='_(Generierung gestoppt)_';}
-    else{assistantText=`❌ Fehler: ${escHtml(e.message)}`;const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);document.getElementById('messages').appendChild(errEl);scrollToBottom();setStatus('red');}
+    else{assistantText=`❌ Fehler: ${escHtml(e.message)}`;const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
   if(assistantText){
@@ -2491,7 +2515,7 @@ async function sendMessageCore(text, att) {
     chat.messages.push(msgObj);
     const aiIdx=chat.messages.length-1;
     const c=document.getElementById('messages');
-    const lastAiEl=c.querySelector('.message-row.ai:last-child');
+    const _aiEls=c.querySelectorAll('.message-row.ai');const lastAiEl=_aiEls.length?_aiEls[_aiEls.length-1]:null;
     if(lastAiEl&&!lastAiEl.dataset.idx){
       lastAiEl.dataset.idx=aiIdx;
       const wrap=lastAiEl.querySelector('.bubble-wrap');
@@ -2515,6 +2539,14 @@ async function sendMessageCore(text, att) {
 }
 
 // ── Message UI ─────────────────────────────────────────────────────
+
+// ── Helper: Elemente vor #chatTokenTotal einfügen ─────────────────────────
+function appendToMessages(el) {
+  const c = document.getElementById('messages');
+  const total = c.querySelector('#chatTokenTotal');
+  if (total) { c.insertBefore(el, total); } else { c.appendChild(el); }
+}
+
 function appendEmptyAI() {
   const c=document.getElementById('messages');
   const mid=config.model||'';
@@ -2528,7 +2560,7 @@ function appendEmptyAI() {
   const wrap=document.createElement('div');wrap.className='bubble-wrap';
   const bubble=document.createElement('div');bubble.className='bubble';
   wrap.appendChild(bubble);div.appendChild(avatarCol);div.appendChild(wrap);
-  c.appendChild(div);scrollToBottom();return div;
+  appendToMessages(div);scrollToBottom();return div;
 }
 function showTyping() {
   const id='typing_'+Date.now();
@@ -2540,7 +2572,7 @@ function showTyping() {
   const dots=document.createElement('div');dots.className='dots';
   for(let i=0;i<3;i++){const s=document.createElement('span');dots.appendChild(s);}
   bl.appendChild(dots);bw.appendChild(bl);div.appendChild(ac);div.appendChild(bw);
-  document.getElementById('messages').appendChild(div);scrollToBottom();return id;
+  appendToMessages(div);scrollToBottom();return id;
 }
 function removeTyping(id){document.getElementById(id)?.remove();}
 function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;}
@@ -3206,7 +3238,7 @@ function setupEventListeners() {
     if (!count) {
       const em = document.createElement('div');
       em.className = 'cm-empty';
-      em.textContent = 'Kein Modell gefunden';
+      em.textContent = typeof t === 'function' ? t('js.noModelFound') : 'No model found';
       list.appendChild(em);
     }
   }
@@ -3250,9 +3282,9 @@ function setupEventListeners() {
   window.syncCustomDropdown = function() {
     const val = hiddenSel.value;
     const opt = hiddenSel.options[hiddenSel.selectedIndex];
-    label.textContent = opt ? opt.textContent : '— Modell wählen —';
+    label.textContent = opt ? opt.textContent : (typeof t === 'function' ? t('js.selectModel') : '— Select model —');
     // Sync i18n placeholder wenn leer
-    if (!val) label.textContent = '— Open settings —';
+    if (!val) label.textContent = (typeof t === 'function' ? t('js.selectModel') : '— Open settings —');
     if (open) renderList(search.value);
   };
 
