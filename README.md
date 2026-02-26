@@ -2,7 +2,8 @@
 
 Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, KI Connect NRW und eigene OpenAI-kompatible Server). Primär für **persönliche Einzelnutzung** konzipiert – nicht für Enterprise-Deployments.
 
-<img width="1217" height="818" alt="grafik" src="https://github.com/user-attachments/assets/791e09c1-4e90-446f-bc8c-57b2514009c8" />
+<img width="1931" height="1399" alt="grafik" src="https://github.com/user-attachments/assets/dda72a4e-076a-482c-a82b-7fb7a1844410" />
+
 
 ## Features
 
