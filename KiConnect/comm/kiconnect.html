@@ -10,7 +10,7 @@
   default-src 'self';
   script-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
   style-src   'self' 'unsafe-inline';
-  connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai;
+  connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com;
   img-src     'self' data: blob:;
   font-src    'self';
   frame-src   'none';
@@ -19,7 +19,7 @@
   form-action 'self';
   upgrade-insecure-requests;
 ">
-<title>KI-Chat</title>
+<title>AI Chat</title>
 <style>
   @font-face {
     font-family: 'Syne';
@@ -72,8 +72,25 @@ window.MathJax = {
   .header-right { margin-left:auto; display:flex; align-items:center; gap:10px; }
   .status-dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
-  .model-select { background:var(--surface2); border:1px solid var(--border); color:var(--text); font-family:'IBM Plex Mono',monospace; font-size:12px; padding:6px 10px; border-radius:8px; cursor:pointer; outline:none; appearance:none; min-width:180px; }
-  .model-select:focus { border-color:var(--accent); }
+  .model-select { display:none; } /* hidden – nur noch als Datenspeicher genutzt */
+  /* ── Custom Model Dropdown ── */
+  .cm-wrap { position:relative; min-width:180px; flex-shrink:0; }
+  .cm-trigger { display:flex; align-items:center; gap:8px; background:var(--surface2); border:1px solid var(--border); color:var(--text); font-family:'IBM Plex Mono',monospace; font-size:12px; padding:6px 10px; border-radius:8px; cursor:pointer; user-select:none; transition:border-color 0.15s; white-space:nowrap; max-width:280px; }
+  .cm-trigger:hover, .cm-trigger.open { border-color:var(--accent); }
+  .cm-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cm-arrow { margin-left:6px; opacity:0.5; transition:transform 0.2s; font-size:10px; flex-shrink:0; }
+  .cm-trigger.open .cm-arrow { transform:rotate(180deg); }
+  .cm-panel { position:fixed; background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 12px 40px rgba(0,0,0,0.55); z-index:9999; overflow:hidden; display:none; flex-direction:column; min-width:260px; max-width:420px; }
+  .cm-panel.open { display:flex; }
+  .cm-search-wrap { padding:8px; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .cm-search { width:100%; background:var(--surface2); border:1px solid var(--border); color:var(--text); font-family:'IBM Plex Mono',monospace; font-size:12px; padding:5px 9px; border-radius:7px; outline:none; }
+  .cm-search:focus { border-color:var(--accent); }
+  .cm-list { overflow-y:auto; flex:1; }
+  .cm-group-label { font-size:10px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:1px; padding:8px 12px 4px; font-family:'IBM Plex Mono',monospace; }
+  .cm-option { padding:7px 14px; font-size:12px; font-family:'IBM Plex Mono',monospace; color:var(--text); cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cm-option:hover { background:var(--surface2); }
+  .cm-option.selected { color:var(--accent); background:rgba(61,126,255,0.08); }
+  .cm-empty { padding:16px; text-align:center; color:var(--muted); font-size:12px; font-family:'IBM Plex Mono',monospace; }
   .profile-badge { display:flex; align-items:center; gap:6px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:5px 10px; font-size:12px; font-family:'IBM Plex Mono',monospace; cursor:pointer; transition:all 0.2s; }
   .profile-badge:hover { border-color:var(--accent); }
   .profile-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
@@ -222,6 +239,11 @@ window.MathJax = {
   .bubble-act-btn { background:var(--surface2); border:1px solid var(--border); color:var(--muted); font-size:11px; padding:3px 8px; border-radius:6px; cursor:pointer; font-family:'IBM Plex Mono',monospace; transition:all 0.15s; }
   .bubble-act-btn:hover { color:var(--text); border-color:var(--accent); }
   .bubble-act-btn.danger:hover { color:var(--red); border-color:var(--red); }
+  .token-badge { display:inline-flex; align-items:center; gap:6px; font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted); margin-top:4px; padding:2px 0; opacity:0; transition:opacity 0.2s; }
+  .message-row:hover .token-badge { opacity:1; }
+  .token-badge span { background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 5px; }
+  .token-badge span.cache { color:#f39c12; border-color:rgba(243,156,18,0.3); }
+  .chat-token-total { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); text-align:center; padding:6px 0 2px; opacity:0.6; }
   .edit-box { width:100%; background:var(--surface2); border:1px solid var(--accent); color:var(--text); font-family:'Syne',sans-serif; font-size:15px; border-radius:10px; padding:10px 12px; outline:none; resize:none; line-height:1.6; }
   .edit-actions { display:flex; gap:6px; margin-top:6px; }
   .edit-confirm-btn { background:linear-gradient(135deg,var(--accent),var(--accent2)); border:none; color:white; font-family:'Syne',sans-serif; font-weight:700; font-size:13px; padding:6px 14px; border-radius:8px; cursor:pointer; }
@@ -301,6 +323,19 @@ window.MathJax = {
   .reset-btn:hover { color:var(--accent); border-color:var(--accent); }
   .model-max-modified { border-color:rgba(61,126,255,0.4); }
   @media(max-width:640px) { .sidebar{display:none;} .message-row{padding:10px 14px;} .input-zone{padding:12px 14px 16px;} }
+
+  /* ── Thinking Toggle ─────────────────────────────────────────── */
+  .thinking-group { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .thinking-toggle { position:relative; display:flex; align-items:center; gap:6px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:5px 10px; cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); transition:all 0.2s; user-select:none; }
+  .thinking-toggle:hover { border-color:var(--accent2); color:var(--text); }
+  .thinking-toggle.active { border-color:var(--accent2); background:rgba(124,92,252,0.12); color:var(--accent2); }
+  .thinking-toggle .brain-icon { font-size:14px; }
+  .thinking-intensity { display:none; align-items:center; gap:6px; background:var(--surface2); border:1px solid var(--accent2); border-radius:8px; padding:4px 10px; }
+  .thinking-intensity.visible { display:flex; }
+  .thinking-intensity label { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--accent2); white-space:nowrap; }
+  .thinking-intensity input[type=range] { width:120px; accent-color:var(--accent2); cursor:pointer; }
+  .thinking-intensity .intensity-val { font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--accent2); min-width:52px; text-align:right; }
+  .thinking-badge { display:inline-block; background:rgba(124,92,252,0.15); border:1px solid var(--accent2); color:var(--accent2); font-size:10px; font-family:'IBM Plex Mono',monospace; padding:1px 6px; border-radius:20px; margin-left:4px; vertical-align:middle; }
 
   #loginScreen { display:none; }
   #loginScreen.active { display:flex !important; }
@@ -445,9 +480,15 @@ window.MathJax = {
     <div class="setting-label" style="margin-top:10px;" data-i18n="provider.type">Typ</div>
     <div class="provider-type-row" id="providerTypeRow">
       <div class="type-chip selected" data-type="openai-compat">OpenAI-kompatibel</div>
-      <div class="type-chip" data-type="anthropic">Anthropic (Claude)</div>
-      <div class="type-chip" data-type="openai-direct">OpenAI direkt</div>
+      <div class="type-chip" data-type="anthropic">Anthropic</div>
+      <div class="type-chip" data-type="openai-direct">OpenAI</div>
+      <div class="type-chip" data-type="openrouter">OpenRouter</div>
+      <div class="type-chip" data-type="mistral">Mistral</div>
+      <div class="type-chip" data-type="gemini">Gemini</div>
+      <div class="type-chip" data-type="xai">xAI Grok</div>
+      <div class="type-chip" data-type="groq">Groq</div>
     </div>
+    <div id="pvProviderHint" style="font-size:10px;color:var(--muted);margin-top:6px;font-family:'IBM Plex Mono',monospace;line-height:1.5;display:none;padding:6px 8px;background:rgba(61,126,255,0.05);border-radius:6px;border:1px solid rgba(61,126,255,0.15);"></div>
     <div id="pvServerUrlGroup" style="margin-top:10px;">
       <div class="setting-label" data-i18n="provider.serverUrl">Server URL</div>
       <input class="setting-input" type="url" id="pvServerUrl" placeholder="https://chat.kiconnect.nrw/api/v1">
@@ -524,7 +565,35 @@ window.MathJax = {
   <div class="header-left">
     <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="Sidebar ein-/ausblenden">☰</button>
   </div>
-  <select class="model-select" id="modelSelector"><option value="" data-i18n="settings.noProviderOpt">— Open settings —</option></select>
+  <!-- Custom Model Dropdown (ersetzt natives select wegen overflow:hidden-Clipping) -->
+  <div class="cm-wrap" id="cmWrap">
+    <div class="cm-trigger" id="cmTrigger" title="Modell auswählen">
+      <span class="cm-label" id="cmLabel">— Open settings —</span>
+      <span class="cm-arrow">▼</span>
+    </div>
+    <div class="cm-panel" id="cmPanel">
+      <div class="cm-search-wrap">
+        <input class="cm-search" id="cmSearch" type="text" placeholder="Modell suchen…" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="cm-list" id="cmList"></div>
+    </div>
+  </div>
+  <!-- Verstecktes select als Datenspeicher / Kompatibilität -->
+  <select class="model-select" id="modelSelector"><option value="">— Open settings —</option></select>
+
+  <!-- Thinking: direkt rechts vom Modell-Dropdown -->
+  <div class="thinking-group" id="thinkingGroup" style="display:none;">
+    <div class="thinking-toggle" id="thinkingToggle" title="Extended Thinking / Reasoning aktivieren">
+      <span class="brain-icon">🧠</span>
+      <span id="thinkingToggleLabel" data-i18n="thinking.toggle">Think</span>
+    </div>
+    <div class="thinking-intensity" id="thinkingIntensity">
+      <label id="thinkingIntensityLabel">Budget</label>
+      <input type="range" id="thinkingIntensitySlider" min="1" max="3" step="1" value="2">
+      <span class="intensity-val" id="thinkingIntensityVal">medium</span>
+    </div>
+  </div>
+
   <div class="header-right">
     <div class="profile-badge" id="profileBadge" title="Benutzerprofile">
       <div class="profile-dot" id="profileBadgeDot" style="background:var(--muted)"></div>
@@ -636,6 +705,7 @@ function setLang(code) {
   currentLang = code;
   localStorage.setItem('kic_lang', code);
   applyTranslations();
+  retranslateBubbleButtons();
   renderLangDropdown();
   closeLangDropdown();
 }
@@ -660,6 +730,18 @@ function toggleLangDropdown() {
 function closeLangDropdown() {
   document.getElementById('langDropdown')?.classList.remove('open');
 }
+
+// Retranslate all existing bubble action buttons when language changes
+function retranslateBubbleButtons() {
+  document.querySelectorAll('.bubble-act-btn[data-action]').forEach(btn => {
+    const action = btn.getAttribute('data-action');
+    const keyMap = {
+      'copy': 'js.copy', 'edit': 'js.edit', 'branch': 'js.branch',
+      'regenerate': 'js.regenerate', 'delete': 'js.delete'
+    };
+    if (keyMap[action]) btn.textContent = t(keyMap[action]);
+  });
+}
 document.addEventListener('click', e => {
   const switcher = document.getElementById('langSwitcher');
   if (switcher && !switcher.contains(e.target)) closeLangDropdown();
@@ -668,24 +750,62 @@ document.addEventListener('click', e => {
 // ─── Konstanten ───────────────────────────────────────────────────
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
 const PROVIDER_TYPES = {
-  'openai-compat': { label:'OpenAI-kompatibel', needsUrl:true },
+  'openai-compat': { label:'OpenAI-kompatibel', needsUrl:true  },
   'anthropic':     { label:'Anthropic (Claude)', needsUrl:false },
   'openai-direct': { label:'OpenAI direkt',      needsUrl:false },
+  'openrouter':    { label:'OpenRouter',          needsUrl:false },
+  'mistral':       { label:'Mistral AI',          needsUrl:false },
+  'gemini':        { label:'Google Gemini',       needsUrl:false },
+  'xai':           { label:'xAI Grok',            needsUrl:false },
+  'groq':          { label:'Groq',                needsUrl:false },
 };
+const PROVIDER_HINTS = {
+  'openai-compat': '💡 Server-URL + opt. API Key · für KI Connect NRW, LM Studio, Ollama, …',
+  'anthropic':     '💡 API Key von console.anthropic.com · 🧠 Extended Thinking für Claude 3.7+/4',
+  'openai-direct': '💡 API Key von platform.openai.com · 🧠 Reasoning für o1/o3/o4',
+  'openrouter':    '💡 API Key von openrouter.ai · 200+ Modelle live geladen · 🧠 Thinking für Reasoning-Modelle',
+  'mistral':       '💡 API Key von console.mistral.ai · Modelle werden live geladen',
+  'gemini':        '💡 API Key von aistudio.google.com (AI Studio) · Modelle werden live geladen',
+  'xai':           '💡 API Key von console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
+  'groq':          '💡 API Key von console.groq.com · Ultra-schnelle Inferenz · Modelle live',
+};
+// thinking-capable models: claude (extended thinking), openai reasoning models (o-series + gpt-4.5/4.1)
+const THINKING_MODELS = new Set([
+  // Anthropic — Extended Thinking
+  'claude-opus-4-6','claude-sonnet-4-6','claude-3-7-sonnet-20250219',
+  // OpenAI — Reasoning / thinking effort
+  'o1','o1-mini','o1-pro','o3','o3-mini','o4-mini','o4-mini-high',
+  // gpt-4.5/4.1 preview with thinking support
+  'gpt-4.5-preview','gpt-4.1','gpt-4.1-mini',
+  // grok / qwen / deepseek on openrouter also support reasoning
+]);
+
 const KNOWN_MODELS = {
-  'claude-opus-4-6':           { label:'Claude Opus 4.6',    maxOutput:32000,  vision:true },
-  'claude-sonnet-4-6':         { label:'Claude Sonnet 4.6',  maxOutput:16000,  vision:true },
-  'claude-haiku-4-5-20251001': { label:'Claude Haiku 4.5',   maxOutput:8096,   vision:true },
-  'claude-3-7-sonnet-20250219':{ label:'Claude 3.7 Sonnet',  maxOutput:16000,  vision:true },
-  'claude-3-5-sonnet-20241022':{ label:'Claude 3.5 Sonnet',  maxOutput:8096,   vision:true },
-  'claude-3-5-haiku-20241022': { label:'Claude 3.5 Haiku',   maxOutput:8096,   vision:true },
-  'claude-3-opus-20240229':    { label:'Claude 3 Opus',      maxOutput:4096,   vision:true },
-  'gpt-4o':                    { label:'GPT-4o',             maxOutput:16384,  vision:true },
-  'gpt-4o-mini':               { label:'GPT-4o mini',        maxOutput:16384,  vision:true },
-  'gpt-4-turbo':               { label:'GPT-4 Turbo',        maxOutput:4096,   vision:true },
-  'o1':                        { label:'o1',                 maxOutput:32768,  vision:false },
-  'o1-mini':                   { label:'o1-mini',            maxOutput:65536,  vision:false },
-  'o3-mini':                   { label:'o3-mini',            maxOutput:100000, vision:false },
+  // ── Anthropic ──────────────────────────────────────────────────
+  'claude-opus-4-6':            { label:'Claude Opus 4.6',           maxOutput:32000,  vision:true  },
+  'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:16000,  vision:true  },
+  'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:8096,   vision:true  },
+  'claude-3-7-sonnet-20250219': { label:'Claude 3.7 Sonnet',         maxOutput:16000,  vision:true  },
+  'claude-3-5-sonnet-20241022': { label:'Claude 3.5 Sonnet',         maxOutput:8096,   vision:true  },
+  'claude-3-5-haiku-20241022':  { label:'Claude 3.5 Haiku',          maxOutput:8096,   vision:true  },
+  'claude-3-opus-20240229':     { label:'Claude 3 Opus',             maxOutput:4096,   vision:true  },
+  // ── OpenAI — GPT series ────────────────────────────────────────
+  'gpt-4.1':                    { label:'GPT-4.1',                   maxOutput:32768,  vision:true  },
+  'gpt-4.1-mini':               { label:'GPT-4.1 mini',              maxOutput:32768,  vision:true  },
+  'gpt-4.1-nano':               { label:'GPT-4.1 nano',              maxOutput:32768,  vision:true  },
+  'gpt-4o':                     { label:'GPT-4o',                    maxOutput:16384,  vision:true  },
+  'gpt-4o-mini':                { label:'GPT-4o mini',               maxOutput:16384,  vision:true  },
+  'gpt-4o-search-preview':      { label:'GPT-4o Search Preview',     maxOutput:16384,  vision:true  },
+  'gpt-4.5-preview':            { label:'GPT-4.5 Preview',           maxOutput:16384,  vision:true  },
+  'gpt-4-turbo':                { label:'GPT-4 Turbo',               maxOutput:4096,   vision:true  },
+  // ── OpenAI — o-series (Reasoning/Thinking) ────────────────────
+  'o4-mini':                    { label:'o4-mini (Thinking)',         maxOutput:100000, vision:true  },
+  'o4-mini-high':               { label:'o4-mini high (Thinking)',    maxOutput:100000, vision:true  },
+  'o3':                         { label:'o3 (Thinking)',              maxOutput:100000, vision:true  },
+  'o3-mini':                    { label:'o3-mini (Thinking)',         maxOutput:100000, vision:false },
+  'o1':                         { label:'o1 (Thinking)',              maxOutput:32768,  vision:false },
+  'o1-mini':                    { label:'o1-mini (Thinking)',         maxOutput:65536,  vision:false },
+  'o1-pro':                     { label:'o1-pro (Thinking)',          maxOutput:32768,  vision:false },
 };
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
@@ -713,6 +833,7 @@ function getModelMaxOutput(modelId) {
 let config = {
   model: '', temperature: 0.7, maxTokens: null, systemPrompt: '',
   activeProfileId: null, userModelMaxOverrides: {}, chatMaxWidth: 880,
+  thinkingEnabled: false, thinkingIntensity: 2, thinkingBudget: 8000,
 };
 let providers = [];
 let profiles  = [];
@@ -900,7 +1021,7 @@ async function save() {
   } catch (e) {
     // localStorage voll (QuotaExceededError) — älteste Chats kürzen
     if (e.name === 'QuotaExceededError' || e.code === 22) {
-      toast('⚠️ Speicher voll – älteste Chats werden gekürzt');
+      toast(t('js.storageFull'));
       chats = chats.slice(0, Math.max(1, Math.floor(chats.length / 2)));
       try { localStorage.setItem('kic_chats', JSON.stringify(chats.slice(0,100).map(c=>({...c,messages:c.messages.map(sanitizeMsgForStorage)})))); } catch {}
     }
@@ -979,6 +1100,11 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'openai-compat') return (provider.serverUrl || '').replace(/\/+$/, '');
   if (provider.type === 'anthropic')     return 'https://api.anthropic.com';
   if (provider.type === 'openai-direct') return 'https://api.openai.com/v1';
+  if (provider.type === 'openrouter')    return 'https://openrouter.ai/api/v1';
+  if (provider.type === 'mistral')       return 'https://api.mistral.ai/v1';
+  if (provider.type === 'gemini')        return 'https://generativelanguage.googleapis.com/v1beta/openai';
+  if (provider.type === 'xai')           return 'https://api.x.ai/v1';
+  if (provider.type === 'groq')          return 'https://api.groq.com/openai/v1';
   return null;
 }
 function effectiveMaxTokens() {
@@ -991,7 +1117,10 @@ function effectiveMaxTokens() {
 
 // ── Proxy ─────────────────────────────────────────────────────────
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-const ALLOWED_API_DOMAINS = ['api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai'];
+const ALLOWED_API_DOMAINS = [
+  'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
+  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com',
+];
 function isSafeApiUrl(url) {
   try {
     const h = new URL(url).hostname;
@@ -1130,6 +1259,12 @@ function editProvider(id) {
 function selectProviderType(type) {
   document.querySelectorAll('.type-chip').forEach(el => el.classList.toggle('selected', el.dataset.type === type));
   document.getElementById('pvServerUrlGroup').style.display = (type === 'openai-compat') ? 'block' : 'none';
+  const hint = document.getElementById('pvProviderHint');
+  if (hint) {
+    const hintText = PROVIDER_HINTS[type];
+    if (hintText) { hint.textContent = hintText; hint.style.display = 'block'; }
+    else hint.style.display = 'none';
+  }
 }
 function getSelectedProviderType() { return document.querySelector('.type-chip.selected')?.dataset.type || 'openai-compat'; }
 
@@ -1377,43 +1512,118 @@ async function fetchModels() {
   for (const provider of providers) {
     if (!provider.apiKey) { providerStatus[provider.id] = 'nokey'; continue; }
     const groupModels = []; let provOk = false;
+
     if (provider.type === 'anthropic') {
+      // ── Anthropic: live model list ──────────────────────────────
       try {
         const res = await fetch(proxyUrl('https://api.anthropic.com/v1/models'), {
-          headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' }
+          headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01',
+                     'anthropic-dangerous-direct-browser-access': 'true' }
         });
         if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        const liveIds = new Set((data.data || []).map(m => m.id));
+        // Prefer live models; fall back to CLAUDE_MODELS list if API returns nothing
+        const modelsToShow = liveIds.size > 0
+          ? [...liveIds].sort().reverse().map(id => ({
+              id, label: KNOWN_MODELS[id]?.label || id
+            }))
+          : CLAUDE_MODELS;
+        modelsToShow.forEach(m => groupModels.push({
+          fullId: makeModelId(provider.id, m.id || m),
+          label: m.label || m.id || m,
+          modelId: m.id || m
+        }));
         provOk = true;
       } catch(e) {
         providerStatus[provider.id] = 'error'; anyError = true;
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
-      CLAUDE_MODELS.forEach(m => groupModels.push({ fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id }));
+
     } else if (provider.type === 'openai-direct') {
+      // ── OpenAI: live model list ─────────────────────────────────
       try {
         const res = await fetch(proxyUrl('https://api.openai.com/v1/models'), {
           headers: { 'Authorization': `Bearer ${provider.apiKey}` }
         });
         if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        // Filter: only chat-capable models (exclude embedding, tts, whisper, dall-e, etc.)
+        const CHAT_PATTERN = /^(gpt-|o\d|chatgpt-)/;
+        const EXCLUDE_PATTERN = /embed|whisper|tts|dall-e|realtime|audio|preview-\d{4}|transcribe|search$/;
+        const PRIORITY_ORDER = ['gpt-4.1','gpt-4o','o4','o3','o1','gpt-4.5','gpt-4-turbo','gpt-3'];
+        const liveModels = (data.data || [])
+          .filter(m => CHAT_PATTERN.test(m.id) && !EXCLUDE_PATTERN.test(m.id))
+          .sort((a, b) => {
+            const pa = PRIORITY_ORDER.findIndex(p => a.id.startsWith(p));
+            const pb = PRIORITY_ORDER.findIndex(p => b.id.startsWith(p));
+            const ra = pa === -1 ? 999 : pa;
+            const rb = pb === -1 ? 999 : pb;
+            return ra !== rb ? ra - rb : b.id.localeCompare(a.id);
+          });
+        if (liveModels.length > 0) {
+          liveModels.forEach(m => groupModels.push({
+            fullId: makeModelId(provider.id, m.id),
+            label: KNOWN_MODELS[m.id]?.label || m.id,
+            modelId: m.id
+          }));
+        } else {
+          // Fallback to static list
+          OPENAI_MODELS.forEach(m => groupModels.push({
+            fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id
+          }));
+        }
         provOk = true;
       } catch(e) {
         providerStatus[provider.id] = 'error'; anyError = true;
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
-      OPENAI_MODELS.forEach(m => groupModels.push({ fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id }));
+
     } else {
+      // ── OpenAI-compat + OpenRouter + Mistral + Gemini + xAI + Groq ──
+      const endpoint = getProviderEndpoint(provider);
+      if (!endpoint) { providerStatus[provider.id] = 'error'; anyError = true; continue; }
       try {
-        const endpoint = getProviderEndpoint(provider);
-        const res = await fetch(proxyUrl(`${endpoint}/models`), { headers: { 'Authorization': `Bearer ${provider.apiKey}` } });
+        const extraHeaders = {};
+        if (provider.type === 'openrouter') {
+          extraHeaders['HTTP-Referer'] = window.location.origin;
+          extraHeaders['X-Title'] = 'KI Connect NRW';
+        }
+        const res = await fetch(proxyUrl(`${endpoint}/models`), {
+          headers: { 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders }
+        });
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
-        (data.data || []).forEach(m => groupModels.push({ fullId: makeModelId(provider.id, m.id), label: m.id, modelId: m.id }));
+        const rawModels = data.data || data.models || [];
+
+        if (provider.type === 'openrouter') {
+          // OpenRouter: use display name from API, mark thinking-capable models
+          rawModels
+            .filter(m => m.id && !m.id.includes(':free') === false || true) // show all including free
+            .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+            .forEach(m => {
+              const isThinking = THINKING_MODELS.has(m.id) || /thinking|reason|qwq|r1/i.test(m.id);
+              const lbl = (m.name || m.id) + (isThinking ? ' 🧠' : '');
+              groupModels.push({ fullId: makeModelId(provider.id, m.id), label: lbl, modelId: m.id });
+            });
+        } else {
+          // Generic: use known labels where available
+          rawModels.forEach(m => {
+            const id = m.id || m.name || '';
+            if (!id) return;
+            const knownLabel = KNOWN_MODELS[id]?.label;
+            const isThinking = THINKING_MODELS.has(id) || isThinkingCapable(id);
+            const lbl = (knownLabel || id) + (isThinking ? ' 🧠' : '');
+            groupModels.push({ fullId: makeModelId(provider.id, id), label: lbl, modelId: id });
+          });
+        }
         provOk = true;
       } catch(e) {
         providerStatus[provider.id] = 'error'; anyError = true;
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
     }
+
     if (provOk) { providerStatus[provider.id] = 'ok'; anyOk = true; }
     if (groupModels.length) allGroups.push({ providerId: provider.id, providerName: provider.name, models: groupModels });
   }
@@ -1429,7 +1639,11 @@ async function fetchModels() {
   let optsHtml = ph;
   allGroups.forEach(g => {
     optsHtml += `<optgroup label="${escHtml(g.providerName)}">`;
-    g.models.forEach(m => { optsHtml += `<option value="${escHtml(m.fullId)}">${escHtml(m.label)}</option>`; });
+    g.models.forEach(m => {
+      const isThinking = THINKING_MODELS.has(m.modelId);
+      const badge = isThinking ? ' 🧠' : '';
+      optsHtml += `<option value="${escHtml(m.fullId)}">${escHtml(m.label)}${badge}</option>`;
+    });
     optsHtml += '</optgroup>';
   });
   ['modelSelector','modelInput'].forEach(id => {
@@ -1447,15 +1661,113 @@ async function fetchModels() {
     config.model = sel.value;
     document.getElementById('modelInput').value = config.model;
     const p = activeProfile(); if(p) p.model = config.model;
-    updateModelMaxInfo(); save(); renderAttachments();
+    updateModelMaxInfo(); updateThinkingUI(); save(); renderAttachments();
+    if (window.syncCustomDropdown) syncCustomDropdown();
   };
-  updateModelMaxInfo(); syncAllModelSelects();
+  updateModelMaxInfo(); syncAllModelSelects(); updateThinkingUI();
+  if (window.buildCustomDropdownData) buildCustomDropdownData();
 }
 function updateModelMaxInfo() {
   const { modelId } = splitModelId(config.model);
   const max = getModelMaxOutput(modelId);
   const el = document.getElementById('modelMaxInfo');
   if (el) el.textContent = modelId ? tf('js.modelMax', {n: max.toLocaleString()}) : '';
+}
+
+// ── Thinking / Reasoning UI ───────────────────────────────────────
+// Intensity labels are now sourced from i18n via t()
+// Keys: thinking.low / thinking.medium / thinking.high
+// OpenAI reasoning_effort values
+const OAI_EFFORT = { 1: 'low', 2: 'medium', 3: 'high' };
+// Anthropic budget_tokens: stored directly in config.thinkingBudget (continuous)
+const CLAUDE_BUDGET = { 1: 2000, 2: 8000, 3: 20000 };  // fallback for intensity→budget
+
+function isThinkingCapable(modelId) {
+  if (!modelId) return false;
+  const bare = modelId.split('/').pop().toLowerCase();
+  return THINKING_MODELS.has(modelId) || THINKING_MODELS.has(bare) ||
+    /^o\d/.test(bare) || /claude-(opus|sonnet)-4/.test(bare) || /claude-3-7/.test(bare) ||
+    /thinking|reason/i.test(bare) || /deepseek-r|qwen.*think|qwq|llama.*reason/i.test(bare);
+}
+
+function isAnthropicThinkingModel(modelId) {
+  return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
+}
+
+// Returns true if the model uses continuous token budget (Anthropic), false for discrete effort (OpenAI)
+function usesTokenBudget(modelId) {
+  return isAnthropicThinkingModel(modelId || '');
+}
+
+function getThinkingBudget() {
+  // For Anthropic: return continuous token value
+  return config.thinkingBudget || 8000;
+}
+
+function getThinkingEffortStr() {
+  // For OpenAI: return low/medium/high
+  return OAI_EFFORT[config.thinkingIntensity || 2];
+}
+
+function updateThinkingUI() {
+  const { modelId } = splitModelId(config.model);
+  const capable = isThinkingCapable(modelId);
+  const group = document.getElementById('thinkingGroup');
+  if (group) group.style.display = capable ? 'flex' : 'none';
+  if (!capable && config.thinkingEnabled) {
+    config.thinkingEnabled = false;
+    document.getElementById('thinkingToggle')?.classList.remove('active');
+    document.getElementById('thinkingIntensity')?.classList.remove('visible');
+  }
+  // Reconfigure slider mode based on model type
+  configureThinkingSlider(modelId);
+  updateThinkingIntensityUI();
+}
+
+function configureThinkingSlider(modelId) {
+  const slider = document.getElementById('thinkingIntensitySlider');
+  const label  = document.getElementById('thinkingIntensityLabel');
+  if (!slider) return;
+  if (usesTokenBudget(modelId)) {
+    // Continuous: 1024 to 32000 tokens
+    slider.min   = '1024';
+    slider.max   = '32000';
+    slider.step  = '256';
+    slider.value = String(config.thinkingBudget || 8000);
+    if (label) label.textContent = 'Budget';
+  } else {
+    // Discrete: 1=low, 2=medium, 3=high
+    slider.min   = '1';
+    slider.max   = '3';
+    slider.step  = '1';
+    slider.value = String(config.thinkingIntensity || 2);
+    if (label) label.textContent = t('thinking.intensity');
+  }
+}
+
+function updateThinkingIntensityUI() {
+  const slider = document.getElementById('thinkingIntensitySlider');
+  const label  = document.getElementById('thinkingIntensityVal');
+  if (!slider || !label) return;
+  const { modelId } = splitModelId(config.model);
+  if (usesTokenBudget(modelId)) {
+    const budget = config.thinkingBudget || 8000;
+    label.textContent = budget >= 1000 ? (budget / 1000).toFixed(1).replace('.0','') + 'k tok' : budget + ' tok';
+  } else {
+    const val = config.thinkingIntensity || 2;
+    const ikeys = { 1: 'thinking.low', 2: 'thinking.medium', 3: 'thinking.high' };
+    label.textContent = t(ikeys[val]);
+  }
+}
+
+function toggleThinking() {
+  const { modelId } = splitModelId(config.model);
+  if (!isThinkingCapable(modelId)) return;
+  config.thinkingEnabled = !config.thinkingEnabled;
+  document.getElementById('thinkingToggle')?.classList.toggle('active', config.thinkingEnabled);
+  document.getElementById('thinkingIntensity')?.classList.toggle('visible', config.thinkingEnabled);
+  save();
+  toast(config.thinkingEnabled ? '🧠 Denken aktiviert' : '💭 Denken deaktiviert');
 }
 function syncAllModelSelects() {
   const src = document.getElementById('modelSelector');
@@ -1702,6 +2014,7 @@ function renderMessages(messages) {
   messages.forEach((msg,idx) => container.appendChild(buildMsgEl(msg,idx)));
   container.scrollTop = container.scrollHeight;
   typesetMath();
+  updateChatTokenTotal();
 }
 
 function buildMsgEl(msg, idx) {
@@ -1772,22 +2085,29 @@ function buildMsgEl(msg, idx) {
   const actDiv = document.createElement('div');
   actDiv.className = 'bubble-actions';
 
-  function makeActBtn(label, cls2, handler) {
+  function makeActBtn(label, cls2, handler, action) {
     const btn = document.createElement('button');
     btn.className = 'bubble-act-btn' + (cls2 ? ' ' + cls2 : '');
     btn.textContent = label;
+    if (action) btn.setAttribute('data-action', action);
     if (idx !== undefined) btn.dataset.idx = idx;
     btn.addEventListener('click', () => handler(parseInt(btn.dataset.idx)));
     return btn;
   }
 
-  actDiv.appendChild(makeActBtn(t('js.copy'),       '',       (i) => copyBubble(actDiv.querySelector('.bubble-act-btn'), i)));
-  actDiv.appendChild(makeActBtn(t('js.edit'),       '',       startEditBubble));
-  actDiv.appendChild(makeActBtn(t('js.branch'),     '',       branchFromHere));
-  if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate));
-  actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble));
+  actDiv.appendChild(makeActBtn(t('js.copy'),       '',       (i) => copyBubble(actDiv.querySelector('.bubble-act-btn'), i), 'copy'));
+  actDiv.appendChild(makeActBtn(t('js.edit'),       '',       startEditBubble, 'edit'));
+  actDiv.appendChild(makeActBtn(t('js.branch'),     '',       branchFromHere, 'branch'));
+  if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate, 'regenerate'));
+  actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
 
-  wrap.appendChild(bubble); wrap.appendChild(actDiv);
+  // Token badge for AI messages
+  if (!isUser && msg._usage) {
+    const badge = buildTokenBadge(msg._usage);
+    wrap.appendChild(bubble); wrap.appendChild(actDiv); wrap.appendChild(badge);
+  } else {
+    wrap.appendChild(bubble); wrap.appendChild(actDiv);
+  }
   row.appendChild(avatarCol); row.appendChild(wrap);
 
   // Code-Copy-Buttons per addEventListener verdrahten (NACH DOMPurify in formatText)
@@ -1800,6 +2120,60 @@ function buildMsgEl(msg, idx) {
 
 // ── Bubble Edit / Delete / Branch ─────────────────────────────────
 function getBubbleRow(idx) { return document.querySelector(`.message-row[data-idx="${parseInt(idx,10)}"]`); }
+
+// ── Token Usage ────────────────────────────────────────────────────
+function buildTokenBadge(usage) {
+  const badge = document.createElement('div');
+  badge.className = 'token-badge';
+  if (usage.input_tokens != null) {
+    const s = document.createElement('span');
+    s.title = 'Input tokens';
+    s.textContent = tf('js.tokensIn', {n: usage.input_tokens.toLocaleString()});
+    badge.appendChild(s);
+  }
+  if (usage.output_tokens != null) {
+    const s = document.createElement('span');
+    s.title = 'Output tokens';
+    s.textContent = tf('js.tokensOut', {n: usage.output_tokens.toLocaleString()});
+    badge.appendChild(s);
+  }
+  if (usage.cache_read_input_tokens) {
+    const s = document.createElement('span');
+    s.className = 'cache';
+    s.title = 'Cache read tokens';
+    s.textContent = tf('js.tokensCacheRead', {n: usage.cache_read_input_tokens.toLocaleString()});
+    badge.appendChild(s);
+  }
+  const total = (usage.input_tokens||0) + (usage.output_tokens||0);
+  if (total > 0) {
+    const s = document.createElement('span');
+    s.title = 'Total tokens this message';
+    s.style.color = 'var(--accent)';
+    s.style.borderColor = 'rgba(61,126,255,0.3)';
+    s.textContent = tf('js.tokensTotal', {n: total.toLocaleString()});
+    badge.appendChild(s);
+  }
+  return badge;
+}
+
+function updateChatTokenTotal() {
+  const chat = currentChat();
+  let total = document.getElementById('chatTokenTotal');
+  if (!chat) { if (total) total.remove(); return; }
+  const sum = chat.messages.reduce((acc, m) => {
+    if (!m._usage) return acc;
+    return acc + (m._usage.input_tokens||0) + (m._usage.output_tokens||0);
+  }, 0);
+  if (sum === 0) { if (total) total.remove(); return; }
+  if (!total) {
+    total = document.createElement('div');
+    total.id = 'chatTokenTotal';
+    total.className = 'chat-token-total';
+    const msgs = document.getElementById('messages');
+    msgs.appendChild(total);
+  }
+  total.textContent = tf('js.chatTotalTokens', {n: sum.toLocaleString()});
+}
 
 function safeIdx(idx) {
   const n = parseInt(idx, 10);
@@ -1916,7 +2290,7 @@ async function sendMessageCore(text, att) {
   for (const a of att) {
     if (a.type==='pdf-b64' && a.pdfMode==='b64' && isKiConnect && a.rawBuf) {
       try {
-        toast(`⏳ ${a.name} wird hochgeladen…`);
+        toast(`⏳ ${a.name} ${t('js.uploading')}`);
         const form = new FormData();
         form.append('file', new Blob([a.rawBuf],{type:'application/pdf'}), a.name);
         const endpoint = getProviderEndpoint(provider).replace('/api/v1','');
@@ -1929,7 +2303,7 @@ async function sendMessageCore(text, att) {
         } else if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
         else {
           const doc=await res.json(); const docId=doc.id||doc.documentId||doc._id||doc.document_id;
-          if(docId){documentIds.push(docId);a._uploadedId=docId;} toast(`✅ ${a.name} hochgeladen`);
+          if(docId){documentIds.push(docId);a._uploadedId=docId;} toast(`✅ ${a.name} ${t('js.uploaded')}`);
         }
       } catch(err) { toast(tf('js.uploadFailed',{e:err.message})); renderAttachments(); return; }
     }
@@ -1980,6 +2354,7 @@ async function sendMessageCore(text, att) {
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
   let assistantText='';
+  let usageData = null; // will be populated from API usage metrics
 
   try {
     if (provider.type === 'anthropic') {
@@ -1997,12 +2372,62 @@ async function sendMessageCore(text, att) {
       const { modelId: _aModelId } = splitModelId(config.model);
       const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
       if(config.systemPrompt)body.system=config.systemPrompt;
+      // Extended Thinking (claude-3.7+ / claude-4)
+      if (config.thinkingEnabled && isThinkingCapable(_aModelId)) {
+        const budget = usesTokenBudget(_aModelId)
+          ? (config.thinkingBudget || 8000)
+          : CLAUDE_BUDGET[config.thinkingIntensity || 2];
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        // Extended Thinking erfordert temperature=1
+        body.temperature = 1;
+        // max_tokens muss > budget_tokens sein
+        body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+      }
       const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
       if(!res.ok)throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
       removeTyping(typingId);
       const aiEl=appendEmptyAI();
       const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;try{const ev=JSON.parse(line.slice(6).trim());if(ev.type==='content_block_delta'&&ev.delta?.type==='text_delta'){assistantText+=ev.delta.text;aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}}catch{}}}
+      let thinkingText=''; let inThinkingBlock=false;
+      while(true){
+        const{done,value}=await reader.read();if(done)break;
+        buf+=decoder.decode(value,{stream:true});
+        const lines=buf.split('\n');buf=lines.pop();
+        for(const line of lines){
+          if(!line.startsWith('data: '))continue;
+          try{
+            const ev=JSON.parse(line.slice(6).trim());
+            if(ev.type==='message_start'&&ev.message?.usage){
+              // initial usage from message_start
+              usageData = {...(usageData||{}), ...ev.message.usage};
+            } else if(ev.type==='message_delta'&&ev.usage){
+              // output_tokens come in message_delta
+              usageData = {...(usageData||{}), ...ev.usage};
+            } else if(ev.type==='content_block_start'){
+              if(ev.content_block?.type==='thinking') inThinkingBlock=true;
+              else inThinkingBlock=false;
+            } else if(ev.type==='content_block_stop'){
+              inThinkingBlock=false;
+            } else if(ev.type==='content_block_delta'){
+              if(ev.delta?.type==='thinking_delta'&&inThinkingBlock){
+                thinkingText+=ev.delta.thinking||'';
+                // Show thinking block collapsed above response
+                const bubble=aiEl.querySelector('.bubble');
+                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">🧠 Denkprozess (${thinkingText.length} Zeichen)</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                bubble.innerHTML=thinkHtml+formatText(assistantText);
+              } else if(ev.delta?.type==='text_delta'){
+                assistantText+=ev.delta.text;
+                const bubble=aiEl.querySelector('.bubble');
+                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">🧠 Denkprozess (${thinkingText.length} Zeichen)</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                bubble.innerHTML=thinkHtml+formatText(assistantText);
+                scrollToBottom();
+              }
+            }
+          }catch{}
+        }
+      }
+      // Prepend thinking to stored assistant message
+      if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
       typesetMath();
     } else {
       const endpoint=getProviderEndpoint(provider);
@@ -2011,14 +2436,47 @@ async function sendMessageCore(text, att) {
       chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')apiMsgs.push({role:m.role,content:m.content});});
       apiMsgs.push({role:'user',content:userContent});
       const {modelId:_oModelId}=splitModelId(config.model);
-      const reqBody={model:_oModelId,messages:apiMsgs,temperature:config.temperature,max_tokens:effectiveMaxTokens(),stream:true};
+      const reqBody={model:_oModelId,messages:apiMsgs,stream:true};
+
+      // o-series reasoning models: NO temperature, use max_completion_tokens
+      const isOSeries = /^o\d/.test(_oModelId);
+      if (isOSeries) {
+        reqBody.max_completion_tokens = effectiveMaxTokens();
+        if (config.thinkingEnabled && isThinkingCapable(_oModelId)) {
+          reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+        }
+        // reasoning_effort alone defaults to 'medium' if not specified — that's fine
+      } else {
+        // Standard GPT / Mistral / Gemini / xAI / Groq / OpenRouter
+        reqBody.temperature = config.temperature;
+        reqBody.max_tokens  = effectiveMaxTokens();
+        // GPT-4.1 / 4.5 series also support reasoning_effort
+        if (config.thinkingEnabled && isThinkingCapable(_oModelId)) {
+          reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+        }
+      }
       if(documentIds.length>0)reqBody.documents=documentIds;
-      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`},body:JSON.stringify(reqBody),signal:abortController.signal});
+      // Request usage in stream (OpenAI-compatible providers)
+      reqBody.stream_options = { include_usage: true };
+
+      // OpenRouter extra headers
+      const extraHeaders = {};
+      if (provider.type === 'openrouter') {
+        extraHeaders['HTTP-Referer'] = window.location.origin;
+        extraHeaders['X-Title'] = 'KI Connect NRW';
+      }
+
+      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},
+        body:JSON.stringify(reqBody),
+        signal:abortController.signal
+      });
       if(!res.ok)throw new Error(`${res.status}: ${await res.text()}`);
       removeTyping(typingId);
       const aiEl=appendEmptyAI();
       const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const payload=line.slice(6).trim();if(payload==='[DONE]')continue;try{const chunk=JSON.parse(payload);const delta=chunk.choices?.[0]?.delta?.content||'';assistantText+=delta;aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}catch{}}}
+      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const payload=line.slice(6).trim();if(payload==='[DONE]')continue;try{const chunk=JSON.parse(payload);const delta=chunk.choices?.[0]?.delta?.content||'';assistantText+=delta;if(delta){aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}if(chunk.usage){const u=chunk.usage;usageData={input_tokens:u.prompt_tokens,output_tokens:u.completion_tokens,cache_read_input_tokens:u.prompt_tokens_details?.cached_tokens||0};}}catch{}}}
       typesetMath();
     }
   } catch(e) {
@@ -2028,7 +2486,9 @@ async function sendMessageCore(text, att) {
   }
 
   if(assistantText){
-    chat.messages.push({role:'assistant',content:assistantText,_model:config.model});
+    const msgObj = {role:'assistant', content:assistantText, _model:config.model};
+    if (usageData) msgObj._usage = usageData;
+    chat.messages.push(msgObj);
     const aiIdx=chat.messages.length-1;
     const c=document.getElementById('messages');
     const lastAiEl=c.querySelector('.message-row.ai:last-child');
@@ -2037,15 +2497,18 @@ async function sendMessageCore(text, att) {
       const wrap=lastAiEl.querySelector('.bubble-wrap');
       if(wrap&&!wrap.querySelector('.bubble-actions')){
         const actDiv=document.createElement('div');actDiv.className='bubble-actions';
-        const makeBtn=(lbl,cls2,handler)=>{const b=document.createElement('button');b.className='bubble-act-btn'+(cls2?' '+cls2:'');b.textContent=lbl;b.dataset.idx=aiIdx;b.addEventListener('click',()=>handler(parseInt(b.dataset.idx)));return b;};
-        actDiv.appendChild(makeBtn(t('js.copy'),'',i=>{const firstBtn=actDiv.querySelector('.bubble-act-btn');copyBubble(firstBtn,i);}));
-        actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble));
-        actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere));
-        actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate));
-        actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble));
+        const makeBtn=(lbl,cls2,handler,action)=>{const b=document.createElement('button');b.className='bubble-act-btn'+(cls2?' '+cls2:'');b.textContent=lbl;if(action)b.setAttribute('data-action',action);b.dataset.idx=aiIdx;b.addEventListener('click',()=>handler(parseInt(b.dataset.idx)));return b;};
+        actDiv.appendChild(makeBtn(t('js.copy'),'',i=>{const firstBtn=actDiv.querySelector('.bubble-act-btn');copyBubble(firstBtn,i);},'copy'));
+        actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble,'edit'));
+        actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere,'branch'));
+        actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
+        actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
         wrap.appendChild(actDiv);
+        // Token badge
+        if (usageData) wrap.appendChild(buildTokenBadge(usageData));
       }
     }
+    updateChatTokenTotal();
     save();
   }
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
@@ -2556,6 +3019,19 @@ function setupEventListeners() {
   document.getElementById('temperature').addEventListener('input', e => { document.getElementById('tempVal').textContent = e.target.value; });
   document.getElementById('chatWidthSlider').addEventListener('input', e => applyChatWidth(e.target.value));
 
+  // Thinking Toggle
+  document.getElementById('thinkingToggle').addEventListener('click', toggleThinking);
+  document.getElementById('thinkingIntensitySlider').addEventListener('input', e => {
+    const { modelId } = splitModelId(config.model);
+    if (usesTokenBudget(modelId)) {
+      config.thinkingBudget = parseInt(e.target.value);
+    } else {
+      config.thinkingIntensity = parseInt(e.target.value);
+    }
+    updateThinkingIntensityUI();
+    save();
+  });
+
   // Provider Panel
   document.getElementById('providerPanelClose').addEventListener('click', closePanels);
   document.getElementById('addProviderBtn').addEventListener('click', startNewProvider);
@@ -2648,6 +3124,15 @@ function setupEventListeners() {
   syncSettingsPanel();
   loadSessionSettings();
   if (config.chatMaxWidth) applyChatWidth(config.chatMaxWidth);
+  // Restore thinking state
+  if (config.thinkingEnabled) {
+    document.getElementById('thinkingToggle')?.classList.add('active');
+    document.getElementById('thinkingIntensity')?.classList.add('visible');
+  }
+  if (config.thinkingIntensity) {
+    const slider = document.getElementById('thinkingIntensitySlider');
+    if (slider) slider.value = config.thinkingIntensity;
+  }
   if (!folders.length) { folders.push({id:'default',name:'Default',collapsed:false}); save(); }
   renderSidebar();
   if (!chats.length) { newChat(); }
@@ -2660,6 +3145,136 @@ function setupEventListeners() {
   else openProviderPanel();
   await checkLogin();
   startSessionCountdown();
+})();
+
+// ── Custom Model Dropdown ─────────────────────────────────────────
+(function() {
+  const trigger  = document.getElementById('cmTrigger');
+  const panel    = document.getElementById('cmPanel');
+  const list     = document.getElementById('cmList');
+  const search   = document.getElementById('cmSearch');
+  const label    = document.getElementById('cmLabel');
+  const hiddenSel = document.getElementById('modelSelector');
+  let open = false;
+
+  // Modell-Daten (wird von populateModelSelector befüllt)
+  window._cmData = []; // [{group, label, value}]
+
+  function positionPanel() {
+    const rect = trigger.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const spaceBelow = vh - rect.bottom - 8;
+    const spaceAbove = rect.top - 8;
+    const maxH = Math.min(380, Math.max(spaceBelow, spaceAbove) - 8);
+    panel.style.maxHeight = maxH + 'px';
+    panel.style.left = rect.left + 'px';
+    panel.style.width = Math.max(rect.width, 260) + 'px';
+    if (spaceBelow >= 180 || spaceBelow >= spaceAbove) {
+      panel.style.top  = (rect.bottom + 4) + 'px';
+      panel.style.bottom = 'auto';
+    } else {
+      panel.style.bottom = (vh - rect.top + 4) + 'px';
+      panel.style.top = 'auto';
+    }
+  }
+
+  function renderList(filter) {
+    const q = (filter || '').toLowerCase();
+    list.innerHTML = '';
+    let count = 0;
+    window._cmData.forEach(group => {
+      const items = group.items.filter(m => !q || m.label.toLowerCase().includes(q));
+      if (!items.length) return;
+      const gl = document.createElement('div');
+      gl.className = 'cm-group-label';
+      gl.textContent = group.group;
+      list.appendChild(gl);
+      items.forEach(m => {
+        const opt = document.createElement('div');
+        opt.className = 'cm-option' + (m.value === hiddenSel.value ? ' selected' : '');
+        opt.textContent = m.label;
+        opt.title = m.label;
+        opt.addEventListener('click', () => {
+          hiddenSel.value = m.value;
+          hiddenSel.dispatchEvent(new Event('change'));
+          closePanel();
+        });
+        list.appendChild(opt);
+        count++;
+      });
+    });
+    if (!count) {
+      const em = document.createElement('div');
+      em.className = 'cm-empty';
+      em.textContent = 'Kein Modell gefunden';
+      list.appendChild(em);
+    }
+  }
+
+  function openPanel() {
+    if (open) return;
+    open = true;
+    trigger.classList.add('open');
+    panel.classList.add('open');
+    positionPanel();
+    renderList('');
+    search.value = '';
+    search.focus();
+    // Scroll selected into view
+    const sel = list.querySelector('.selected');
+    if (sel) setTimeout(() => sel.scrollIntoView({ block: 'nearest' }), 30);
+  }
+
+  function closePanel() {
+    if (!open) return;
+    open = false;
+    trigger.classList.remove('open');
+    panel.classList.remove('open');
+  }
+
+  trigger.addEventListener('click', (e) => { e.stopPropagation(); open ? closePanel() : openPanel(); });
+  search.addEventListener('input', () => renderList(search.value));
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closePanel(); trigger.focus(); }
+    if (e.key === 'ArrowDown') { const first = list.querySelector('.cm-option'); if (first) { first.focus(); e.preventDefault(); } }
+  });
+  list.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closePanel(); trigger.focus(); }
+  });
+  document.addEventListener('click', (e) => { if (!panel.contains(e.target) && e.target !== trigger) closePanel(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+  window.addEventListener('resize', () => { if (open) positionPanel(); });
+  window.addEventListener('scroll', () => { if (open) positionPanel(); }, true);
+
+  // Sync label + selected state from hidden select
+  window.syncCustomDropdown = function() {
+    const val = hiddenSel.value;
+    const opt = hiddenSel.options[hiddenSel.selectedIndex];
+    label.textContent = opt ? opt.textContent : '— Modell wählen —';
+    // Sync i18n placeholder wenn leer
+    if (!val) label.textContent = '— Open settings —';
+    if (open) renderList(search.value);
+  };
+
+  // Befülle _cmData aus dem hidden select (optgroups)
+  window.buildCustomDropdownData = function() {
+    const data = [];
+    Array.from(hiddenSel.children).forEach(child => {
+      if (child.tagName === 'OPTGROUP') {
+        const group = { group: child.label, items: [] };
+        Array.from(child.children).forEach(opt => {
+          group.items.push({ value: opt.value, label: opt.textContent });
+        });
+        data.push(group);
+      } else if (child.tagName === 'OPTION' && child.value) {
+        let last = data[data.length - 1];
+        if (!last || last.group !== '') { last = { group: '', items: [] }; data.push(last); }
+        last.items.push({ value: child.value, label: child.textContent });
+      }
+    });
+    window._cmData = data;
+    window.syncCustomDropdown();
+  };
 })();
 </script>
 </body>

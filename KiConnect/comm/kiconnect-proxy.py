@@ -1,6 +1,17 @@
 """
-KI Connect NRW — CORS-Proxy (gehärtet v4.2 / Waitress WSGI)
+KI Connect NRW — CORS-Proxy (gehärtet v4.4 / Waitress WSGI)
 =============================================================
+CHANGELOG v4.4 (Critical Bugfix):
+  • 'accept-encoding' wird NICHT mehr an Upstream weitergeleitet.
+    → Upstream (OpenAI, Anthropic etc.) sendete gzip/br-komprimierte Responses.
+    → Der Proxy entfernt 'content-encoding' aus Response-Headern (korrekt für CORS),
+      aber dekomprimiert die Daten nicht selbst.
+    → Browser erhielt komprimierte Bytes ohne Content-Encoding-Hinweis
+      → JSON.parse() schlug fehl → fälschlicher "Auth-Fehler" im UI.
+    → Fix: kein accept-encoding weiterleiten → Upstream antwortet unkomprimiert.
+  • 'http-referer' und 'x-title' zu ALLOWED_REQ_HEADERS hinzugefügt (v4.3)
+    → OpenRouter benötigt HTTP-Referer zur App-Identifikation.
+
 CHANGELOG v4.2 (Security Fixes):
   • Rate-Limiting: threading.Lock() gegen Race Conditions (Thread-Safety)
   • 'location'-Header wird aus Upstream-Responses gefiltert
@@ -51,6 +62,10 @@ ALLOWED_DOMAINS = {
     'api.anthropic.com',
     'api.openai.com',
     'openrouter.ai',
+    'api.mistral.ai',
+    'generativelanguage.googleapis.com',
+    'api.x.ai',
+    'api.groq.com',
 }
 
 # ── Reservierte / private IP-Bereiche (SSRF-Schutz) ─────────────
@@ -165,7 +180,8 @@ CORS_HEADERS = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': (
         'Authorization, Content-Type, x-api-key, '
-        'anthropic-version, anthropic-dangerous-direct-browser-access'
+        'anthropic-version, anthropic-dangerous-direct-browser-access, '
+        'HTTP-Referer, X-Title'
     ),
 }
 
@@ -188,7 +204,9 @@ SECURITY_HEADERS = {
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self' https://api.anthropic.com https://api.openai.com "
-        "https://chat.kiconnect.nrw https://openrouter.ai; "
+        "https://chat.kiconnect.nrw https://openrouter.ai "
+        "https://api.mistral.ai https://generativelanguage.googleapis.com "
+        "https://api.x.ai https://api.groq.com; "
         "img-src 'self' data: blob:; "
         "font-src 'self'; "
         "frame-src 'none'; "
@@ -262,7 +280,12 @@ def _proxy_request(target_url: str):
     ALLOWED_REQ_HEADERS = {
         'authorization', 'content-type', 'x-api-key',
         'anthropic-version', 'anthropic-dangerous-direct-browser-access',
-        'accept', 'accept-encoding',
+        'accept',
+        'http-referer',   # OpenRouter: Pflicht-Header zur App-Identifikation
+        'x-title',        # OpenRouter: optionaler App-Name
+        # KEIN 'accept-encoding': Upstream sendet sonst gzip/br-komprimierte Daten,
+        # aber der Proxy entfernt 'content-encoding' aus der Response → Browser
+        # bekommt komprimierte Bytes ohne Dekodierungshinweis → JSON.parse() schlägt fehl.
     }
     fwd_headers = {
         k: v for k, v in request.headers
@@ -337,21 +360,21 @@ if __name__ == '__main__':
 
     print()
     print('╔════════════════════════════════════════════════════════════════╗')
-    print('║     KI Connect — CORS-Proxy  (Waitress WSGI v4.2)              ║')
+    print('║     KI Connect — CORS-Proxy  (Waitress WSGI v4.4)              ║')
     print('╠════════════════════════════════════════════════════════════════╣')
     print('║  Running on:  http://localhost:5000                            ║')
     print('║  Binding:     127.0.0.1 only (localhost-only, no LAN access)   ║')
     print('║  Threads:     8  (thread-safe rate-limiting via Lock)          ║')
     print('║                                                                ║')
-    print('║  Security fixes v4.2:                                          ║')
-    print('║    + threading.Lock() für Race-Condition-freies Rate-Limiting  ║')
-    print('║    + location-Header gefiltert (kein Client-Redirect via 30x)  ║')
-    print('║                                                                ║')
     print('║  Allowed providers (allowlist):                                ║')
-    print('║    * chat.kiconnect.nrw   (OpenAI-compatible)                  ║')
-    print('║    * api.anthropic.com    (Claude)                             ║')
-    print('║    * api.openai.com       (GPT-4o, o1, ...)                    ║')
-    print('║    * openrouter.ai                                             ║')
+    print('║    * chat.kiconnect.nrw                  (OpenAI-compatible)   ║')
+    print('║    * api.anthropic.com                   (Claude + Thinking)   ║')
+    print('║    * api.openai.com                      (GPT-4o, o1, o3, o4)  ║')
+    print('║    * openrouter.ai                       (200+ Modelle)        ║')
+    print('║    * api.mistral.ai                      (Mistral Large etc.)  ║')
+    print('║    * generativelanguage.googleapis.com   (Gemini)              ║')
+    print('║    * api.x.ai                            (Grok 3)              ║')
+    print('║    * api.groq.com                        (Groq / Llama)        ║')
     print('║                                                                ║')
     print('║  Custom server? -> add to ALLOWED_DOMAINS in kiconnect-proxy.py║')
     print('║  Stop with Ctrl+C                                              ║')
