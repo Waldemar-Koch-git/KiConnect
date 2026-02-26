@@ -20,7 +20,7 @@ Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthrop
 - 📊 **Token-Statistik** pro Nachricht und Gesamtanzahl pro Chat
 - 🧮 **LaTeX/MathJax** für mathematische Formeln
 - 📱 **Responsives Design** mit anpassbarer Chat-Breite
-- 🎨 **Benutzerprofile** mit individuellen System-Prompts, Temperaturen und Modell-Limits
+- 🎨 **Agentenprofile** mit individuellen System-Prompts, Temperaturen und Modell-Limits
 
 ## Schnellstart (Windows)
 
