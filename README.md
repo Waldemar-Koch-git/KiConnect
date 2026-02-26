@@ -16,8 +16,8 @@ Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthrop
 - 🌐 **CORS-Proxy für lokale Entwicklung** – umgeht Browser-CORS-Restriktionen sicher (v4.4)
 - 📁 **Chat-Organisation** mit Ordnern, Drag & Drop und Branches
 - 🖼️ **Bild- & PDF-Unterstützung** (Vision-Modelle + PDF-Text-Extraktion)
-- 🌍 **Mehrsprachig** – 14 Sprachen verfügbar:
-  - EN, DE, FR, ES, IT, TR, RU, ZH, AR, HI, TA, BN, PA, UR
+- 🌍 **Mehrsprachig** – 15 Sprachen verfügbar:
+  - EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
 - ⚡ **Streaming-Antworten** in Echtzeit mit Thinking-Block-Anzeige
 - 📊 **Token-Statistik** pro Nachricht und Gesamtanzahl pro Chat
 - 🧮 **LaTeX/MathJax** für mathematische Formeln
@@ -59,7 +59,7 @@ python ./comm/kiconnect-proxy.py
 pause
 ```
 
-Wenn dies `.bat` datei blockiert wird: Neue Textdatei erstellen und den Inhalt der einfügen und abspeichern. Die Textdatei endung umbenennen in `START_kiconnect.bat`. Im Anschluss doppelklicken auf diese Datei.
+Wenn die `.bat` datei von Windows (Benutzerkonten..) blockiert wird: Neue Textdatei erstellen und den Inhalt der einfügen und abspeichern. Die Textdatei endung umbenennen in `START_kiconnect.bat`. Im Anschluss doppelklicken auf diese Datei.
 
 Öffne dann: **http://localhost:5000**
 

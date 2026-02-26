@@ -12,7 +12,7 @@
   style-src   'self' 'unsafe-inline';
   connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com;
   img-src     'self' data: blob:;
-  font-src    'self';
+  font-src    'self' https://cdn.jsdelivr.net;
   frame-src   'none';
   object-src  'none';
   base-uri    'self';
@@ -700,7 +700,6 @@ function applyTranslations() {
   if (btn) btn.textContent = LANGUAGES[currentLang]?.code || currentLang.toUpperCase();
   document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
-  // Custom-Dropdown Placeholder synchronisieren (falls noch kein Modell gewählt)
   if (typeof syncCustomDropdown === 'function') {
     const hiddenSel = document.getElementById('modelSelector');
     if (hiddenSel && !hiddenSel.value) syncCustomDropdown();
@@ -712,7 +711,12 @@ function setLang(code) {
   applyTranslations();
   retranslateBubbleButtons();
   retranslateSuggestionChips();
-  // Custom-Dropdown Placeholder aktualisieren
+  if (typeof updateThinkingIntensityUI === 'function') updateThinkingIntensityUI();
+  if (typeof configureThinkingSlider === 'function') {
+    const { modelId } = (typeof splitModelId === 'function' && config?.model)
+      ? splitModelId(config.model) : { modelId: '' };
+    configureThinkingSlider(modelId);
+  }
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   renderLangDropdown();
   closeLangDropdown();
@@ -1019,7 +1023,7 @@ function sanitizeMsgForStorage(msg) {
       const url = p.image_url?.url || '';
       // Bild zu groß für localStorage → durch Platzhalter ersetzen
       if (url.startsWith('data:') && url.length > MAX_IMAGE_STORAGE_BYTES) {
-        return { type: 'text', text: '[Bild nicht gespeichert – zu groß]' };
+        return { type: 'text', text: '[' + t('js.imageNotSaved') + ']' };
       }
     }
     return p;
@@ -1758,7 +1762,7 @@ function configureThinkingSlider(modelId) {
     slider.max   = '32000';
     slider.step  = '256';
     slider.value = String(config.thinkingBudget || 8000);
-    if (label) label.textContent = 'Budget';
+    if (label) label.textContent = typeof t === 'function' ? t('thinking.budget') : 'Budget';
   } else {
     // Discrete: 1=low, 2=medium, 3=high
     slider.min   = '1';
@@ -1791,7 +1795,7 @@ function toggleThinking() {
   document.getElementById('thinkingToggle')?.classList.toggle('active', config.thinkingEnabled);
   document.getElementById('thinkingIntensity')?.classList.toggle('visible', config.thinkingEnabled);
   save();
-  toast(config.thinkingEnabled ? '🧠 Denken aktiviert' : '💭 Denken deaktiviert');
+  toast(config.thinkingEnabled ? t('js.thinkingEnabled') : t('js.thinkingDisabled'));
 }
 function syncAllModelSelects() {
   const src = document.getElementById('modelSelector');
@@ -2014,7 +2018,7 @@ function buildChatItem(c) {
   titleSpan.textContent = c.title;
 
   const menuBtn = document.createElement('button');
-  menuBtn.className = 'chat-item-menu'; menuBtn.textContent = '⋯'; menuBtn.title = 'Optionen';
+  menuBtn.className = 'chat-item-menu'; menuBtn.textContent = '⋯'; menuBtn.title = t('js.options');
   menuBtn.dataset.id = c.id;
   menuBtn.addEventListener('click', e => showChatCtxMenu(e, menuBtn.dataset.id));
 
@@ -2081,13 +2085,13 @@ function buildMsgEl(msg, idx) {
   else if (Array.isArray(msg.content)) {
     msg.content.forEach(part => {
       if (part.type === 'text') {
-        const isPdfContent = part.text && (part.text.startsWith('--- Inhalt von "') || part.text.startsWith('--- Seite '));
+        const isPdfContent = part.text && part.text.startsWith('--- ');
         if (!isPdfContent) contentHtml += formatText(part.text);
       } else if (part.type === 'image_url') {
         const url = part.image_url?.url || '';
         if (url.startsWith('data:image/') || url.startsWith('http')) {
           const img = document.createElement('img');
-          img.src = url; img.alt = 'Bild';
+          img.src = url; img.alt = t('js.imageAlt');
           // Bild separat anhängen (nach DOMPurify-Verarbeitung)
           bubble.innerHTML = contentHtml || '';
           bubble.appendChild(img);
@@ -2343,10 +2347,10 @@ async function sendMessageCore(text, att) {
       else if (a.type==='pdf-b64') {
         fileNames.push(a.name);
         if (a._uploadedId) { /* via documentIds */ }
-        else if (a.pdfMode==='text') { const txt=a.extractedText||t('js.noText'); userContent.push({type:'text',text:`--- Inhalt von "${a.name}" ---\n${txt}\n--- Ende ---`}); }
+        else if (a.pdfMode==='text') { const txt=a.extractedText||t('js.noText'); userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${txt}\n${t('js.fileEnd')}`}); }
         else { const b64=(a.data||'').split(',')[1]||a.data; userContent.push({type:'pdf_base64',name:a.name,data:b64}); }
-      } else if (a.type==='text-file') { fileNames.push(a.name); userContent.push({type:'text',text:`--- Inhalt von "${a.name}" ---\n${a.content}\n--- Ende ---`}); }
-      else { fileNames.push(a.name); userContent.push({type:'text',text:`[Nicht lesbares Format: ${a.name}]`}); }
+      } else if (a.type==='text-file') { fileNames.push(a.name); userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`}); }
+      else { fileNames.push(a.name); userContent.push({type:'text',text:`[${tf('js.unreadableFormat',{name:a.name})}]`}); }
     });
     if (userContent.length===0&&text) userContent=text;
   } else { userContent=text; }
@@ -2359,7 +2363,7 @@ async function sendMessageCore(text, att) {
           if (p.type==='pdf_base64') return {type:'text',text:`[PDF: ${p.name}]`};
           if (p.type==='image_url') {
             const url=p.image_url?.url||'';
-            if (url.startsWith('data:')&&url.length>MAX_IMAGE_STORAGE_BYTES) return {type:'text',text:'[Bild nicht gespeichert – zu groß]'};
+            if (url.startsWith('data:')&&url.length>MAX_IMAGE_STORAGE_BYTES) return {type:'text',text:'[' + t('js.imageNotSaved') + ']'};
           }
           return p;
         })
@@ -2368,7 +2372,7 @@ async function sendMessageCore(text, att) {
   };
   const chat=currentChat();
   chat.messages.push(userMsgForStorage);
-  if (chat.messages.length===1) { chat.title=(text||'Bild/Datei').slice(0,40); renderSidebar(); }
+  if (chat.messages.length===1) { chat.title=(text||t('js.imageFileTitle')).slice(0,40); renderSidebar(); }
 
   const idx=chat.messages.length-1;
   const msgEl=buildMsgEl({role:'user',content:text||null,_files:att.map(a=>a.name)},idx);
@@ -2437,12 +2441,12 @@ async function sendMessageCore(text, att) {
                 thinkingText+=ev.delta.thinking||'';
                 // Show thinking block collapsed above response
                 const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">🧠 Denkprozess (${thinkingText.length} Zeichen)</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
                 bubble.innerHTML=thinkHtml+formatText(assistantText);
               } else if(ev.delta?.type==='text_delta'){
                 assistantText+=ev.delta.text;
                 const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">🧠 Denkprozess (${thinkingText.length} Zeichen)</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
                 bubble.innerHTML=thinkHtml+formatText(assistantText);
                 scrollToBottom();
               }
@@ -2505,8 +2509,8 @@ async function sendMessageCore(text, att) {
     }
   } catch(e) {
     removeTyping(typingId);
-    if(e.name==='AbortError'){if(!assistantText)assistantText='_(Generierung gestoppt)_';}
-    else{assistantText=`❌ Fehler: ${escHtml(e.message)}`;const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
+    if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
+    else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
   if(assistantText){
@@ -2540,7 +2544,7 @@ async function sendMessageCore(text, att) {
 
 // ── Message UI ─────────────────────────────────────────────────────
 
-// ── Helper: Elemente vor #chatTokenTotal einfügen ─────────────────────────
+// Helper: Elemente immer VOR #chatTokenTotal einfügen
 function appendToMessages(el) {
   const c = document.getElementById('messages');
   const total = c.querySelector('#chatTokenTotal');
@@ -2607,7 +2611,7 @@ function copyBubble(btn, idx) {
 function copyFullChat() {
   const chat=currentChat(); if(!chat||!chat.messages.length){toast(t('js.noChatToCopy'));return;}
   const text=chat.messages.map(m=>{
-    const role=m.role==='user'?'Du':(m._model?m._model.split('/').pop():t('js.aiAvatar'));
+    const role=m.role==='user'?t('js.userAvatar'):(m._model?m._model.split('/').pop():t('js.aiAvatar'));
     let content='';
     if(typeof m.content==='string')content=m.content;
     else if(Array.isArray(m.content))content=m.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
@@ -2769,7 +2773,7 @@ async function extractPdfText(arrayBuffer) {
   const lib=window._pdfjsLib||window.pdfjsLib; if(!lib) throw new Error('PDF.js nicht geladen');
   const pdf=await lib.getDocument({data:arrayBuffer}).promise;
   let out='';
-  for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const content=await page.getTextContent();out+=`--- Seite ${i} ---\n${content.items.map(it=>it.str).join(' ')}\n`;}
+  for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const content=await page.getTextContent();out+=`${tf('js.pdfPage',{n:i})}\n${content.items.map(it=>it.str).join(' ')}\n`;}
   return out;
 }
 function arrayBufferToBase64(buf) {
@@ -3283,7 +3287,6 @@ function setupEventListeners() {
     const val = hiddenSel.value;
     const opt = hiddenSel.options[hiddenSel.selectedIndex];
     label.textContent = opt ? opt.textContent : (typeof t === 'function' ? t('js.selectModel') : '— Select model —');
-    // Sync i18n placeholder wenn leer
     if (!val) label.textContent = (typeof t === 'function' ? t('js.selectModel') : '— Open settings —');
     if (open) renderList(search.value);
   };

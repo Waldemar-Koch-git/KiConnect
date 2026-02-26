@@ -208,7 +208,7 @@ SECURITY_HEADERS = {
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
         "https://api.x.ai https://api.groq.com; "
         "img-src 'self' data: blob:; "
-        "font-src 'self'; "
+        "font-src 'self' https://cdn.jsdelivr.net; "
         "frame-src 'none'; "
         "object-src 'none'; "
         "base-uri 'self';"
