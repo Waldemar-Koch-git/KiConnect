@@ -17,7 +17,8 @@ Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthrop
   - OpenAI: Reasoning-Effort (low/medium/high)
 - 📁 **Chat-Organisation** mit Ordnern, Drag & Drop und Branches
 - 🖼️ **Bild- & PDF-Unterstützung** (Vision-Modelle, Ctrl+V Paste, PDF-Text-Extraktion)
-- 🌍 **Mehrsprachig** – weitere Sprachen können in `kiconnect-languages-i18n.js` ergänzt werden
+- 🌍 **Mehrsprachig** – weitere Sprachen können in `kiconnect-languages-i18n.js` ergänzt werden 
+        (EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR)
 - ⚡ **Streaming-Antworten** in Echtzeit mit Thinking-Block-Anzeige
 - 📊 **Token-Statistik** pro Nachricht und Gesamtanzahl pro Chat
 - 🧮 **LaTeX/MathJax** für mathematische Formeln
