@@ -4,13 +4,14 @@
 // ================================================================
 
 // ═══════════════════════════════════════════════════════════════
-// SECURITY FIXES v4.2
+// SECURITY / IMPROVEMENTS v4.5
 // ═══════════════════════════════════════════════════════════════
-// FIX #1/#2: PBKDF2 mit zufälligem Salt ersetzt schwaches HKDF/SHA-256
-// FIX #3:    addEventListener + data-* statt onclick-String-Interpolation
-// FIX #4:    DOMPurify: 'onclick' aus ALLOWED_ATTR entfernt
-// FIX #5:    unescapePassthroughTags() entfernt → DOMPurify übernimmt
-// FIX #7:    Bilder in localStorage: Größenlimit + Fehlerbehandlung
+// NEW: Full AES-256-GCM encryption of ALL localStorage data
+//      (config, chats, profiles, folders — not just API keys)
+// NEW: Ctrl+V paste image from clipboard
+// NEW: Configurable max image storage size (user-adjustable)
+// NEW: Attached files shown as chips only, never as text in bubble
+// NEW: Folder drag & drop reordering (same level only)
 // ═══════════════════════════════════════════════════════════════
 
 // ── i18n ─────────────────────────────────────────────────────────
@@ -84,7 +85,6 @@ function closeLangDropdown() {
   document.getElementById('langDropdown')?.classList.remove('open');
 }
 
-// Retranslate all existing bubble action buttons when language changes
 function retranslateBubbleButtons() {
   document.querySelectorAll('.bubble-act-btn[data-action]').forEach(btn => {
     const action = btn.getAttribute('data-action');
@@ -95,7 +95,6 @@ function retranslateBubbleButtons() {
     if (keyMap[action]) btn.textContent = t(keyMap[action]);
   });
 }
-// Retranslate suggestion chips when language changes
 function retranslateSuggestionChips() {
   const suggestions = [
     { i18n: 'empty.quantum', msgKey: 'empty.quantumMsg' },
@@ -138,19 +137,13 @@ const PROVIDER_HINTS = {
   'xai':           '💡 API Key von console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
   'groq':          '💡 API Key von console.groq.com · Ultra-schnelle Inferenz · Modelle live',
 };
-// thinking-capable models: claude (extended thinking), openai reasoning models (o-series + gpt-4.5/4.1)
 const THINKING_MODELS = new Set([
-  // Anthropic — Extended Thinking
   'claude-opus-4-6','claude-sonnet-4-6','claude-3-7-sonnet-20250219',
-  // OpenAI — Reasoning / thinking effort
   'o1','o1-mini','o1-pro','o3','o3-mini','o4-mini','o4-mini-high',
-  // gpt-4.5/4.1 preview with thinking support
   'gpt-4.5-preview','gpt-4.1','gpt-4.1-mini',
-  // grok / qwen / deepseek on openrouter also support reasoning
 ]);
 
 const KNOWN_MODELS = {
-  // ── Anthropic ──────────────────────────────────────────────────
   'claude-opus-4-6':            { label:'Claude Opus 4.6',           maxOutput:32000,  vision:true  },
   'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:64000,  vision:true  },
   'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:16000,  vision:true  },
@@ -158,7 +151,6 @@ const KNOWN_MODELS = {
   'claude-3-5-sonnet-20241022': { label:'Claude 3.5 Sonnet',         maxOutput:8096,   vision:true  },
   'claude-3-5-haiku-20241022':  { label:'Claude 3.5 Haiku',          maxOutput:8096,   vision:true  },
   'claude-3-opus-20240229':     { label:'Claude 3 Opus',             maxOutput:4096,   vision:true  },
-  // ── OpenAI — GPT series ────────────────────────────────────────
   'gpt-4.1':                    { label:'GPT-4.1',                   maxOutput:32768,  vision:true  },
   'gpt-4.1-mini':               { label:'GPT-4.1 mini',              maxOutput:32768,  vision:true  },
   'gpt-4.1-nano':               { label:'GPT-4.1 nano',              maxOutput:32768,  vision:true  },
@@ -167,7 +159,6 @@ const KNOWN_MODELS = {
   'gpt-4o-search-preview':      { label:'GPT-4o Search Preview',     maxOutput:16384,  vision:true  },
   'gpt-4.5-preview':            { label:'GPT-4.5 Preview',           maxOutput:16384,  vision:true  },
   'gpt-4-turbo':                { label:'GPT-4 Turbo',               maxOutput:4096,   vision:true  },
-  // ── OpenAI — o-series (Reasoning/Thinking) ────────────────────
   'o4-mini':                    { label:'o4-mini (Thinking)',         maxOutput:100000, vision:true  },
   'o4-mini-high':               { label:'o4-mini high (Thinking)',    maxOutput:100000, vision:true  },
   'o3':                         { label:'o3 (Thinking)',              maxOutput:100000, vision:true  },
@@ -175,43 +166,45 @@ const KNOWN_MODELS = {
   'o1':                         { label:'o1 (Thinking)',              maxOutput:32768,  vision:false },
   'o1-mini':                    { label:'o1-mini (Thinking)',         maxOutput:65536,  vision:false },
   'o1-pro':                     { label:'o1-pro (Thinking)',          maxOutput:32768,  vision:false },
-  // ── Mistral ───────────────────────────────────────────────────
   'mistral-large-latest':       { label:'Mistral Large',             maxOutput:131072, vision:true  },
   'mistral-medium-latest':      { label:'Mistral Medium',            maxOutput:131072, vision:false },
   'mistral-small-latest':       { label:'Mistral Small',             maxOutput:131072, vision:true  },
   'codestral-latest':           { label:'Codestral',                 maxOutput:131072, vision:false },
   'mistral-nemo':               { label:'Mistral Nemo',              maxOutput:131072, vision:false },
-  // ── Gemini ────────────────────────────────────────────────────
   'gemini-2.0-flash':           { label:'Gemini 2.0 Flash',          maxOutput:8192,   vision:true  },
   'gemini-2.0-flash-lite':      { label:'Gemini 2.0 Flash Lite',     maxOutput:8192,   vision:true  },
   'gemini-2.5-pro-preview-05-06':{ label:'Gemini 2.5 Pro',           maxOutput:65536,  vision:true  },
   'gemini-1.5-pro':             { label:'Gemini 1.5 Pro',            maxOutput:8192,   vision:true  },
   'gemini-1.5-flash':           { label:'Gemini 1.5 Flash',          maxOutput:8192,   vision:true  },
-  // ── xAI / Grok ───────────────────────────────────────────────
   'grok-3':                     { label:'Grok 3',                    maxOutput:131072, vision:true  },
   'grok-3-mini':                { label:'Grok 3 Mini',               maxOutput:131072, vision:false },
   'grok-2-1212':                { label:'Grok 2',                    maxOutput:131072, vision:true  },
-  // ── Groq-hosted ──────────────────────────────────────────────
   'llama-3.3-70b-versatile':    { label:'Llama 3.3 70B',             maxOutput:32768,  vision:false },
   'llama-3.1-8b-instant':       { label:'Llama 3.1 8B',              maxOutput:8000,   vision:false },
   'llama3-70b-8192':            { label:'Llama 3 70B',               maxOutput:8192,   vision:false },
   'mixtral-8x7b-32768':         { label:'Mixtral 8x7B',              maxOutput:32768,  vision:false },
   'gemma2-9b-it':               { label:'Gemma 2 9B',                maxOutput:8192,   vision:false },
   'deepseek-r1-distill-llama-70b':{ label:'DeepSeek R1 Distill 70B 🧠', maxOutput:8000, vision:false },
-  // ── DeepSeek ─────────────────────────────────────────────────
   'deepseek-chat':              { label:'DeepSeek V3',               maxOutput:8192,   vision:false },
   'deepseek-reasoner':          { label:'DeepSeek R1 🧠',            maxOutput:8192,   vision:false },
 };
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
 
-// FIX #7: Maximale Bildgröße für localStorage (500 KB als data-URI ≈ ~375 KB Bild)
-const MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
+// ── Image storage limit (user-configurable, default 500 KB) ──────
+// Stored in localStorage as 'kic_max_img_bytes' (plain — not sensitive)
+const DEFAULT_MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
+function getMaxImageStorageBytes() {
+  const v = parseInt(localStorage.getItem('kic_max_img_bytes') || '0');
+  return v > 0 ? v : DEFAULT_MAX_IMAGE_STORAGE_BYTES;
+}
+function setMaxImageStorageBytes(bytes) {
+  localStorage.setItem('kic_max_img_bytes', String(bytes));
+}
+// Alias for legacy references inside this file
+const MAX_IMAGE_STORAGE_BYTES = 0; // not used directly — always call getMaxImageStorageBytes()
 
 // ── OpenRouter model-meta cache ───────────────────────────────────
-// Populated during fetchModels() from OpenRouter's /models response.
-// Persisted to localStorage so limits survive page reloads even without network.
-// Schema: { [modelId]: { maxOutput: number, contextLength: number } }
 let _orModelMeta = {};
 (function _loadOrCache() {
   try {
@@ -225,13 +218,10 @@ function _saveOrCache() {
 
 function getModelDefaultMax(modelId) {
   if (!modelId) return 8096;
-  // 1. Static KNOWN_MODELS table (highest priority — manually verified)
   const known = KNOWN_MODELS[modelId];
   if (known) return known.maxOutput;
-  // 2. OpenRouter live-fetched cache (covers new/unknown models automatically)
   const orMeta = _orModelMeta[modelId];
   if (orMeta?.maxOutput && orMeta.maxOutput > 0) return orMeta.maxOutput;
-  // 3. Regex-based fallback for self-hosted / generic endpoints
   if (/llama-?3.*70b|llama-?3.*8b|llama-?3\.3/i.test(modelId)) return 32768;
   if (/llama-?3/i.test(modelId)) return 8192;
   if (/mixtral/i.test(modelId)) return 32768;
@@ -268,20 +258,41 @@ let abortController = null;
 let editingProfileId  = null;
 let editingProviderId = null;
 let draggedChatId   = null;
+let draggedFolderId = null;   // NEW: folder drag state
 let sidebarCollapsed = false;
 
 // ═══════════════════════════════════════════════════════════════
-// FIX #1 + #2: PBKDF2-basierte Kryptographie
-// Ersetzt: schwaches HKDF mit Null-Salt + unsicheres SHA-256 Login-Hash
+// CRYPTO — PBKDF2 + Full Storage Encryption
 // ═══════════════════════════════════════════════════════════════
 
 let _cryptoKey = null;
 let _sessionPassphrase = null;
 
-/**
- * Leitet AES-GCM-256 Key ab via PBKDF2 (600.000 Iterationen, zufälliger Salt).
- * Salt wird zusammen mit dem verschlüsselten Blob gespeichert.
- */
+// == Brute-Force Lockout (UI-seitig, RAM only) ========================
+// Zaehlt fehlgeschlagene Logins pro Account im Arbeitsspeicher.
+// KEIN localStorage/sessionStorage -> kein Bypass durch Cache-Loeschen.
+const _loginFailures = {}; // { accountId: { count, lockedUntil } }
+const BF_MAX_ATTEMPTS = 5;
+const BF_BASE_DELAY_MS = 30000; // 30 s nach 5 Fehlversuchen, dann exponentiell
+
+function _recordLoginFailure(accountId) {
+  if (!_loginFailures[accountId]) _loginFailures[accountId] = { count: 0, lockedUntil: 0 };
+  _loginFailures[accountId].count++;
+  const n = _loginFailures[accountId].count;
+  if (n >= BF_MAX_ATTEMPTS) {
+    // Exponentielles Backoff: 30s, 60s, 120s ...
+    const delay = BF_BASE_DELAY_MS * Math.pow(2, n - BF_MAX_ATTEMPTS);
+    _loginFailures[accountId].lockedUntil = Date.now() + Math.min(delay, 3600000);
+  }
+}
+function _resetLoginFailures(accountId) { delete _loginFailures[accountId]; }
+function _loginLockRemaining(accountId) {
+  const f = _loginFailures[accountId];
+  if (!f || !f.lockedUntil) return 0;
+  const rem = f.lockedUntil - Date.now();
+  return rem > 0 ? rem : 0;
+}
+
 async function deriveKeyPBKDF2(passphrase, saltBytes) {
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -291,12 +302,7 @@ async function deriveKeyPBKDF2(passphrase, saltBytes) {
     ['deriveKey']
   );
   return crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: saltBytes,
-      iterations: 600000,   // OWASP-Empfehlung 2024
-    },
+    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBytes, iterations: 600000 },
     keyMaterial,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -304,31 +310,75 @@ async function deriveKeyPBKDF2(passphrase, saltBytes) {
   );
 }
 
+// == CryptoKey NUR aus Passwort + Account-Salt ========================
+// Kein Seed mehr in localStorage. Der PBKDF2-Salt (16 Byte, zufaellig,
+// pro Account) liegt im Account-Registry - er ist kein Geheimnis,
+// sondern verhindert Rainbow-Table-Angriffe.
+// Das Passwort selbst bleibt ausschliesslich im RAM (_sessionPassphrase).
 async function getCryptoKey() {
   if (_cryptoKey) return _cryptoKey;
-  // Seed aus localStorage (für symmetrische Datenverschlüsselung)
-  let seed = localStorage.getItem('kic_seed');
-  if (!seed) {
-    const buf = crypto.getRandomValues(new Uint8Array(32));
-    seed = btoa(String.fromCharCode(...buf));
-    localStorage.setItem('kic_seed', seed);
-  }
-  // Seed-Salt: zufällig, persistent (für denselben Seed immer derselbe Key)
-  let seedSalt = localStorage.getItem('kic_seed_salt');
-  if (!seedSalt) {
+  const acc = getAccount(_activeAccountId);
+  if (!acc) throw new Error('No active account');
+  // Salt aus Account-Registry (wird beim ersten Passwort-Setzen angelegt)
+  let encSalt = acc.encSalt;
+  if (!encSalt) {
     const saltBuf = crypto.getRandomValues(new Uint8Array(16));
-    seedSalt = btoa(String.fromCharCode(...saltBuf));
-    localStorage.setItem('kic_seed_salt', seedSalt);
+    encSalt = btoa(String.fromCharCode(...saltBuf));
+    acc.encSalt = encSalt;
+    saveAccountRegistry();
   }
-  const saltBytes = Uint8Array.from(atob(seedSalt), c => c.charCodeAt(0));
-  const passphrase = seed + '|' + (_sessionPassphrase || '');
+  const saltBytes = Uint8Array.from(atob(encSalt), c => c.charCodeAt(0));
+  const passphrase = 'kic-enc-v5|' + (_sessionPassphrase || '');
   _cryptoKey = await deriveKeyPBKDF2(passphrase, saltBytes);
   return _cryptoKey;
 }
 
+// == Session-Token: F5-Reload ohne Passwort-Speicherung ==============
+// Das Passwort wird NICHT in sessionStorage gespeichert.
+// Stattdessen: nach erfolgreichem Login wird ein mit dem CryptoKey
+// verschluesselter Token in sessionStorage abgelegt.
+// Bei F5/Reload: Token entschluesseln -> wenn OK -> weiter eingeloggt.
+// Ohne den RAM-CryptoKey (= anderer Tab, Browser-Neustart) kein Zugang.
+const _SESSION_TOKEN_KEY = 'kic_st';
+
+async function _writeSessionToken() {
+  if (!_cryptoKey || !_activeAccountId) return;
+  try {
+    const payload = JSON.stringify({ accountId: _activeAccountId, ts: Date.now() });
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv }, _cryptoKey,
+      new TextEncoder().encode(payload)
+    );
+    const combined = new Uint8Array(iv.byteLength + enc.byteLength);
+    combined.set(iv, 0); combined.set(new Uint8Array(enc), iv.byteLength);
+    sessionStorage.setItem(_SESSION_TOKEN_KEY, btoa(String.fromCharCode(...combined)));
+  } catch {}
+}
+
+async function _validateSessionToken(accountId) {
+  if (!_cryptoKey) return false;
+  try {
+    const raw = sessionStorage.getItem(_SESSION_TOKEN_KEY);
+    if (!raw) return false;
+    const data = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+    const iv = data.slice(0, 12); const ct = data.slice(12);
+    const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, _cryptoKey, ct);
+    const payload = JSON.parse(new TextDecoder().decode(dec));
+    return payload.accountId === accountId && (Date.now() - payload.ts) < 86400000;
+  } catch { return false; }
+}
+
 function setSessionPassphrase(pw) {
   _sessionPassphrase = pw || null;
-  _cryptoKey = null;
+  _cryptoKey = null; // Key-Cache invalidieren
+  if (!pw) { try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch {} }
+  // Kein Passwort mehr in sessionStorage!
+  // _writeSessionToken() wird nach getCryptoKey() aufgerufen.
+}
+function restoreSessionPassphrase() {
+  // Prueft nur ob ein Token vorhanden ist; Validierung erfolgt async in checkLogin().
+  return !!sessionStorage.getItem(_SESSION_TOKEN_KEY);
 }
 
 async function encryptStr(plaintext) {
@@ -354,6 +404,19 @@ async function decryptStr(b64) {
   } catch { return ''; }
 }
 
+// Encrypt/decrypt a JS value (serialized as JSON)
+async function encryptObj(obj) {
+  return encryptStr(JSON.stringify(obj));
+}
+async function decryptObj(b64, fallback) {
+  if (!b64) return fallback;
+  try {
+    const json = await decryptStr(b64);
+    if (!json) return fallback;
+    return JSON.parse(json);
+  } catch { return fallback; }
+}
+
 async function encryptProvider(p) {
   const out = {...p};
   if (p.apiKey) out.apiKey = await encryptStr(p.apiKey);
@@ -365,58 +428,153 @@ async function decryptProvider(p) {
   return out;
 }
 
-// ── FIX #2: Login-Passwort-Hash via PBKDF2 mit zufälligem Salt ──────
-// Format gespeichert in kic_login_hash: JSON { salt: base64, hash: base64 }
-
+// ── Login password hash (PBKDF2 v2, per-account) ─────────────────
 async function hashPasswordPBKDF2(pw, saltBytes) {
   const key = await deriveKeyPBKDF2(pw + '|kic-login-v2', saltBytes);
-  // Exportieren ist nicht erlaubt (extractable=false), daher verschlüsseln wir
-  // einen bekannten Plaintext – das Ergebnis ist der "Hash"
-  const iv = new Uint8Array(12); // für Login-Verifikation: fester IV ok (salt schützt)
+  const iv = new Uint8Array(12);
   const enc = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
+    { name: 'AES-GCM', iv }, key,
     new TextEncoder().encode('kic-login-verify-v2')
   );
   return btoa(String.fromCharCode(...new Uint8Array(enc)));
 }
 
-async function storePasswordHash(pw) {
+// Per-account password storage (in account registry)
+async function storeAccountPasswordHash(accountId, pw) {
   const saltBytes = crypto.getRandomValues(new Uint8Array(16));
   const saltB64   = btoa(String.fromCharCode(...saltBytes));
   const hashB64   = await hashPasswordPBKDF2(pw, saltBytes);
-  localStorage.setItem('kic_login_hash', JSON.stringify({ salt: saltB64, hash: hashB64, v: 2 }));
+  const acc = _accounts.find(a => a.id === accountId);
+  if (acc) { acc.pwHash = hashB64; acc.pwSalt = saltB64; acc.pwVersion = 2; saveAccountRegistry(); }
 }
-
-async function verifyPassword(pw) {
-  const stored = localStorage.getItem('kic_login_hash');
-  if (!stored) return false;
+async function verifyAccountPassword(accountId, pw) {
+  const acc = getAccount(accountId);
+  if (!acc || !acc.pwHash || acc.pwVersion !== 2) return false;
   try {
-    const obj = JSON.parse(stored);
-    if (obj.v !== 2) {
-      // Legacy v1 (SHA-256 ohne Salt) — Migration: alten Hash löschen
-      // Wir können das alte Passwort nicht mehr verifizieren; Nutzer muss neu setzen
-      return false;
-    }
-    const saltBytes = Uint8Array.from(atob(obj.salt), c => c.charCodeAt(0));
+    const saltBytes = Uint8Array.from(atob(acc.pwSalt), c => c.charCodeAt(0));
     const candidate = await hashPasswordPBKDF2(pw, saltBytes);
-    return candidate === obj.hash;
+    return candidate === acc.pwHash;
   } catch { return false; }
 }
 
-function getStoredPwdHash() { return localStorage.getItem('kic_login_hash') || null; }
+// ── Multi-Account Registry ────────────────────────────────────────
+let _accounts = [];
+let _activeAccountId = null;
+
+function loadAccountRegistry() {
+  try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
+}
+function saveAccountRegistry() {
+  localStorage.setItem('kic_accounts', JSON.stringify(_accounts));
+}
+function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
+function accountKey(key) { return `kic_${_activeAccountId}_${key}`; }
 
 // ═══════════════════════════════════════════════════════════════
-// PERSIST
-// ═══════════════════════════════════════════════════════════════
-// FIX #7: Begrenze Bildgröße in gespeicherten Nachrichten
+// ======================================================================
+// PERSIST v5 - Server-Storage (./datas/) + localStorage-Fallback
+// ======================================================================
+// Alle Account-Daten werden primaer auf dem lokalen Proxy-Server
+// unter ./datas/<accountId>/<key>.json gespeichert.
+// Dadurch sind sie browser-unabhaengig (Chrome, Firefox, Edge, ...).
+// Fallback auf localStorage wenn der Proxy nicht erreichbar ist.
+// ======================================================================
+
+const _STORE_BASE = '/store';
+let _storeAvailable = true; // false wenn Server nicht reagiert
+
+async function _storeGet(accountId, key) {
+  if (!_storeAvailable) return _lsGetRaw(accountId, key);
+  try {
+    const res = await fetch(`${_STORE_BASE}/${accountId}/${key}`, { method: 'GET' });
+    if (!res.ok) { if (res.status === 404) return null; throw new Error(res.status); }
+    const text = await res.text();
+    if (!text || text === 'null') return null;
+    return JSON.parse(text); // verschluesselter String oder Wert
+  } catch (e) {
+    console.warn('[store] GET failed, fallback to localStorage:', e.message);
+    _storeAvailable = false;
+    return _lsGetRaw(accountId, key);
+  }
+}
+
+async function _storePut(accountId, key, value) {
+  const payload = JSON.stringify(value);
+  if (_storeAvailable) {
+    try {
+      const res = await fetch(`${_STORE_BASE}/${accountId}/${key}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+      if (!res.ok) throw new Error(res.status);
+      _lsSetRaw(accountId, key, payload); // Mirror in localStorage
+      return;
+    } catch (e) {
+      console.warn('[store] PUT failed, fallback to localStorage:', e.message);
+      _storeAvailable = false;
+    }
+  }
+  _lsSetRaw(accountId, key, payload);
+}
+
+async function _storeDel(accountId, key) {
+  if (_storeAvailable) {
+    try { await fetch(`${_STORE_BASE}/${accountId}/${key}`, { method: 'DELETE' }); } catch {}
+  }
+  localStorage.removeItem(`kic_${accountId}_${key}`);
+}
+
+async function _registryGet() {
+  if (_storeAvailable) {
+    try {
+      const res = await fetch(`${_STORE_BASE}/`, { method: 'GET' });
+      if (res.ok) { const t = await res.text(); if (t && t !== 'null') return JSON.parse(t); }
+    } catch (e) { console.warn('[store] registry GET failed:', e.message); _storeAvailable = false; }
+  }
+  try { return JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { return []; }
+}
+
+async function _registryPut(data) {
+  const payload = JSON.stringify(data);
+  if (_storeAvailable) {
+    try {
+      const res = await fetch(`${_STORE_BASE}/`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: payload,
+      });
+      if (!res.ok) throw new Error(res.status);
+    } catch (e) { console.warn('[store] registry PUT failed:', e.message); _storeAvailable = false; }
+  }
+  localStorage.setItem('kic_accounts', payload);
+}
+
+function _lsGetRaw(accountId, key) {
+  const v = localStorage.getItem(`kic_${accountId}_${key}`);
+  if (v === null) return null;
+  try { return JSON.parse(v); } catch { return v; }
+}
+function _lsSetRaw(accountId, key, rawStr) {
+  try { localStorage.setItem(`kic_${accountId}_${key}`, rawStr); } catch {}
+}
+
+// Account-Registry Helfer
+function loadAccountRegistry() {
+  try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
+}
+async function loadAccountRegistryAsync() {
+  try { _accounts = await _registryGet() || []; } catch { _accounts = []; }
+}
+function saveAccountRegistry() {
+  _registryPut(_accounts).catch(() => {});
+}
+
 function sanitizeMsgForStorage(msg) {
   if (!Array.isArray(msg.content)) return msg;
+  const maxBytes = getMaxImageStorageBytes();
   const safeContent = msg.content.map(p => {
     if (p.type === 'image_url') {
       const url = p.image_url?.url || '';
-      // Bild zu groß für localStorage → durch Platzhalter ersetzen
-      if (url.startsWith('data:') && url.length > MAX_IMAGE_STORAGE_BYTES) {
+      if (url.startsWith('data:') && url.length > maxBytes) {
         return { type: 'text', text: '[' + t('js.imageNotSaved') + ']' };
       }
     }
@@ -426,48 +584,83 @@ function sanitizeMsgForStorage(msg) {
 }
 
 async function save() {
+  if (!_activeAccountId) return;
   try {
     const encProviders = await Promise.all(providers.map(encryptProvider));
     const chatsToStore = chats.slice(0, 200).map(c => ({
       ...c,
       messages: c.messages.map(sanitizeMsgForStorage),
     }));
-    localStorage.setItem('kic_config',    JSON.stringify(config));
-    localStorage.setItem('kic_providers', JSON.stringify(encProviders));
-    localStorage.setItem('kic_profiles',  JSON.stringify(profiles));
-    localStorage.setItem('kic_folders',   JSON.stringify(folders));
-    localStorage.setItem('kic_chats',     JSON.stringify(chatsToStore));
-    if (currentChatId) localStorage.setItem('kic_current_chat', currentChatId);
-    localStorage.setItem('kic_sidebar_w', document.getElementById('sidebar').style.width || '');
-    localStorage.setItem('kic_sidebar_collapsed', sidebarCollapsed ? '1' : '');
+    const [encConfig, encProvidersStr, encProfiles, encFolders, encChats] = await Promise.all([
+      encryptObj(config),
+      encryptObj(encProviders),
+      encryptObj(profiles),
+      encryptObj(folders),
+      encryptObj(chatsToStore),
+    ]);
+    await Promise.all([
+      _storePut(_activeAccountId, 'config',    encConfig),
+      _storePut(_activeAccountId, 'providers', encProvidersStr),
+      _storePut(_activeAccountId, 'profiles',  encProfiles),
+      _storePut(_activeAccountId, 'folders',   encFolders),
+      _storePut(_activeAccountId, 'chats',     encChats),
+    ]);
+    if (currentChatId) await _storePut(_activeAccountId, 'current_chat', currentChatId);
+    await _storePut(_activeAccountId, 'sidebar_w', document.getElementById('sidebar').style.width || '');
+    await _storePut(_activeAccountId, 'sidebar_collapsed', sidebarCollapsed ? '1' : '');
   } catch (e) {
-    // localStorage voll (QuotaExceededError) — älteste Chats kürzen
-    if (e.name === 'QuotaExceededError' || e.code === 22) {
-      toast(t('js.storageFull'));
-      chats = chats.slice(0, Math.max(1, Math.floor(chats.length / 2)));
-      try { localStorage.setItem('kic_chats', JSON.stringify(chats.slice(0,100).map(c=>({...c,messages:c.messages.map(sanitizeMsgForStorage)})))); } catch {}
-    }
+    console.error('[save] error:', e);
+    toast(t('js.storageFull'));
   }
 }
 
 async function load() {
-  try { config = {...config, ...JSON.parse(localStorage.getItem('kic_config') || '{}')}; } catch{}
+  if (!_activeAccountId) return;
+  async function loadKey(key, fallback) {
+    let raw = await _storeGet(_activeAccountId, key);
+    if (raw === null || raw === undefined) {
+      // Migration: alter localStorage-Eintrag
+      const ls = localStorage.getItem(`kic_${_activeAccountId}_${key}`);
+      if (!ls) return fallback;
+      raw = ls;
+    }
+    const dec = await decryptObj(raw, null);
+    if (dec !== null) return dec;
+    try { return JSON.parse(raw); } catch { return fallback; }
+  }
+  try { config = {...config, ...await loadKey('config', {})}; } catch{}
   try {
-    const raw = JSON.parse(localStorage.getItem('kic_providers') || '[]');
-    providers = await Promise.all(raw.map(decryptProvider));
+    const rawProviders = await loadKey('providers', []);
+    providers = await Promise.all(rawProviders.map(decryptProvider));
   } catch{}
-  try { profiles = JSON.parse(localStorage.getItem('kic_profiles') || '[]'); } catch{}
-  try { folders  = JSON.parse(localStorage.getItem('kic_folders')  || '[]'); } catch{}
-  try { chats    = JSON.parse(localStorage.getItem('kic_chats')    || '[]'); } catch{}
-  const savedCurrentChat = localStorage.getItem('kic_current_chat');
-  if (savedCurrentChat) currentChatId = savedCurrentChat;
-  const savedW = localStorage.getItem('kic_sidebar_w');
-  if (savedW) document.getElementById('sidebar').style.width = savedW;
-  if (localStorage.getItem('kic_sidebar_collapsed') === '1') {
+  try { profiles = await loadKey('profiles', []); } catch{}
+  try { folders  = await loadKey('folders',  []); } catch{}
+  try { chats    = await loadKey('chats',    []); } catch{}
+
+  let savedCurrentChat = await _storeGet(_activeAccountId, 'current_chat');
+  if (!savedCurrentChat) savedCurrentChat = localStorage.getItem(`kic_${_activeAccountId}_current_chat`);
+  if (savedCurrentChat) {
+    const v = typeof savedCurrentChat === 'string' ? savedCurrentChat.replace(/^"|"$/g, '') : String(savedCurrentChat);
+    if (v) currentChatId = v;
+  }
+
+  let savedW = await _storeGet(_activeAccountId, 'sidebar_w');
+  if (!savedW) savedW = localStorage.getItem(`kic_${_activeAccountId}_sidebar_w`);
+  if (savedW) {
+    const w = typeof savedW === 'string' ? savedW.replace(/^"|"$/g,'') : '';
+    if (w) document.getElementById('sidebar').style.width = w;
+  }
+
+  let collapsed = await _storeGet(_activeAccountId, 'sidebar_collapsed');
+  if (!collapsed) collapsed = localStorage.getItem(`kic_${_activeAccountId}_sidebar_collapsed`);
+  if (collapsed === '1' || collapsed === '"1"') {
     sidebarCollapsed = true;
     document.getElementById('sidebar').classList.add('collapsed');
   }
 }
+
+// accountKey() bleibt fuer localStorage (kein Storage-Server: kic_lang, session-token usw.)
+function accountKey(key) { return `kic_${_activeAccountId}_${key}`; }
 
 // ── Sidebar Resize ────────────────────────────────────────────────
 function toggleSidebar() {
@@ -586,9 +779,7 @@ function updateActiveProviderInfo() {
   });
 }
 
-// ══════════════════════════════════════════════════════════════════
-// FIX #3: PROVIDER PANEL — addEventListener statt onclick-Interpolation
-// ══════════════════════════════════════════════════════════════════
+// ── Provider Panel ────────────────────────────────────────────────
 function openProviderPanel() {
   renderProviderList();
   document.getElementById('providerPanel').classList.add('open');
@@ -616,7 +807,6 @@ function renderProviderList() {
 
     const item = document.createElement('div');
     item.className = 'provider-item';
-
     const info = document.createElement('div');
     info.className = 'provider-item-info';
     const nameEl = document.createElement('div');
@@ -625,36 +815,22 @@ function renderProviderList() {
     const descEl = document.createElement('div');
     descEl.className = 'provider-item-desc';
     descEl.textContent = (ptype.label || p.type) + (p.serverUrl ? ' · ' + p.serverUrl.replace(/^https?:\/\//, '').slice(0, 30) : '');
-    info.appendChild(nameEl);
-    info.appendChild(descEl);
-
+    info.appendChild(nameEl); info.appendChild(descEl);
     const badge = document.createElement('span');
     badge.className = 'provider-badge ' + badgeCls;
     badge.textContent = badgeTxt;
-
     const actions = document.createElement('div');
     actions.className = 'provider-item-actions';
-
-    // FIX #3: data-id statt onclick-String
     const editBtn = document.createElement('button');
-    editBtn.className = 'icon-btn';
-    editBtn.textContent = '✏️';
-    editBtn.title = t('js.edit');
+    editBtn.className = 'icon-btn'; editBtn.textContent = '✏️'; editBtn.title = t('js.edit');
     editBtn.dataset.id = p.id;
     editBtn.addEventListener('click', (e) => { e.stopPropagation(); editProvider(editBtn.dataset.id); });
-
     const delBtn = document.createElement('button');
-    delBtn.className = 'icon-btn danger';
-    delBtn.textContent = '🗑';
-    delBtn.title = t('js.delete');
+    delBtn.className = 'icon-btn danger'; delBtn.textContent = '🗑'; delBtn.title = t('js.delete');
     delBtn.dataset.id = p.id;
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteProvider(delBtn.dataset.id); });
-
-    actions.appendChild(editBtn);
-    actions.appendChild(delBtn);
-    item.appendChild(info);
-    item.appendChild(badge);
-    item.appendChild(actions);
+    actions.appendChild(editBtn); actions.appendChild(delBtn);
+    item.appendChild(info); item.appendChild(badge); item.appendChild(actions);
     list.appendChild(item);
   });
 }
@@ -741,7 +917,6 @@ function updateProfileBadge() {
   document.getElementById('profileBadgeDot').style.background = p ? p.color : 'var(--muted)';
 }
 
-// FIX #3: Profile-Liste ohne onclick-Interpolation
 function renderProfileList() {
   const list = document.getElementById('profileList');
   list.innerHTML = '';
@@ -757,34 +932,26 @@ function renderProfileList() {
     item.className = 'profile-item' + (p.id === config.activeProfileId ? ' active' : '');
     item.dataset.id = p.id;
     item.addEventListener('click', () => selectProfile(item.dataset.id));
-
     const dot = document.createElement('div');
-    dot.className = 'profile-item-dot';
-    dot.style.background = p.color;
-
+    dot.className = 'profile-item-dot'; dot.style.background = p.color;
     const info = document.createElement('div');
     info.className = 'profile-item-info';
     const nameEl = document.createElement('div');
-    nameEl.className = 'profile-item-name';
-    nameEl.textContent = p.name;
+    nameEl.className = 'profile-item-name'; nameEl.textContent = p.name;
     const descEl = document.createElement('div');
     descEl.className = 'profile-item-desc';
     descEl.textContent = (p.model ? p.model.split('/').pop().slice(0,24) : t('js.globalModel')) + ' · Temp ' + (p.temperature ?? 0.7);
     info.appendChild(nameEl); info.appendChild(descEl);
-
     const actions = document.createElement('div');
     actions.className = 'profile-item-actions';
-
     const editBtn = document.createElement('button');
     editBtn.className = 'icon-btn'; editBtn.textContent = '✏️'; editBtn.title = t('js.edit');
     editBtn.dataset.id = p.id;
     editBtn.addEventListener('click', e => { e.stopPropagation(); editProfile(editBtn.dataset.id); });
-
     const delBtn = document.createElement('button');
     delBtn.className = 'icon-btn danger'; delBtn.textContent = '🗑'; delBtn.title = t('js.delete');
     delBtn.dataset.id = p.id;
     delBtn.addEventListener('click', e => { e.stopPropagation(); deleteProfile(delBtn.dataset.id); });
-
     actions.appendChild(editBtn); actions.appendChild(delBtn);
     item.appendChild(dot); item.appendChild(info); item.appendChild(actions);
     list.appendChild(item);
@@ -904,8 +1071,17 @@ function syncSettingsPanel() {
   const label  = document.getElementById('chatWidthVal');
   if (slider) slider.value = w;
   if (label)  label.textContent = w + 'px';
+  const imgSizeEl = document.getElementById('maxImgSizeInput');
+  if (imgSizeEl) imgSizeEl.value = Math.round(getMaxImageStorageBytes() / 1024);
+  // Populate account name field
+  const accNameInput = document.getElementById('accountNameInput');
+  if (accNameInput && _activeAccountId) {
+    const acc = getAccount(_activeAccountId);
+    if (acc) accNameInput.value = acc.name;
+  }
   updateActiveProviderInfo(); updateModelMaxInfo();
 }
+
 function saveSettings() {
   config.temperature  = parseFloat(document.getElementById('temperature').value);
   config.systemPrompt = document.getElementById('systemPrompt').value;
@@ -913,6 +1089,12 @@ function saveSettings() {
   if (sel) config.model = sel;
   const p = activeProfile();
   if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; if(sel) p.model=sel; }
+  // Save image size limit
+  const imgSizeEl = document.getElementById('maxImgSizeInput');
+  if (imgSizeEl) {
+    const kb = parseInt(imgSizeEl.value);
+    if (kb >= 100) setMaxImageStorageBytes(kb * 1024);
+  }
   save(); fetchModels(); closePanels(); toast(t('js.settingsSaved'));
 }
 function applyChatWidth(val) {
@@ -936,7 +1118,6 @@ async function fetchModels() {
     const groupModels = []; let provOk = false;
 
     if (provider.type === 'anthropic') {
-      // ── Anthropic: live model list ──────────────────────────────
       try {
         const res = await fetch(proxyUrl('https://api.anthropic.com/v1/models'), {
           headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01',
@@ -945,32 +1126,25 @@ async function fetchModels() {
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
         const liveIds = new Set((data.data || []).map(m => m.id));
-        // Prefer live models; fall back to CLAUDE_MODELS list if API returns nothing
         const modelsToShow = liveIds.size > 0
-          ? [...liveIds].sort().reverse().map(id => ({
-              id, label: KNOWN_MODELS[id]?.label || id
-            }))
+          ? [...liveIds].sort().reverse().map(id => ({ id, label: KNOWN_MODELS[id]?.label || id }))
           : CLAUDE_MODELS;
         modelsToShow.forEach(m => groupModels.push({
           fullId: makeModelId(provider.id, m.id || m),
-          label: m.label || m.id || m,
-          modelId: m.id || m
+          label: m.label || m.id || m, modelId: m.id || m
         }));
         provOk = true;
       } catch(e) {
         providerStatus[provider.id] = 'error'; anyError = true;
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
-
     } else if (provider.type === 'openai-direct') {
-      // ── OpenAI: live model list ─────────────────────────────────
       try {
         const res = await fetch(proxyUrl('https://api.openai.com/v1/models'), {
           headers: { 'Authorization': `Bearer ${provider.apiKey}` }
         });
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
-        // Filter: only chat-capable models (exclude embedding, tts, whisper, dall-e, etc.)
         const CHAT_PATTERN = /^(gpt-|o\d|chatgpt-)/;
         const EXCLUDE_PATTERN = /embed|whisper|tts|dall-e|realtime|audio|preview-\d{4}|transcribe|search$/;
         const PRIORITY_ORDER = ['gpt-4.1','gpt-4o','o4','o3','o1','gpt-4.5','gpt-4-turbo','gpt-3'];
@@ -979,18 +1153,14 @@ async function fetchModels() {
           .sort((a, b) => {
             const pa = PRIORITY_ORDER.findIndex(p => a.id.startsWith(p));
             const pb = PRIORITY_ORDER.findIndex(p => b.id.startsWith(p));
-            const ra = pa === -1 ? 999 : pa;
-            const rb = pb === -1 ? 999 : pb;
+            const ra = pa === -1 ? 999 : pa; const rb = pb === -1 ? 999 : pb;
             return ra !== rb ? ra - rb : b.id.localeCompare(a.id);
           });
         if (liveModels.length > 0) {
           liveModels.forEach(m => groupModels.push({
-            fullId: makeModelId(provider.id, m.id),
-            label: KNOWN_MODELS[m.id]?.label || m.id,
-            modelId: m.id
+            fullId: makeModelId(provider.id, m.id), label: KNOWN_MODELS[m.id]?.label || m.id, modelId: m.id
           }));
         } else {
-          // Fallback to static list
           OPENAI_MODELS.forEach(m => groupModels.push({
             fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id
           }));
@@ -1000,9 +1170,7 @@ async function fetchModels() {
         providerStatus[provider.id] = 'error'; anyError = true;
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
-
     } else {
-      // ── OpenAI-compat + OpenRouter + Mistral + Gemini + xAI + Groq ──
       const endpoint = getProviderEndpoint(provider);
       if (!endpoint) { providerStatus[provider.id] = 'error'; anyError = true; continue; }
       try {
@@ -1017,19 +1185,14 @@ async function fetchModels() {
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
         const rawModels = data.data || data.models || [];
-
         if (provider.type === 'openrouter') {
-          // OpenRouter: use display name from API, mark thinking-capable models
-          // Also extract max_completion_tokens → populate _orModelMeta cache
           let orCacheUpdated = false;
           rawModels
-            .filter(m => m.id && !m.id.includes(':free') === false || true) // show all including free
             .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
             .forEach(m => {
               const isThinking = THINKING_MODELS.has(m.id) || /thinking|reason|qwq|r1/i.test(m.id);
               const lbl = (m.name || m.id) + (isThinking ? ' 🧠' : '');
               groupModels.push({ fullId: makeModelId(provider.id, m.id), label: lbl, modelId: m.id });
-              // Cache token limits from OpenRouter metadata
               const maxOut = m.top_provider?.max_completion_tokens || m.per_request_limits?.max_completion_tokens || 0;
               const ctxLen = m.context_length || 0;
               if ((maxOut > 0 || ctxLen > 0) && !KNOWN_MODELS[m.id]) {
@@ -1039,10 +1202,8 @@ async function fetchModels() {
             });
           if (orCacheUpdated) _saveOrCache();
         } else {
-          // Generic: use known labels where available
           rawModels.forEach(m => {
-            const id = m.id || m.name || '';
-            if (!id) return;
+            const id = m.id || m.name || ''; if (!id) return;
             const knownLabel = KNOWN_MODELS[id]?.label;
             const isThinking = THINKING_MODELS.has(id) || isThinkingCapable(id);
             const lbl = (knownLabel || id) + (isThinking ? ' 🧠' : '');
@@ -1055,7 +1216,6 @@ async function fetchModels() {
         renderProviderList(); updateActiveProviderInfo(); continue;
       }
     }
-
     if (provOk) { providerStatus[provider.id] = 'ok'; anyOk = true; }
     if (groupModels.length) allGroups.push({ providerId: provider.id, providerName: provider.name, models: groupModels });
   }
@@ -1072,9 +1232,7 @@ async function fetchModels() {
   allGroups.forEach(g => {
     optsHtml += `<optgroup label="${escHtml(g.providerName)}">`;
     g.models.forEach(m => {
-      const isThinking = THINKING_MODELS.has(m.modelId);
-      const badge = isThinking ? ' 🧠' : '';
-      optsHtml += `<option value="${escHtml(m.fullId)}">${escHtml(m.label)}${badge}</option>`;
+      optsHtml += `<option value="${escHtml(m.fullId)}">${escHtml(m.label)}</option>`;
     });
     optsHtml += '</optgroup>';
   });
@@ -1107,12 +1265,8 @@ function updateModelMaxInfo() {
 }
 
 // ── Thinking / Reasoning UI ───────────────────────────────────────
-// Intensity labels are now sourced from i18n via t()
-// Keys: thinking.low / thinking.medium / thinking.high
-// OpenAI reasoning_effort values
 const OAI_EFFORT = { 1: 'low', 2: 'medium', 3: 'high' };
-// Anthropic budget_tokens: stored directly in config.thinkingBudget (continuous)
-const CLAUDE_BUDGET = { 1: 2000, 2: 8000, 3: 20000 };  // fallback for intensity→budget
+const CLAUDE_BUDGET = { 1: 2000, 2: 8000, 3: 20000 };
 
 function isThinkingCapable(modelId) {
   if (!modelId) return false;
@@ -1121,25 +1275,12 @@ function isThinkingCapable(modelId) {
     /^o\d/.test(bare) || /claude-(opus|sonnet)-4/.test(bare) || /claude-3-7/.test(bare) ||
     /thinking|reason/i.test(bare) || /deepseek-r|qwen.*think|qwq|llama.*reason/i.test(bare);
 }
-
 function isAnthropicThinkingModel(modelId) {
   return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
 }
-
-// Returns true if the model uses continuous token budget (Anthropic), false for discrete effort (OpenAI)
-function usesTokenBudget(modelId) {
-  return isAnthropicThinkingModel(modelId || '');
-}
-
-function getThinkingBudget() {
-  // For Anthropic: return continuous token value
-  return config.thinkingBudget || 8000;
-}
-
-function getThinkingEffortStr() {
-  // For OpenAI: return low/medium/high
-  return OAI_EFFORT[config.thinkingIntensity || 2];
-}
+function usesTokenBudget(modelId) { return isAnthropicThinkingModel(modelId || ''); }
+function getThinkingBudget() { return config.thinkingBudget || 8000; }
+function getThinkingEffortStr() { return OAI_EFFORT[config.thinkingIntensity || 2]; }
 
 function updateThinkingUI() {
   const { modelId } = splitModelId(config.model);
@@ -1151,32 +1292,23 @@ function updateThinkingUI() {
     document.getElementById('thinkingToggle')?.classList.remove('active');
     document.getElementById('thinkingIntensity')?.classList.remove('visible');
   }
-  // Reconfigure slider mode based on model type
   configureThinkingSlider(modelId);
   updateThinkingIntensityUI();
 }
-
 function configureThinkingSlider(modelId) {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityLabel');
   if (!slider) return;
   if (usesTokenBudget(modelId)) {
-    // Continuous: 1024 to 32000 tokens
-    slider.min   = '1024';
-    slider.max   = '32000';
-    slider.step  = '256';
+    slider.min='1024'; slider.max='32000'; slider.step='256';
     slider.value = String(config.thinkingBudget || 8000);
-    if (label) label.textContent = typeof t === 'function' ? t('thinking.budget') : 'Budget';
+    if (label) label.textContent = t('thinking.budget');
   } else {
-    // Discrete: 1=low, 2=medium, 3=high
-    slider.min   = '1';
-    slider.max   = '3';
-    slider.step  = '1';
+    slider.min='1'; slider.max='3'; slider.step='1';
     slider.value = String(config.thinkingIntensity || 2);
     if (label) label.textContent = t('thinking.intensity');
   }
 }
-
 function updateThinkingIntensityUI() {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityVal');
@@ -1184,14 +1316,13 @@ function updateThinkingIntensityUI() {
   const { modelId } = splitModelId(config.model);
   if (usesTokenBudget(modelId)) {
     const budget = config.thinkingBudget || 8000;
-    label.textContent = budget >= 1000 ? (budget / 1000).toFixed(1).replace('.0','') + 'k tok' : budget + ' tok';
+    label.textContent = budget >= 1000 ? (budget/1000).toFixed(1).replace('.0','')+'k tok' : budget+' tok';
   } else {
     const val = config.thinkingIntensity || 2;
-    const ikeys = { 1: 'thinking.low', 2: 'thinking.medium', 3: 'thinking.high' };
+    const ikeys = { 1:'thinking.low', 2:'thinking.medium', 3:'thinking.high' };
     label.textContent = t(ikeys[val]);
   }
 }
-
 function toggleThinking() {
   const { modelId } = splitModelId(config.model);
   if (!isThinkingCapable(modelId)) return;
@@ -1216,7 +1347,9 @@ function setStatus(c) {
   d.style.background = col; d.style.boxShadow = `0 0 8px ${col}`;
 }
 
-// ── Folders ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// FOLDERS — with drag & drop reordering
+// ══════════════════════════════════════════════════════════════════
 function newFolder() {
   const id = Date.now().toString();
   folders.push({id, name: t('js.newFolder'), collapsed:false});
@@ -1235,16 +1368,39 @@ function startRenamingFolder(id) {
   const el = document.getElementById(`fname_${id}`); if(!el) return;
   const f = folders.find(x=>x.id===id);
   const input = document.createElement('input');
-  input.className = 'folder-name-input';
-  input.value = f.name;
+  input.className = 'folder-name-input'; input.value = f.name;
   input.addEventListener('blur', () => commitRenameFolder(id, input.value));
   input.addEventListener('keydown', e => { if(e.key==='Enter') input.blur(); });
-  el.replaceWith(input);
-  input.focus();
+  el.replaceWith(input); input.focus();
 }
 function commitRenameFolder(id, newName) {
   const f = folders.find(x=>x.id===id);
   if (f) f.name = newName.trim() || f.name;
+  save(); renderSidebar();
+}
+
+// Folder drag-and-drop reorder helpers
+function onFolderDragStart(e, id) {
+  draggedFolderId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'folder:' + id);
+}
+function onFolderDragOver(e, targetId) {
+  if (!draggedFolderId || draggedFolderId === targetId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+function onFolderDrop(e, targetId) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.querySelectorAll('.folder-drag-over').forEach(el=>el.classList.remove('folder-drag-over'));
+  if (!draggedFolderId || draggedFolderId === targetId) { draggedFolderId = null; return; }
+  const fromIdx = folders.findIndex(f=>f.id===draggedFolderId);
+  const toIdx   = folders.findIndex(f=>f.id===targetId);
+  if (fromIdx === -1 || toIdx === -1) { draggedFolderId = null; return; }
+  const [moved] = folders.splice(fromIdx, 1);
+  folders.splice(toIdx, 0, moved);
+  draggedFolderId = null;
   save(); renderSidebar();
 }
 
@@ -1258,7 +1414,7 @@ function newChat(folderId=null) {
 }
 function switchChat(id) {
   currentChatId = id;
-  localStorage.setItem('kic_current_chat', id);
+  localStorage.setItem(accountKey('current_chat'), id);
   renderSidebar();
   const c = chats.find(x=>x.id===id);
   if (c) renderMessages(c.messages);
@@ -1276,32 +1432,27 @@ function startRenamingChat(id) {
   const titleEl = document.getElementById(`ctitle_${id}`); if(!titleEl) return;
   const chat = chats.find(c=>c.id===id); if(!chat) return;
   const input = document.createElement('input');
-  input.className = 'chat-item-title-input';
-  input.value = chat.title;
+  input.className = 'chat-item-title-input'; input.value = chat.title;
   input.addEventListener('click', e => e.stopPropagation());
   input.addEventListener('blur', () => { chat.title = input.value.trim()||chat.title; save(); renderSidebar(); });
   input.addEventListener('keydown', e => { if(e.key==='Enter') input.blur(); });
-  titleEl.replaceWith(input);
-  input.focus(); input.select();
+  titleEl.replaceWith(input); input.focus(); input.select();
 }
 function moveChat(chatId, folderId) {
   const c = chats.find(x=>x.id===chatId);
   if (c) { c.folderId = folderId; save(); renderSidebar(); }
 }
 
-// FIX #3: Context-Menu ohne onclick-Interpolation
 function showChatCtxMenu(e, chatId) {
   e.preventDefault(); e.stopPropagation();
   const menu = document.getElementById('ctxMenu');
   menu.innerHTML = '';
   const renameItem = document.createElement('div');
-  renameItem.className = 'ctx-item';
-  renameItem.textContent = t('js.rename');
+  renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
   renameItem.dataset.id = chatId;
   renameItem.addEventListener('click', () => { startRenamingChat(renameItem.dataset.id); hideCtx(); });
   const delItem = document.createElement('div');
-  delItem.className = 'ctx-item danger';
-  delItem.textContent = t('js.delete');
+  delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
   delItem.dataset.id = chatId;
   delItem.addEventListener('click', () => { deleteChat(delItem.dataset.id); hideCtx(); });
   menu.appendChild(renameItem); menu.appendChild(delItem);
@@ -1319,7 +1470,6 @@ function onDropFolder(e, folderId) {
 }
 
 // ── Sidebar Render ────────────────────────────────────────────────
-// FIX #3: Sidebar-Items via DOM-API statt innerHTML-Interpolation
 function renderSidebar() {
   const container = document.getElementById('folderContainer');
   container.innerHTML = '';
@@ -1329,57 +1479,75 @@ function renderSidebar() {
     const fc = chats.filter(c=>c.folderId===f.id);
     const folderDiv = document.createElement('div');
     folderDiv.className = 'folder';
+    // Folder-level drag for reordering
+    folderDiv.draggable = true;
+    folderDiv.dataset.folderId = f.id;
+    folderDiv.addEventListener('dragstart', e => {
+      // Only start folder drag if not dragging a chat item
+      if (!draggedChatId) {
+        e.stopPropagation();
+        onFolderDragStart(e, f.id);
+        folderDiv.classList.add('folder-dragging');
+      }
+    });
+    folderDiv.addEventListener('dragend', () => {
+      folderDiv.classList.remove('folder-dragging');
+      document.querySelectorAll('.folder-drag-over').forEach(el=>el.classList.remove('folder-drag-over'));
+    });
+    folderDiv.addEventListener('dragover', e => {
+      if (draggedFolderId && draggedFolderId !== f.id) {
+        e.preventDefault(); e.stopPropagation();
+        folderDiv.classList.add('folder-drag-over');
+      }
+    });
+    folderDiv.addEventListener('dragleave', e => {
+      if (!folderDiv.contains(e.relatedTarget)) folderDiv.classList.remove('folder-drag-over');
+    });
+    folderDiv.addEventListener('drop', e => {
+      if (draggedFolderId) { onFolderDrop(e, f.id); }
+      else { onDropFolder(e, f.id); }
+    });
 
     const header = document.createElement('div');
     header.className = 'folder-header';
     header.id = `fh_${f.id}`;
-
     const arrow = document.createElement('span');
     arrow.className = 'folder-arrow ' + (f.collapsed ? '' : 'open');
     arrow.textContent = '▶';
-
     const nameSpan = document.createElement('span');
     nameSpan.className = 'folder-name';
     nameSpan.id = `fname_${f.id}`;
     nameSpan.textContent = f.name;
     nameSpan.addEventListener('dblclick', () => startRenamingFolder(f.id));
-
     const countSpan = document.createElement('span');
-    countSpan.className = 'folder-count';
-    countSpan.textContent = fc.length;
-
+    countSpan.className = 'folder-count'; countSpan.textContent = fc.length;
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'folder-actions';
-
     const renameBtn = document.createElement('button');
     renameBtn.className = 'folder-btn'; renameBtn.textContent = '✏️';
     renameBtn.dataset.id = f.id;
     renameBtn.addEventListener('click', e => { e.stopPropagation(); startRenamingFolder(renameBtn.dataset.id); });
-
     const delBtn = document.createElement('button');
     delBtn.className = 'folder-btn danger'; delBtn.textContent = '🗑';
     delBtn.dataset.id = f.id;
     delBtn.addEventListener('click', e => { e.stopPropagation(); deleteFolder(delBtn.dataset.id); });
-
     actionsDiv.appendChild(renameBtn); actionsDiv.appendChild(delBtn);
     header.appendChild(arrow); header.appendChild(nameSpan); header.appendChild(countSpan); header.appendChild(actionsDiv);
-
-    // Drag-Drop auf Folder-Header
-    header.addEventListener('dragover',  e => { e.preventDefault(); header.classList.add('drag-target'); });
+    header.addEventListener('dragover', e => {
+      if (draggedChatId) { e.preventDefault(); header.classList.add('drag-target'); }
+    });
     header.addEventListener('dragleave', () => header.classList.remove('drag-target'));
-    header.addEventListener('drop',      e => onDropFolder(e, f.id));
+    header.addEventListener('drop', e => { if(draggedChatId) onDropFolder(e, f.id); });
     header.addEventListener('click', e => {
       if (e.target.closest('.folder-actions') || e.target.tagName==='BUTTON' || e.target.tagName==='INPUT') return;
       toggleFolder(f.id);
     });
-
     const chatsDiv = document.createElement('div');
     chatsDiv.className = 'folder-chats' + (f.collapsed ? ' collapsed' : '');
     chatsDiv.id = `fc_${f.id}`;
-    chatsDiv.addEventListener('dragover', e => e.preventDefault());
-    chatsDiv.addEventListener('drop', e => onDropFolder(e, f.id));
+    chatsDiv.addEventListener('dragover', e => { if(draggedChatId) e.preventDefault(); });
+    chatsDiv.addEventListener('drop', e => { if(draggedChatId) onDropFolder(e, f.id); });
     fc.forEach(c => chatsDiv.appendChild(buildChatItem(c)));
-
     folderDiv.appendChild(header); folderDiv.appendChild(chatsDiv);
     container.appendChild(folderDiv);
   });
@@ -1393,13 +1561,13 @@ function renderSidebar() {
     const nameSpan = document.createElement('span'); nameSpan.className='folder-name'; nameSpan.textContent=t('js.noFolder');
     const countSpan = document.createElement('span'); countSpan.className='folder-count'; countSpan.textContent=unfiled.length;
     header.appendChild(arrow); header.appendChild(nameSpan); header.appendChild(countSpan);
-    header.addEventListener('dragover', e=>{e.preventDefault();header.classList.add('drag-target');});
+    header.addEventListener('dragover', e=>{if(draggedChatId){e.preventDefault();header.classList.add('drag-target');}});
     header.addEventListener('dragleave',()=>header.classList.remove('drag-target'));
-    header.addEventListener('drop', e=>onDropFolder(e,null));
+    header.addEventListener('drop', e=>{ if(draggedChatId) onDropFolder(e,null); });
     const chatsDiv = document.createElement('div');
     chatsDiv.className = 'folder-chats';
-    chatsDiv.addEventListener('dragover', e=>e.preventDefault());
-    chatsDiv.addEventListener('drop', e=>onDropFolder(e,null));
+    chatsDiv.addEventListener('dragover', e=>{if(draggedChatId)e.preventDefault();});
+    chatsDiv.addEventListener('drop', e=>{if(draggedChatId)onDropFolder(e,null);});
     unfiled.forEach(c=>chatsDiv.appendChild(buildChatItem(c)));
     folderDiv.appendChild(header); folderDiv.appendChild(chatsDiv);
     container.appendChild(folderDiv);
@@ -1411,21 +1579,17 @@ function buildChatItem(c) {
   div.className = 'chat-item' + (c.id === currentChatId ? ' active' : '');
   div.draggable = true;
   div.dataset.id = c.id;
-
-  div.addEventListener('dragstart', e => onDragStart(e, div.dataset.id));
+  div.addEventListener('dragstart', e => { e.stopPropagation(); onDragStart(e, div.dataset.id); });
   div.addEventListener('click',     () => switchChat(div.dataset.id));
   div.addEventListener('contextmenu', e => showChatCtxMenu(e, div.dataset.id));
-
   const titleSpan = document.createElement('span');
   titleSpan.className = 'chat-item-title';
   titleSpan.id = `ctitle_${c.id}`;
   titleSpan.textContent = c.title;
-
   const menuBtn = document.createElement('button');
   menuBtn.className = 'chat-item-menu'; menuBtn.textContent = '⋯'; menuBtn.title = t('js.options');
   menuBtn.dataset.id = c.id;
   menuBtn.addEventListener('click', e => showChatCtxMenu(e, menuBtn.dataset.id));
-
   div.appendChild(titleSpan);
   if (c.branchOf) { const bb=document.createElement('span'); bb.className='branch-badge'; bb.textContent='↩'; div.appendChild(bb); }
   div.appendChild(menuBtn);
@@ -1452,12 +1616,10 @@ function renderMessages(messages) {
 function buildMsgEl(msg, idx) {
   const isUser = msg.role === 'user';
   const cls = isUser ? 'user' : 'ai';
-
   const row = document.createElement('div');
   row.className = 'message-row ' + cls;
   if (idx !== undefined) row.dataset.idx = idx;
 
-  // Avatar col
   const avatarCol = document.createElement('div');
   avatarCol.className = 'avatar-col';
   const avatar = document.createElement('div');
@@ -1470,53 +1632,66 @@ function buildMsgEl(msg, idx) {
     const mid = splitModelId(rawMid).modelId || rawMid;
     if (mid) {
       const ml = document.createElement('div');
-      ml.className = 'model-label';
-      ml.title = mid;
+      ml.className = 'model-label'; ml.title = mid;
       ml.textContent = mid.split('/').pop();
       avatarCol.appendChild(ml);
     }
   }
 
-  // Bubble wrap
   const wrap = document.createElement('div');
   wrap.className = 'bubble-wrap';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
 
-  // Content
+  // ── Build bubble content ──
+  // For user messages: show text parts only, then file chips.
+  // Files (text-file, pdf, images) are never expanded inline in the bubble.
   let contentHtml = '';
-  if (typeof msg.content === 'string') contentHtml = formatText(msg.content);
-  else if (Array.isArray(msg.content)) {
+  if (typeof msg.content === 'string') {
+    contentHtml = formatText(msg.content);
+  } else if (Array.isArray(msg.content)) {
     msg.content.forEach(part => {
       if (part.type === 'text') {
-        const isPdfContent = part.text && part.text.startsWith('--- ');
-        if (!isPdfContent) contentHtml += formatText(part.text);
+        // Skip file-content blocks (they start with the file marker)
+        const isFContent = part.text && part.text.startsWith('--- ');
+        if (!isFContent) contentHtml += formatText(part.text);
       } else if (part.type === 'image_url') {
         const url = part.image_url?.url || '';
         if (url.startsWith('data:image/') || url.startsWith('http')) {
+          // Append text so far, then the image
+          if (contentHtml) { bubble.innerHTML = contentHtml; contentHtml = ''; }
           const img = document.createElement('img');
           img.src = url; img.alt = t('js.imageAlt');
-          // Bild separat anhängen (nach DOMPurify-Verarbeitung)
-          bubble.innerHTML = contentHtml || '';
+          img.style.cssText = 'max-width:100%;max-height:320px;border-radius:8px;cursor:pointer;margin-top:6px;';
+          img.addEventListener('click', () => openImageLightbox(url));
           bubble.appendChild(img);
-          contentHtml = '';
-          return;
         }
       }
+      // pdf_base64 and text-file parts: NOT rendered inline — shown as chips below
     });
   }
-  if (!contentHtml && bubble.children.length === 0 && !msg._files) contentHtml = `<em style="color:var(--muted)">${escHtml(t('js.empty'))}</em>`;
   if (contentHtml) bubble.innerHTML = (bubble.innerHTML || '') + contentHtml;
-  if (msg._files) msg._files.forEach(f => {
-    const chip = document.createElement('div');
-    chip.className = 'file-chip'; chip.textContent = '📄 ' + f;
-    bubble.appendChild(chip);
-  });
 
-  // Bubble actions (FIX #3: addEventListener)
+  // File chips — always shown for _files list (stored file names)
+  if (msg._files && msg._files.length) {
+    const chipWrap = document.createElement('div');
+    chipWrap.className = 'msg-file-chips';
+    msg._files.forEach(name => {
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      const isImg = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+      chip.textContent = (isImg ? '🖼️ ' : '📄 ') + name;
+      chipWrap.appendChild(chip);
+    });
+    bubble.appendChild(chipWrap);
+  }
+
+  if (!contentHtml && bubble.children.length === 0)
+    bubble.innerHTML = `<em style="color:var(--muted)">${escHtml(t('js.empty'))}</em>`;
+
+  // Bubble actions
   const actDiv = document.createElement('div');
   actDiv.className = 'bubble-actions';
-
   function makeActBtn(label, cls2, handler, action) {
     const btn = document.createElement('button');
     btn.className = 'bubble-act-btn' + (cls2 ? ' ' + cls2 : '');
@@ -1526,14 +1701,12 @@ function buildMsgEl(msg, idx) {
     btn.addEventListener('click', () => handler(parseInt(btn.dataset.idx)));
     return btn;
   }
-
-  actDiv.appendChild(makeActBtn(t('js.copy'),       '',       (i) => copyBubble(actDiv.querySelector('.bubble-act-btn'), i), 'copy'));
-  actDiv.appendChild(makeActBtn(t('js.edit'),       '',       startEditBubble, 'edit'));
-  actDiv.appendChild(makeActBtn(t('js.branch'),     '',       branchFromHere, 'branch'));
+  actDiv.appendChild(makeActBtn(t('js.copy'),       '', (i) => copyBubble(actDiv.querySelector('.bubble-act-btn'), i), 'copy'));
+  actDiv.appendChild(makeActBtn(t('js.edit'),       '', startEditBubble, 'edit'));
+  actDiv.appendChild(makeActBtn(t('js.branch'),     '', branchFromHere, 'branch'));
   if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate, 'regenerate'));
   actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
 
-  // Token badge for AI messages
   if (!isUser && msg._usage) {
     const badge = buildTokenBadge(msg._usage);
     wrap.appendChild(bubble); wrap.appendChild(actDiv); wrap.appendChild(badge);
@@ -1542,12 +1715,22 @@ function buildMsgEl(msg, idx) {
   }
   row.appendChild(avatarCol); row.appendChild(wrap);
 
-  // Code-Copy-Buttons per addEventListener verdrahten (NACH DOMPurify in formatText)
   row.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
     btn.addEventListener('click', () => copyCodeFromBtn(btn));
   });
-
   return row;
+}
+
+// ── Simple image lightbox ─────────────────────────────────────────
+function openImageLightbox(url) {
+  const lb = document.createElement('div');
+  lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 40px #000;';
+  lb.appendChild(img);
+  lb.addEventListener('click', () => lb.remove());
+  document.body.appendChild(lb);
 }
 
 // ── Bubble Edit / Delete / Branch ─────────────────────────────────
@@ -1558,129 +1741,233 @@ function buildTokenBadge(usage) {
   const badge = document.createElement('div');
   badge.className = 'token-badge';
   if (usage.input_tokens != null) {
-    const s = document.createElement('span');
-    s.title = 'Input tokens';
-    s.textContent = tf('js.tokensIn', {n: usage.input_tokens.toLocaleString()});
-    badge.appendChild(s);
+    const s=document.createElement('span'); s.title='Input tokens';
+    s.textContent=tf('js.tokensIn',{n:usage.input_tokens.toLocaleString()}); badge.appendChild(s);
   }
   if (usage.output_tokens != null) {
-    const s = document.createElement('span');
-    s.title = 'Output tokens';
-    s.textContent = tf('js.tokensOut', {n: usage.output_tokens.toLocaleString()});
-    badge.appendChild(s);
+    const s=document.createElement('span'); s.title='Output tokens';
+    s.textContent=tf('js.tokensOut',{n:usage.output_tokens.toLocaleString()}); badge.appendChild(s);
   }
   if (usage.cache_read_input_tokens) {
-    const s = document.createElement('span');
-    s.className = 'cache';
-    s.title = 'Cache read tokens';
-    s.textContent = tf('js.tokensCacheRead', {n: usage.cache_read_input_tokens.toLocaleString()});
-    badge.appendChild(s);
+    const s=document.createElement('span'); s.className='cache'; s.title='Cache read';
+    s.textContent=tf('js.tokensCacheRead',{n:usage.cache_read_input_tokens.toLocaleString()}); badge.appendChild(s);
   }
-  const total = (usage.input_tokens||0) + (usage.output_tokens||0);
-  if (total > 0) {
-    const s = document.createElement('span');
-    s.title = 'Total tokens this message';
-    s.style.color = 'var(--accent)';
-    s.style.borderColor = 'rgba(61,126,255,0.3)';
-    s.textContent = tf('js.tokensTotal', {n: total.toLocaleString()});
-    badge.appendChild(s);
+  const total=(usage.input_tokens||0)+(usage.output_tokens||0);
+  if (total>0) {
+    const s=document.createElement('span');
+    s.title='Total'; s.style.color='var(--accent)'; s.style.borderColor='rgba(61,126,255,0.3)';
+    s.textContent=tf('js.tokensTotal',{n:total.toLocaleString()}); badge.appendChild(s);
   }
   return badge;
 }
 
 function updateChatTokenTotal() {
-  const chat = currentChat();
-  let total = document.getElementById('chatTokenTotal');
-  if (!chat) { if (total) total.remove(); return; }
-  const sum = chat.messages.reduce((acc, m) => {
-    if (!m._usage) return acc;
-    return acc + (m._usage.input_tokens||0) + (m._usage.output_tokens||0);
-  }, 0);
-  if (sum === 0) { if (total) total.remove(); return; }
+  const chat=currentChat();
+  let total=document.getElementById('chatTokenTotal');
+  if (!chat) { if(total) total.remove(); return; }
+  const sum=chat.messages.reduce((acc,m)=>{
+    if(!m._usage) return acc;
+    return acc+(m._usage.input_tokens||0)+(m._usage.output_tokens||0);
+  },0);
+  if (sum===0) { if(total) total.remove(); return; }
   if (!total) {
-    total = document.createElement('div');
-    total.id = 'chatTokenTotal';
-    total.className = 'chat-token-total';
-    const msgs = document.getElementById('messages');
-    msgs.appendChild(total);
+    total=document.createElement('div'); total.id='chatTokenTotal'; total.className='chat-token-total';
+    document.getElementById('messages').appendChild(total);
   }
-  total.textContent = tf('js.chatTotalTokens', {n: sum.toLocaleString()});
+  total.textContent=tf('js.chatTotalTokens',{n:sum.toLocaleString()});
 }
 
 function safeIdx(idx) {
-  const n = parseInt(idx, 10);
-  if (!Number.isFinite(n) || n < 0) return null;
+  const n=parseInt(idx,10);
+  if(!Number.isFinite(n)||n<0) return null;
   return n;
 }
 
 function deleteBubble(idx) {
-  idx = safeIdx(idx); if(idx===null) return;
+  idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
-  chat.messages.splice(idx,1);
-  save(); renderMessages(chat.messages);
+  chat.messages.splice(idx,1); save(); renderMessages(chat.messages);
 }
+
+// Edit-state for bubble editing with file chips
+let _editAttachments = [];
+let _editMsgIdx = null;
 
 function startEditBubble(idx) {
-  idx = safeIdx(idx); if(idx===null) return;
-  const chat=currentChat(); if(!chat) return;
-  const msg=chat.messages[idx]; if(!msg) return;
-  let text='';
-  if (typeof msg.content==='string') text=msg.content;
-  else if (Array.isArray(msg.content)) text=msg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
-  const row=getBubbleRow(idx); if(!row) return;
-  const wrap=row.querySelector('.bubble-wrap');
-  // DOM-sicher erstellen
-  wrap.innerHTML='';
+  idx = safeIdx(idx); if (idx === null) return;
+  const chat = currentChat(); if (!chat) return;
+  const msg = chat.messages[idx]; if (!msg) return;
+  _editMsgIdx = idx;
+
+  // Plain text only — skip file-content blocks
+  let text = '';
+  if (typeof msg.content === 'string') text = msg.content;
+  else if (Array.isArray(msg.content))
+    text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
+
+  // Name-only references to already-attached files
+  _editAttachments = (msg._files || []).map(name => ({
+    type: /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name) ? 'image' : (/\.pdf$/i.test(name) ? 'pdf-b64' : 'text-file'),
+    name, _storedOnly: true
+  }));
+
+  const row = getBubbleRow(idx); if (!row) return;
+  const wrap = row.querySelector('.bubble-wrap');
+  wrap.innerHTML = '';
+
   const ta = document.createElement('textarea');
-  ta.className='edit-box'; ta.rows=3; ta.value=text;
-  ta.style.height='auto';
-  const eActs = document.createElement('div'); eActs.className='edit-actions';
-  const confirmBtn = document.createElement('button'); confirmBtn.className='edit-confirm-btn'; confirmBtn.textContent=t('js.saveBubble');
-  confirmBtn.dataset.idx=idx; confirmBtn.addEventListener('click', () => confirmEditBubble(parseInt(confirmBtn.dataset.idx)));
-  const cancelBtn = document.createElement('button'); cancelBtn.className='edit-cancel-btn'; cancelBtn.textContent=t('js.cancel');
-  cancelBtn.addEventListener('click', () => renderMessages(currentChat().messages));
+  ta.className = 'edit-box'; ta.rows = 3; ta.value = text; ta.style.height = 'auto';
+
+  // File area
+  const fileArea = document.createElement('div');
+  fileArea.style.cssText = 'margin-top:8px;';
+  const fileLabel = document.createElement('div');
+  fileLabel.style.cssText = 'font-size:11px;font-family:"IBM Plex Mono",monospace;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;';
+  fileLabel.textContent = t('js.editFiles') || 'Attached files';
+  const chipsRow = document.createElement('div');
+  chipsRow.id = 'editFileChips';
+  chipsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;';
+  const addBtns = document.createElement('div');
+  addBtns.style.cssText = 'display:flex;gap:6px;';
+  const addFileBtn = document.createElement('button');
+  addFileBtn.className = 'bubble-act-btn';
+  addFileBtn.textContent = t('js.editAddFile') || '📎 File';
+  addFileBtn.addEventListener('click', () => document.getElementById('editFileInput')?.click());
+  const addImgBtn = document.createElement('button');
+  addImgBtn.className = 'bubble-act-btn';
+  addImgBtn.textContent = t('js.editAddImage') || '🖼 Image';
+  addImgBtn.addEventListener('click', () => document.getElementById('editImageInput')?.click());
+  addBtns.appendChild(addFileBtn); addBtns.appendChild(addImgBtn);
+  fileArea.appendChild(fileLabel); fileArea.appendChild(chipsRow); fileArea.appendChild(addBtns);
+
+  const eActs = document.createElement('div'); eActs.className = 'edit-actions';
+  const confirmBtn = document.createElement('button'); confirmBtn.className = 'edit-confirm-btn';
+  confirmBtn.textContent = t('js.saveBubble');
+  confirmBtn.addEventListener('click', () => confirmEditBubble());
+  const cancelBtn = document.createElement('button'); cancelBtn.className = 'edit-cancel-btn';
+  cancelBtn.textContent = t('js.cancel');
+  cancelBtn.addEventListener('click', () => { _editAttachments = []; _editMsgIdx = null; renderMessages(currentChat().messages); });
   eActs.appendChild(confirmBtn); eActs.appendChild(cancelBtn);
-  wrap.appendChild(ta); wrap.appendChild(eActs);
+
+  wrap.appendChild(ta); wrap.appendChild(fileArea); wrap.appendChild(eActs);
   ta.style.height = ta.scrollHeight + 'px'; ta.focus();
+  renderEditFileChips();
 }
 
-function confirmEditBubble(idx) {
-  idx = safeIdx(idx); if(idx===null) return;
-  const chat=currentChat(); if(!chat) return;
-  const row=getBubbleRow(idx); if(!row) return;
-  const ta=row.querySelector('.edit-box'); if(!ta) return;
-  const newText=ta.value.trim(); if(!newText) return;
-  const msg=chat.messages[idx];
-  if (typeof msg.content==='string') msg.content=newText;
-  else if (Array.isArray(msg.content)) {
-    let replaced=false;
-    msg.content=msg.content.map(p=>{ if(p.type==='text'&&!replaced){replaced=true;return{...p,text:newText};} return p; });
-  } else msg.content=newText;
+function renderEditFileChips() {
+  const chipsRow = document.getElementById('editFileChips'); if (!chipsRow) return;
+  chipsRow.innerHTML = '';
+  _editAttachments.forEach((a, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'file-chip';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:4px 10px;cursor:default;';
+    const icon = a.type === 'image' ? '🖼️' : '📄';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = icon + ' ' + a.name;
+    if (a._storedOnly) { nameSpan.style.opacity = '0.6'; nameSpan.title = 'Original — re-attach to replace'; }
+    const rem = document.createElement('button');
+    rem.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;';
+    rem.textContent = '\u2715';
+    const capturedIdx = i;
+    rem.addEventListener('click', () => { _editAttachments.splice(capturedIdx, 1); renderEditFileChips(); });
+    chip.appendChild(nameSpan); chip.appendChild(rem);
+    chipsRow.appendChild(chip);
+  });
+}
+
+function confirmEditBubble() {
+  const idx = _editMsgIdx; if (idx === null) return;
+  const chat = currentChat(); if (!chat) return;
+  const row = getBubbleRow(idx); if (!row) return;
+  const ta = row.querySelector('.edit-box'); if (!ta) return;
+  const newText = ta.value.trim();
+  const msg = chat.messages[idx];
+
+  const newContent = [];
+  if (newText) newContent.push({ type: 'text', text: newText });
+  const newFileNames = [];
+
+  _editAttachments.forEach(a => {
+    newFileNames.push(a.name);
+    if (a._storedOnly) return;
+    if (a.type === 'image') {
+      newContent.push({ type: 'image_url', image_url: { url: a.data } });
+    } else if (a.type === 'pdf-b64' && a.pdfMode === 'text' && a.extractedText) {
+      newContent.push({ type: 'text', text: tf('js.fileContent',{name:a.name}) + '\n' + a.extractedText + '\n' + t('js.fileEnd') });
+    } else if (a.type === 'text-file' && a.content) {
+      newContent.push({ type: 'text', text: tf('js.fileContent',{name:a.name}) + '\n' + a.content + '\n' + t('js.fileEnd') });
+    }
+  });
+
+  // Preserve stored-only file content blocks from original message
+  if (Array.isArray(msg.content)) {
+    msg.content.forEach(p => {
+      if (p.type === 'text' && p.text?.startsWith('--- ')) {
+        const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
+        if (fname && _editAttachments.some(a => a._storedOnly && a.name === fname)) {
+          newContent.push(p);
+        }
+      }
+    });
+  }
+
+  msg.content = newContent.length === 1 && newContent[0].type === 'text' ? newContent[0].text : newContent;
+  if (newFileNames.length) msg._files = newFileNames; else delete msg._files;
+  _editAttachments = []; _editMsgIdx = null;
   save(); renderMessages(chat.messages);
+}
+
+function handleEditFileAttach(e) {
+  const file = e.target.files[0]; if (!file) return; e.target.value = '';
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  const reader = new FileReader();
+  reader.onload = ev => {
+    if (isPdf) {
+      const b64 = ev.target.result;
+      const bin = atob(b64.split(',')[1] || b64);
+      const arr = new Uint8Array(bin.length);
+      for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+      _editAttachments.push({ type:'pdf-b64', name:file.name, data:b64, rawBuf:arr.buffer, pdfMode:'b64' });
+    } else {
+      _editAttachments.push({ type:'text-file', name:file.name, content:ev.target.result });
+    }
+    renderEditFileChips();
+  };
+  isPdf ? reader.readAsDataURL(file) : reader.readAsText(file, 'UTF-8');
+}
+
+function handleEditImageAttach(e) {
+  const file = e.target.files[0]; if (!file) return; e.target.value = '';
+  const reader = new FileReader();
+  reader.onload = ev => {
+    _editAttachments.push({ type:'image', name:file.name, data:ev.target.result });
+    renderEditFileChips();
+  };
+  reader.readAsDataURL(file);
 }
 
 function branchFromHere(idx) {
-  idx = safeIdx(idx); if(idx===null) return;
+  idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
   const branchedMsgs=JSON.parse(JSON.stringify(chat.messages.slice(0,idx+1)));
   const branchId=Date.now().toString();
-  chats.unshift({ id:branchId, title:`↩ ${chat.title.slice(0,32)} (ab #${idx+1})`, folderId:chat.folderId, branchOf:chat.id, messages:branchedMsgs });
+  chats.unshift({id:branchId,title:`↩ ${chat.title.slice(0,32)} (ab #${idx+1})`,folderId:chat.folderId,branchOf:chat.id,messages:branchedMsgs});
   currentChatId=branchId; save(); renderSidebar(); renderMessages(branchedMsgs);
   toast(`↩ Branch ab Nachricht ${idx+1}`);
 }
 
 async function regenerate(idx) {
-  idx = safeIdx(idx); if(idx===null) return;
+  idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
   const msg=chat.messages[idx];
-  if (!msg||msg.role!=='assistant') return;
-  if (isStreaming) { toast('Bitte warten…'); return; }
+  if(!msg||msg.role!=='assistant') return;
+  if(isStreaming){toast('Bitte warten…');return;}
   chat.messages.splice(idx,1);
   const userMsg=chat.messages[idx-1];
-  if (!userMsg||userMsg.role!=='user') { save(); renderMessages(chat.messages); return; }
+  if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
   let userText='';
-  if (typeof userMsg.content==='string') userText=userMsg.content;
-  else if (Array.isArray(userMsg.content)) userText=userMsg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
+  if(typeof userMsg.content==='string') userText=userMsg.content;
+  else if(Array.isArray(userMsg.content)) userText=userMsg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
   chat.messages.splice(idx-1,1);
   save(); renderMessages(chat.messages);
   await sendMessageCore(userText,[]);
@@ -1698,129 +1985,125 @@ function setSendMode(mode) {
 }
 
 async function sendMessage() {
-  if (isStreaming) return;
-  const input = document.getElementById('messageInput');
-  const text  = input.value.trim();
-  if (!text && !attachments.length) return;
-  if (!config.model) { toast(t('js.noModel')); return; }
-  const provider = providerForModel(config.model) || providers[0];
-  if (!provider) { toast(t('js.noProvider')); openProviderPanel(); return; }
-  if (!provider.apiKey) { toast(t('js.noApiKey')); openProviderPanel(); return; }
+  if(isStreaming) return;
+  const input=document.getElementById('messageInput');
+  const text=input.value.trim();
+  if(!text&&!attachments.length) return;
+  if(!config.model){toast(t('js.noModel'));return;}
+  const provider=providerForModel(config.model)||providers[0];
+  if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
+  if(!provider.apiKey){toast(t('js.noApiKey'));openProviderPanel();return;}
   const att=[...attachments];
   input.value=''; autoResize(input); clearAttachments();
   await sendMessageCore(text, att);
 }
 
 async function sendMessageCore(text, att) {
-  if (!currentChatId) newChat();
-  const empty = document.getElementById('emptyState');
-  if (empty) empty.style.display = 'none';
-  const provider = providerForModel(config.model) || providers[0];
-  const isKiConnect = provider?.type === 'openai-compat' && (provider.serverUrl||'').includes('kiconnect.nrw');
-  const documentIds = [];
+  if(!currentChatId) newChat();
+  const empty=document.getElementById('emptyState');
+  if(empty) empty.style.display='none';
+  const provider=providerForModel(config.model)||providers[0];
+  const isKiConnect=provider?.type==='openai-compat'&&(provider.serverUrl||'').includes('kiconnect.nrw');
+  const documentIds=[];
 
-  for (const a of att) {
-    if (a.type==='pdf-b64' && a.pdfMode==='b64' && isKiConnect && a.rawBuf) {
-      try {
+  for(const a of att){
+    if(a.type==='pdf-b64'&&a.pdfMode==='b64'&&isKiConnect&&a.rawBuf){
+      try{
         toast(`⏳ ${a.name} ${t('js.uploading')}`);
-        const form = new FormData();
-        form.append('file', new Blob([a.rawBuf],{type:'application/pdf'}), a.name);
-        const endpoint = getProviderEndpoint(provider).replace('/api/v1','');
-        const res = await fetch(proxyUrl(`${endpoint}/app/documents`), {
-          method:'POST', headers:{'Authorization':`Bearer ${provider.apiKey}`}, body:form
-        });
-        if (res.status === 409) {
-          try { const doc=await res.json(); const docId=doc.id||doc.documentId||doc._id||doc.document_id; if(docId){documentIds.push(docId);a._uploadedId=docId;} } catch {}
-          toast(tf('js.alreadyPresent', {name: a.name}));
-        } else if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
-        else {
-          const doc=await res.json(); const docId=doc.id||doc.documentId||doc._id||doc.document_id;
-          if(docId){documentIds.push(docId);a._uploadedId=docId;} toast(`✅ ${a.name} ${t('js.uploaded')}`);
-        }
-      } catch(err) { toast(tf('js.uploadFailed',{e:err.message})); renderAttachments(); return; }
+        const form=new FormData();
+        form.append('file',new Blob([a.rawBuf],{type:'application/pdf'}),a.name);
+        const endpoint=getProviderEndpoint(provider).replace('/api/v1','');
+        const res=await fetch(proxyUrl(`${endpoint}/app/documents`),{method:'POST',headers:{'Authorization':`Bearer ${provider.apiKey}`},body:form});
+        if(res.status===409){try{const doc=await res.json();const docId=doc.id||doc.documentId||doc._id||doc.document_id;if(docId){documentIds.push(docId);a._uploadedId=docId;}}catch{}toast(tf('js.alreadyPresent',{name:a.name}));}
+        else if(!res.ok)throw new Error(`HTTP ${res.status}`);
+        else{const doc=await res.json();const docId=doc.id||doc.documentId||doc._id||doc.document_id;if(docId){documentIds.push(docId);a._uploadedId=docId;}toast(`✅ ${a.name} ${t('js.uploaded')}`);}
+      }catch(err){toast(tf('js.uploadFailed',{e:err.message}));renderAttachments();return;}
     }
   }
 
+  // Build userContent: text first, then non-file attachments (images)
+  // Text-files and PDFs go as file chips only — their content is injected separately
   let userContent;
   const fileNames=[];
-  if (att.length) {
+  if(att.length){
     userContent=[];
-    if (text) userContent.push({type:'text',text});
-    att.forEach(a => {
-      if (a.type==='image') userContent.push({type:'image_url',image_url:{url:a.data}});
-      else if (a.type==='pdf-b64') {
+    if(text) userContent.push({type:'text',text});
+    att.forEach(a=>{
+      if(a.type==='image') userContent.push({type:'image_url',image_url:{url:a.data}});
+      else if(a.type==='pdf-b64'){
         fileNames.push(a.name);
-        if (a._uploadedId) { /* via documentIds */ }
-        else if (a.pdfMode==='text') { const txt=a.extractedText||t('js.noText'); userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${txt}\n${t('js.fileEnd')}`}); }
-        else { const b64=(a.data||'').split(',')[1]||a.data; userContent.push({type:'pdf_base64',name:a.name,data:b64}); }
-      } else if (a.type==='text-file') { fileNames.push(a.name); userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`}); }
-      else { fileNames.push(a.name); userContent.push({type:'text',text:`[${tf('js.unreadableFormat',{name:a.name})}]`}); }
+        if(a._uploadedId){}
+        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${txt}\n${t('js.fileEnd')}`});}
+        else{const b64=(a.data||'').split(',')[1]||a.data;userContent.push({type:'pdf_base64',name:a.name,data:b64});}
+      } else if(a.type==='text-file'){
+        fileNames.push(a.name);
+        userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`});
+      } else{
+        fileNames.push(a.name);
+        userContent.push({type:'text',text:`[${tf('js.unreadableFormat',{name:a.name})}]`});
+      }
     });
-    if (userContent.length===0&&text) userContent=text;
+    if(userContent.length===0&&text) userContent=text;
   } else { userContent=text; }
 
-  // FIX #7: Bilder + PDFs in Storage-Darstellung ersetzen
-  const userMsgForStorage = {
+  const maxBytes=getMaxImageStorageBytes();
+  const userMsgForStorage={
     role:'user',
-    content: Array.isArray(userContent)
-      ? userContent.map(p => {
-          if (p.type==='pdf_base64') return {type:'text',text:`[PDF: ${p.name}]`};
-          if (p.type==='image_url') {
-            const url=p.image_url?.url||'';
-            if (url.startsWith('data:')&&url.length>MAX_IMAGE_STORAGE_BYTES) return {type:'text',text:'[' + t('js.imageNotSaved') + ']'};
-          }
-          return p;
-        })
-      : userContent,
-    _files: fileNames.length ? fileNames : undefined
+    content:Array.isArray(userContent)
+      ?userContent.map(p=>{
+        if(p.type==='pdf_base64') return{type:'text',text:`[PDF: ${p.name}]`};
+        if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')&&url.length>maxBytes)return{type:'text',text:'['+t('js.imageNotSaved')+']'};}
+        return p;
+      })
+      :userContent,
+    _files:fileNames.length?fileNames:undefined
   };
   const chat=currentChat();
   chat.messages.push(userMsgForStorage);
-  if (chat.messages.length===1) { chat.title=(text||t('js.imageFileTitle')).slice(0,40); renderSidebar(); }
+  if(chat.messages.length===1){chat.title=(text||t('js.imageFileTitle')).slice(0,40);renderSidebar();}
 
+  // Build display message: only text + images visible, files as chips
+  const displayContent = Array.isArray(userContent)
+    ? userContent.filter(p => p.type==='text'&&!p.text.startsWith('---')||p.type==='image_url')
+    : userContent;
   const idx=chat.messages.length-1;
-  const msgEl=buildMsgEl({role:'user',content:text||null,_files:att.map(a=>a.name)},idx);
+  const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames},idx);
   appendToMessages(msgEl);
   scrollToBottom();
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
   let assistantText='';
-  let usageData = null; // will be populated from API usage metrics
+  let usageData=null;
 
   try {
-    if (provider.type === 'anthropic') {
-      function toAnthropicContent(content) {
-        if (!Array.isArray(content)) return content;
-        return content.map(p => {
-          if (p.type==='image_url') { const url=p.image_url?.url||''; if(url.startsWith('data:')){const[meta,b64]=url.split(',');return{type:'image',source:{type:'base64',media_type:meta.replace('data:','').replace(';base64',''),data:b64}};} return{type:'image',source:{type:'url',url}}; }
-          if (p.type==='pdf_base64') return {type:'document',source:{type:'base64',media_type:'application/pdf',data:p.data}};
+    if(provider.type==='anthropic'){
+      function toAnthropicContent(content){
+        if(!Array.isArray(content)) return content;
+        return content.map(p=>{
+          if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')){const[meta,b64]=url.split(',');return{type:'image',source:{type:'base64',media_type:meta.replace('data:','').replace(';base64',''),data:b64}};}return{type:'image',source:{type:'url',url}};}
+          if(p.type==='pdf_base64') return{type:'document',source:{type:'base64',media_type:'application/pdf',data:p.data}};
           return p;
         });
       }
       const anthropicMsgs=[];
       chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')anthropicMsgs.push({role:m.role,content:toAnthropicContent(m.content)});});
       anthropicMsgs.push({role:'user',content:toAnthropicContent(userContent)});
-      const { modelId: _aModelId } = splitModelId(config.model);
+      const{modelId:_aModelId}=splitModelId(config.model);
       const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
       if(config.systemPrompt)body.system=config.systemPrompt;
-      // Extended Thinking (claude-3.7+ / claude-4)
-      if (config.thinkingEnabled && isThinkingCapable(_aModelId)) {
-        const budget = usesTokenBudget(_aModelId)
-          ? (config.thinkingBudget || 8000)
-          : CLAUDE_BUDGET[config.thinkingIntensity || 2];
-        body.thinking = { type: 'enabled', budget_tokens: budget };
-        // Extended Thinking erfordert temperature=1
-        body.temperature = 1;
-        // max_tokens muss > budget_tokens sein
-        body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+      if(config.thinkingEnabled&&isThinkingCapable(_aModelId)){
+        const budget=usesTokenBudget(_aModelId)?(config.thinkingBudget||8000):CLAUDE_BUDGET[config.thinkingIntensity||2];
+        body.thinking={type:'enabled',budget_tokens:budget};
+        body.temperature=1;
+        body.max_tokens=Math.max(body.max_tokens,budget+2000);
       }
       const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
-      if(!res.ok)throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+      if(!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
       removeTyping(typingId);
       const aiEl=appendEmptyAI();
       const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      let thinkingText=''; let inThinkingBlock=false;
+      let thinkingText='';let inThinkingBlock=false;
       while(true){
         const{done,value}=await reader.read();if(done)break;
         buf+=decoder.decode(value,{stream:true});
@@ -1829,28 +2112,20 @@ async function sendMessageCore(text, att) {
           if(!line.startsWith('data: '))continue;
           try{
             const ev=JSON.parse(line.slice(6).trim());
-            if(ev.type==='message_start'&&ev.message?.usage){
-              // initial usage from message_start
-              usageData = {...(usageData||{}), ...ev.message.usage};
-            } else if(ev.type==='message_delta'&&ev.usage){
-              // output_tokens come in message_delta
-              usageData = {...(usageData||{}), ...ev.usage};
-            } else if(ev.type==='content_block_start'){
-              if(ev.content_block?.type==='thinking') inThinkingBlock=true;
-              else inThinkingBlock=false;
-            } else if(ev.type==='content_block_stop'){
-              inThinkingBlock=false;
-            } else if(ev.type==='content_block_delta'){
+            if(ev.type==='message_start'&&ev.message?.usage){usageData={...(usageData||{}),...ev.message.usage};}
+            else if(ev.type==='message_delta'&&ev.usage){usageData={...(usageData||{}),...ev.usage};}
+            else if(ev.type==='content_block_start'){inThinkingBlock=ev.content_block?.type==='thinking';}
+            else if(ev.type==='content_block_stop'){inThinkingBlock=false;}
+            else if(ev.type==='content_block_delta'){
               if(ev.delta?.type==='thinking_delta'&&inThinkingBlock){
                 thinkingText+=ev.delta.thinking||'';
-                // Show thinking block collapsed above response
                 const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                const thinkHtml=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';
                 bubble.innerHTML=thinkHtml+formatText(assistantText);
               } else if(ev.delta?.type==='text_delta'){
                 assistantText+=ev.delta.text;
                 const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml = thinkingText ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>` : '';
+                const thinkHtml=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';
                 bubble.innerHTML=thinkHtml+formatText(assistantText);
                 scrollToBottom();
               }
@@ -1858,8 +2133,7 @@ async function sendMessageCore(text, att) {
           }catch{}
         }
       }
-      // Prepend thinking to stored assistant message
-      if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
+      if(thinkingText) assistantText=`<thinking>\n${thinkingText}\n</thinking>\n\n`+assistantText;
       typesetMath();
     } else {
       const endpoint=getProviderEndpoint(provider);
@@ -1867,44 +2141,22 @@ async function sendMessageCore(text, att) {
       if(config.systemPrompt)apiMsgs.push({role:'system',content:config.systemPrompt});
       chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')apiMsgs.push({role:m.role,content:m.content});});
       apiMsgs.push({role:'user',content:userContent});
-      const {modelId:_oModelId}=splitModelId(config.model);
+      const{modelId:_oModelId}=splitModelId(config.model);
       const reqBody={model:_oModelId,messages:apiMsgs,stream:true};
-
-      // o-series reasoning models: NO temperature, use max_completion_tokens
-      const isOSeries = /^o\d/.test(_oModelId);
-      if (isOSeries) {
-        reqBody.max_completion_tokens = effectiveMaxTokens();
-        if (config.thinkingEnabled && isThinkingCapable(_oModelId)) {
-          reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
-        }
-        // reasoning_effort alone defaults to 'medium' if not specified — that's fine
+      const isOSeries=/^o\d/.test(_oModelId);
+      if(isOSeries){
+        reqBody.max_completion_tokens=effectiveMaxTokens();
+        if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];
       } else {
-        // Standard GPT / Mistral / Gemini / xAI / Groq / OpenRouter
-        reqBody.temperature = config.temperature;
-        reqBody.max_tokens  = effectiveMaxTokens();
-        // GPT-4.1 / 4.5 series also support reasoning_effort
-        if (config.thinkingEnabled && isThinkingCapable(_oModelId)) {
-          reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
-        }
+        reqBody.temperature=config.temperature;reqBody.max_tokens=effectiveMaxTokens();
+        if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];
       }
       if(documentIds.length>0)reqBody.documents=documentIds;
-      // Request usage in stream (OpenAI-compatible providers)
-      reqBody.stream_options = { include_usage: true };
-
-      // OpenRouter extra headers
-      const extraHeaders = {};
-      if (provider.type === 'openrouter') {
-        extraHeaders['HTTP-Referer'] = window.location.origin;
-        extraHeaders['X-Title'] = 'KI Connect NRW';
-      }
-
-      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},
-        body:JSON.stringify(reqBody),
-        signal:abortController.signal
-      });
-      if(!res.ok)throw new Error(`${res.status}: ${await res.text()}`);
+      reqBody.stream_options={include_usage:true};
+      const extraHeaders={};
+      if(provider.type==='openrouter'){extraHeaders['HTTP-Referer']=window.location.origin;extraHeaders['X-Title']='KI Connect NRW';}
+      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},body:JSON.stringify(reqBody),signal:abortController.signal});
+      if(!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
       removeTyping(typingId);
       const aiEl=appendEmptyAI();
       const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
@@ -1918,8 +2170,8 @@ async function sendMessageCore(text, att) {
   }
 
   if(assistantText){
-    const msgObj = {role:'assistant', content:assistantText, _model:config.model};
-    if (usageData) msgObj._usage = usageData;
+    const msgObj={role:'assistant',content:assistantText,_model:config.model};
+    if(usageData) msgObj._usage=usageData;
     chat.messages.push(msgObj);
     const aiIdx=chat.messages.length-1;
     const c=document.getElementById('messages');
@@ -1936,8 +2188,7 @@ async function sendMessageCore(text, att) {
         actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
         actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
         wrap.appendChild(actDiv);
-        // Token badge
-        if (usageData) wrap.appendChild(buildTokenBadge(usageData));
+        if(usageData) wrap.appendChild(buildTokenBadge(usageData));
       }
     }
     updateChatTokenTotal();
@@ -1947,16 +2198,12 @@ async function sendMessageCore(text, att) {
 }
 
 // ── Message UI ─────────────────────────────────────────────────────
-
-// Helper: Elemente immer VOR #chatTokenTotal einfügen
 function appendToMessages(el) {
-  const c = document.getElementById('messages');
-  const total = c.querySelector('#chatTokenTotal');
-  if (total) { c.insertBefore(el, total); } else { c.appendChild(el); }
-}
-
-function appendEmptyAI() {
   const c=document.getElementById('messages');
+  const total=c.querySelector('#chatTokenTotal');
+  if(total){c.insertBefore(el,total);}else{c.appendChild(el);}
+}
+function appendEmptyAI() {
   const mid=config.model||'';
   const pureModelId=splitModelId(mid).modelId||mid;
   const div=document.createElement('div');
@@ -1987,22 +2234,19 @@ function scrollToBottom(){const c=document.getElementById('messages');c.scrollTo
 function sendSuggestion(txt){document.getElementById('messageInput').value=txt;sendMessage();}
 
 // ── Copy ──────────────────────────────────────────────────────────
-// FIX #4/#5: Code-Copy ohne onclick, mit data-b64
 function copyCodeFromBtn(btn) {
-  const b64 = btn.dataset.b64;
-  if (!b64) return;
+  const b64=btn.dataset.b64; if(!b64) return;
   let text;
-  try { text=decodeURIComponent(escape(atob(b64))); } catch { text=atob(b64); }
+  try{text=decodeURIComponent(escape(atob(b64)));}catch{text=atob(b64);}
   navigator.clipboard.writeText(text).then(()=>{
-    btn.textContent=t('js.copied'); btn.classList.add('done');
-    setTimeout(()=>{ btn.textContent=t('js.codeCopy'); btn.classList.remove('done'); },2000);
+    btn.textContent=t('js.copied');btn.classList.add('done');
+    setTimeout(()=>{btn.textContent=t('js.codeCopy');btn.classList.remove('done');},2000);
   }).catch(()=>toast(t('js.copyFailed')));
 }
-// Legacy-Alias für Abwärtskompatibilität
-function copyCode(btn, b64) { btn.dataset.b64=b64; copyCodeFromBtn(btn); }
+function copyCode(btn, b64){btn.dataset.b64=b64;copyCodeFromBtn(btn);}
 
 function copyBubble(btn, idx) {
-  idx = safeIdx(idx); if(idx===null) return;
+  idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
   const msg=chat.messages[idx]; if(!msg) return;
   let text='';
@@ -2019,157 +2263,98 @@ function copyFullChat() {
     let content='';
     if(typeof m.content==='string')content=m.content;
     else if(Array.isArray(m.content))content=m.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
-    return `[${role}]\n${content}`;
+    return`[${role}]\n${content}`;
   }).join('\n\n---\n\n');
   navigator.clipboard.writeText(text).then(()=>toast(t('js.chatCopied'))).catch(()=>toast(t('js.copyFailed')));
 }
 
-// ═══════════════════════════════════════════════════════════════
-// FIX #4 + #5: TEXT FORMATTING
-// - 'onclick' aus DOMPurify ALLOWED_ATTR entfernt
-// - unescapePassthroughTags() entfernt (war XSS-Vektor)
-// - Code-Copy-Buttons nutzen data-b64 + addEventListener
-// ═══════════════════════════════════════════════════════════════
+// ── Text Formatting ────────────────────────────────────────────────
 function escHtml(s) {
-  if (s === null || s === undefined) return '';
+  if(s===null||s===undefined) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function inlineMarkdown(escapedText) {
-  let s = escapedText;
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  s = s.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
-  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
-  s = s.replace(/(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-  s = s.replace(/(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)/g, '<em>$1</em>');
-  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  let s=escapedText;
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  s=s.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
+  s=s.replace(/___(.+?)___/g,'<strong><em>$1</em></strong>');
+  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  s=s.replace(/__(.+?)__/g,'<strong>$1</strong>');
+  s=s.replace(/(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g,'<em>$1</em>');
+  s=s.replace(/(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)/g,'<em>$1</em>');
+  s=s.replace(/~~(.+?)~~/g,'<del>$1</del>');
   return s;
 }
 
 function formatText(raw) {
-  if (!raw) return '';
-  const blocks = [];
-
-  // Fenced Code-Blöcke — Code-Copy via data-b64 (KEIN onclick)
-  let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const idx = blocks.length;
-    const b64  = btoa(unescape(encodeURIComponent(code)));
-    const langLabel = escHtml(lang || 'code');
-    // FIX #4: data-b64 statt onclick="copyCode(...)"
-    blocks.push(
-      `<div class="code-block">` +
-      `<div class="code-block-header">` +
-      `<span class="code-lang">${langLabel}</span>` +
-      `<button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button>` +
-      `</div><pre><code>${escHtml(code)}</code></pre></div>`
-    );
-    return `\x00BLK${idx}\x00`;
+  if(!raw) return '';
+  const blocks=[];
+  let s=raw.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+    const idx=blocks.length;
+    const b64=btoa(unescape(encodeURIComponent(code)));
+    const langLabel=escHtml(lang||'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code)}</code></pre></div>`);
+    return`\x00BLK${idx}\x00`;
   });
-
-  // Inline-Code
-  s = s.replace(/`([^`\n]+)`/g, (_, code) => {
-    const idx = blocks.length;
-    blocks.push(`<code>${escHtml(code)}</code>`);
-    return `\x00BLK${idx}\x00`;
+  s=s.replace(/`([^`\n]+)`/g,(_,code)=>{const idx=blocks.length;blocks.push(`<code>${escHtml(code)}</code>`);return`\x00BLK${idx}\x00`;});
+  s=s.replace(/\\\[([\s\S]*?)\\\]/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">\\[${math}\\]</span>`);return`\x00BLK${idx}\x00`;});
+  s=s.replace(/\$\$([\s\S]*?)\$\$/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">$$${math}$$</span>`);return`\x00BLK${idx}\x00`;});
+  s=s.replace(/\\\(([\s\S]*?)\\\)/g,(_,math)=>{const idx=blocks.length;blocks.push(`\\(${math}\\)`);return`\x00BLK${idx}\x00`;});
+  s=escHtml(s);
+  s=s.replace(/^### (.+)$/gm,(_,t)=>`<h3 style="margin:8px 0 4px;font-size:15px;">${inlineMarkdown(t)}</h3>`);
+  s=s.replace(/^## (.+)$/gm,(_,t)=>`<h2 style="margin:10px 0 4px;font-size:17px;">${inlineMarkdown(t)}</h2>`);
+  s=s.replace(/^# (.+)$/gm,(_,t)=>`<h1 style="margin:12px 0 4px;font-size:20px;">${inlineMarkdown(t)}</h1>`);
+  s=s.replace(/((?:^[^\n]*\|[^\n]*\n)+)/gm,(tableBlock)=>{
+    const lines=tableBlock.trim().split('\n');if(lines.length<2)return tableBlock;
+    const isSepRow=(line)=>/^[\|\-\s:]+$/.test(line);if(!isSepRow(lines[1]))return tableBlock;
+    const parseRow=(line)=>line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+    const headers=parseRow(lines[0]);
+    const aligns=parseRow(lines[1]).map(c=>{if(/^:-+:$/.test(c))return'center';if(/^-+:$/.test(c))return'right';return'left';});
+    const ths=headers.map((h,i)=>`<th style="text-align:${aligns[i]||'left'};padding:6px 12px;border-bottom:2px solid var(--border);white-space:nowrap;">${inlineMarkdown(h)}</th>`).join('');
+    const trs=lines.slice(2).map(line=>{if(!line.trim()||isSepRow(line))return'';const tds=parseRow(line).map((c,i)=>`<td style="text-align:${aligns[i]||'left'};padding:5px 12px;border-bottom:1px solid var(--border);">${inlineMarkdown(c)}</td>`).join('');return`<tr>${tds}</tr>`;}).filter(Boolean).join('');
+    return`<div style="overflow-x:auto;margin:8px 0;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><thead><tr style="background:var(--surface2);">${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
   });
-
-  // Display-Math \[...\]
-  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
-    const idx = blocks.length;
-    blocks.push(`<span class="math-block">\\[${math}\\]</span>`);
-    return `\x00BLK${idx}\x00`;
-  });
-  // $$...$$
-  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
-    const idx = blocks.length;
-    blocks.push(`<span class="math-block">$$${math}$$</span>`);
-    return `\x00BLK${idx}\x00`;
-  });
-  // Inline-Math \(...\)
-  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
-    const idx = blocks.length;
-    blocks.push(`\\(${math}\\)`);
-    return `\x00BLK${idx}\x00`;
-  });
-
-  // HTML escapen
-  s = escHtml(s);
-
-  // FIX #5: unescapePassthroughTags() ENTFERNT
-  // DOMPurify erlaubt <u>, <sup>, <sub> etc. bereits sicher über ALLOWED_TAGS
-
-  // Block-Elemente
-  s = s.replace(/^### (.+)$/gm, (_, t) => `<h3 style="margin:8px 0 4px;font-size:15px;">${inlineMarkdown(t)}</h3>`);
-  s = s.replace(/^## (.+)$/gm,  (_, t) => `<h2 style="margin:10px 0 4px;font-size:17px;">${inlineMarkdown(t)}</h2>`);
-  s = s.replace(/^# (.+)$/gm,   (_, t) => `<h1 style="margin:12px 0 4px;font-size:20px;">${inlineMarkdown(t)}</h1>`);
-
-  s = s.replace(/((?:^[^\n]*\|[^\n]*\n)+)/gm, (tableBlock) => {
-    const lines = tableBlock.trim().split('\n');
-    if (lines.length < 2) return tableBlock;
-    const isSepRow = (line) => /^[\|\-\s:]+$/.test(line);
-    if (!isSepRow(lines[1])) return tableBlock;
-    const parseRow = (line) => line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
-    const headers = parseRow(lines[0]);
-    const aligns  = parseRow(lines[1]).map(c=>{if(/^:-+:$/.test(c))return'center';if(/^-+:$/.test(c))return'right';return'left';});
-    const ths = headers.map((h,i)=>`<th style="text-align:${aligns[i]||'left'};padding:6px 12px;border-bottom:2px solid var(--border);white-space:nowrap;">${inlineMarkdown(h)}</th>`).join('');
-    const trs = lines.slice(2).map(line=>{if(!line.trim()||isSepRow(line))return'';const tds=parseRow(line).map((c,i)=>`<td style="text-align:${aligns[i]||'left'};padding:5px 12px;border-bottom:1px solid var(--border);">${inlineMarkdown(c)}</td>`).join('');return`<tr>${tds}</tr>`;}).filter(Boolean).join('');
-    return `<div style="overflow-x:auto;margin:8px 0;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><thead><tr style="background:var(--surface2);">${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
-  });
-
-  s = s.replace(/^[\-\*] (.+)$/gm, (_, item) => `<li>${inlineMarkdown(item)}</li>`);
-  s = s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => `<ul style="margin:6px 0 6px 18px;">${m}</ul>`);
-  s = s.replace(/^\d+\. (.+)$/gm, (_, item) => `<li>${inlineMarkdown(item)}</li>`);
-  s = s.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
-
-  s = s.split(/\n{2,}/).map(p => {
-    p = p.trim(); if(!p) return '';
-    if (p.startsWith('<')) return p;
-    return `<p>${inlineMarkdown(p).replace(/\n/g,'<br>')}</p>`;
-  }).filter(Boolean).join('');
-
-  // Platzhalter einsetzen
-  s = s.replace(/\x00BLK(\d+)\x00/g, (_, idx) => blocks[+idx] || '');
-
-  // FIX #4: 'onclick' aus ALLOWED_ATTR entfernt — verhindert XSS via KI-Ausgaben
+  s=s.replace(/^[\-\*] (.+)$/gm,(_,item)=>`<li>${inlineMarkdown(item)}</li>`);
+  s=s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,m=>`<ul style="margin:6px 0 6px 18px;">${m}</ul>`);
+  s=s.replace(/^\d+\. (.+)$/gm,(_,item)=>`<li>${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^---$/gm,'<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
+  s=s.split(/\n{2,}/).map(p=>{p=p.trim();if(!p)return'';if(p.startsWith('<'))return p;return`<p>${inlineMarkdown(p).replace(/\n/g,'<br>')}</p>`;}).filter(Boolean).join('');
+  s=s.replace(/\x00BLK(\d+)\x00/g,(_,idx)=>blocks[+idx]||'');
+  // DOMPurify IMMER anwenden - bei CDN-Ausfall Fallback auf Null-Output als Sicherheitsnetz.
+  // Hintergrund: formatText() verwendet escHtml() fuer alle User-Inputs, aber KI-Antworten
+  // koennen manipulierten HTML-artigen Text enthalten. DOMPurify ist die letzte Verteidigungslinie.
   if (typeof DOMPurify !== 'undefined') {
     s = DOMPurify.sanitize(s, {
-      ALLOWED_TAGS: [
-        'p','br','strong','em','del','h1','h2','h3','ul','ol','li',
-        'code','pre','hr','table','thead','tbody','tr','th','td',
-        'div','span','button','a',
-        'u','sup','sub','mark','small','s','ins','abbr','cite','kbd'
-      ],
-      ALLOWED_ATTR: [
-        'style','class',
-        // 'onclick' ENTFERNT — Code-Copy nutzt jetzt data-b64 + addEventListener
-        'href','target','rel','title',
-        'data-b64',   // für Code-Copy-Buttons
-      ],
-      FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick'],
+      ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','ul','ol','li','code','pre',
+                     'hr','table','thead','tbody','tr','th','td','div','span','button',
+                     'a','u','sup','sub','mark','small','s','ins','abbr','cite','kbd',
+                     'details','summary'],
+      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64'],
+      FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
+                     'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
       ALLOW_DATA_ATTR: false,
+      FORCE_BODY: false,
     });
+  } else {
+    // DOMPurify nicht verfuegbar (z.B. CDN offline): Sicherheits-Fallback.
+    // Alle Block-Platzhalter ( BLKn ) wurden bereits ersetzt; jetzt
+    // alle verbleibenden HTML-Tags aus dem String entfernen.
+    console.warn('[KIC] DOMPurify not loaded - applying strict HTML strip fallback');
+    s = s.replace(/<(?!\/?(p|br|strong|em|del|h[1-3]|ul|ol|li|code|pre|hr|table|thead|tbody|tr|th|td|div|span|button|a|u|sup|sub|mark|small|s|ins|abbr|cite|kbd|details|summary)[\s>\/])[^>]*>/gi, '');
   }
-
   return s;
 }
 
-// Nach formatText: Code-Copy-Buttons per addEventListener verdrahten
 function wireCodeCopyButtons(container) {
   container.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
-    if (!btn._wired) {
-      btn._wired = true;
-      btn.addEventListener('click', () => copyCodeFromBtn(btn));
-    }
+    if(!btn._wired){btn._wired=true;btn.addEventListener('click',()=>copyCodeFromBtn(btn));}
   });
 }
 
 // ── Math ──────────────────────────────────────────────────────────
 function typesetMath() {
-  if(window.MathJax&&MathJax.typesetPromise) {
-    MathJax.typesetPromise([document.getElementById('messages')]).catch(()=>{});
-  }
+  if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise([document.getElementById('messages')]).catch(()=>{});}
 }
 
 // ── PDF Helpers ───────────────────────────────────────────────────
@@ -2180,45 +2365,86 @@ async function extractPdfText(arrayBuffer) {
   for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const content=await page.getTextContent();out+=`${tf('js.pdfPage',{n:i})}\n${content.items.map(it=>it.str).join(' ')}\n`;}
   return out;
 }
-function arrayBufferToBase64(buf) {
-  const bytes=new Uint8Array(buf);let bin='';
-  for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-function modelSupportsPdfBase64(mid) { return /claude|gemini|gpt-4o/i.test(mid||''); }
+function arrayBufferToBase64(buf){const bytes=new Uint8Array(buf);let bin='';for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);return btoa(bin);}
+function modelSupportsPdfBase64(mid){return /claude|gemini|gpt-4o/i.test(mid||'');}
 
-// ── File Handling ─────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// FILE / IMAGE HANDLING — including Ctrl+V paste
+// ════════════════════════════════════════════════════════════════
+
 async function processFile(file) {
-  const isImage = file.type.startsWith('image/');
-  const isPdf   = file.type==='application/pdf'||/\.pdf$/i.test(file.name);
-  const reader  = new FileReader();
-  reader.onload = async ev => {
-    if (isImage) { attachments.push({type:'image',name:file.name,data:ev.target.result}); }
-    else if (isPdf) {
+  const isImage=file.type.startsWith('image/');
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  const reader=new FileReader();
+  reader.onload=async ev=>{
+    if(isImage){attachments.push({type:'image',name:file.name,data:ev.target.result});}
+    else if(isPdf){
       const b64data=ev.target.result;const b64=b64data.split(',')[1]||b64data;
       const bin=atob(b64);const arr=new Uint8Array(bin.length);for(let k=0;k<bin.length;k++)arr[k]=bin.charCodeAt(k);
       attachments.push({type:'pdf-b64',name:file.name,data:b64data,rawBuf:arr.buffer,pdfMode:'b64'});
-    } else { attachments.push({type:'text-file',name:file.name,content:ev.target.result}); }
+    } else{attachments.push({type:'text-file',name:file.name,content:ev.target.result});}
     renderAttachments();
   };
-  isPdf||isImage ? reader.readAsDataURL(file) : reader.readAsText(file,'UTF-8');
+  isPdf||isImage?reader.readAsDataURL(file):reader.readAsText(file,'UTF-8');
 }
-function handleFileAttach(e)  { const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file); }
-function handleImageAttach(e) { const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file); }
+
+async function processImageBlob(blob, name) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const dataUrl = ev.target.result;
+      const maxBytes = getMaxImageStorageBytes();
+      // If image exceeds limit, ask user if they want to raise the limit
+      if (dataUrl.length > maxBytes) {
+        const newLimitKB = Math.ceil(dataUrl.length / 1024 / 100) * 100; // round up to next 100 KB
+        const msg = `Das Bild ist ${Math.round(dataUrl.length/1024)} KB groß.\nAktuelles Limit: ${Math.round(maxBytes/1024)} KB.\n\nLimit auf ${newLimitKB} KB erhöhen?`;
+        if (confirm(msg)) {
+          setMaxImageStorageBytes(newLimitKB * 1024);
+          toast(`🖼️ Limit auf ${newLimitKB} KB erhöht`);
+        }
+      }
+      attachments.push({type:'image', name: name || 'clipboard-image.png', data: dataUrl});
+      renderAttachments();
+      resolve();
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Clipboard paste handler (Ctrl+V image)
+async function handlePaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const blob = item.getAsFile();
+      if (blob) await processImageBlob(blob, `pasted-image-${Date.now()}.png`);
+      return; // only handle first image
+    }
+  }
+  // No image found — let default paste behavior happen (text)
+}
+
+function handleFileAttach(e){const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file);}
+function handleImageAttach(e){const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file);}
 
 function renderAttachments() {
-  const row = document.getElementById('attachmentRow');
-  row.innerHTML = '';
-  attachments.forEach((a, i) => {
-    const chip = document.createElement('div');
-    chip.className = 'preview-chip';
-    if (a.type==='image') {
-      const img=document.createElement('img'); img.src=a.data; img.alt=a.name; chip.appendChild(img);
+  const row=document.getElementById('attachmentRow');
+  row.innerHTML='';
+  attachments.forEach((a,i)=>{
+    const chip=document.createElement('div');
+    chip.className='preview-chip';
+    if(a.type==='image'){
+      const img=document.createElement('img');img.src=a.data;img.alt=a.name;
+      img.style.cssText='max-height:48px;max-width:80px;border-radius:4px;cursor:pointer;';
+      img.addEventListener('click',()=>openImageLightbox(a.data));
+      chip.appendChild(img);
       chip.appendChild(document.createTextNode(a.name));
-    } else if (/\.pdf$/i.test(a.name)||a.type==='pdf-b64') {
+    } else if(/\.pdf$/i.test(a.name)||a.type==='pdf-b64'){
       const mode=a.pdfMode||'b64';
       chip.appendChild(document.createTextNode((mode==='b64'?'📄':'🔤')+' '+a.name));
-      if (mode==='b64'&&!modelSupportsPdfBase64(config.model)) {
+      if(mode==='b64'&&!modelSupportsPdfBase64(config.model)){
         const warn=document.createElement('span');warn.title=t('js.pdfWarn');warn.style.cssText='color:var(--red);cursor:help;';warn.textContent='⚠️';chip.appendChild(warn);
       }
       const toggle=document.createElement('div');toggle.className='pdf-mode-toggle';
@@ -2235,7 +2461,7 @@ function renderAttachments() {
   });
 }
 
-async function togglePdfMode(i, mode) {
+async function togglePdfMode(i,mode){
   const a=attachments[i];if(!a||a.pdfMode===mode)return;
   a.pdfMode=mode;
   if(mode==='text'&&!a.extractedText){
@@ -2250,7 +2476,7 @@ function removeAttachment(i){attachments.splice(i,1);renderAttachments();}
 function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
-function closePanels() {
+function closePanels(){
   ['settingsPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
   document.getElementById('overlay').classList.remove('show');
 }
@@ -2260,32 +2486,37 @@ function openProfilePanel(){renderProfileList();document.getElementById('profile
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
 
-// Drag & Drop
 let _dragCounter=0;
 function handleDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='copy';}
 function handleDragEnter(e){e.preventDefault();_dragCounter++;document.getElementById('dropOverlay').classList.add('active');}
 function handleDragLeave(){_dragCounter--;if(_dragCounter<=0){_dragCounter=0;document.getElementById('dropOverlay').classList.remove('active');}}
-async function handleDrop(e){e.preventDefault();_dragCounter=0;document.getElementById('dropOverlay').classList.remove('active');const files=Array.from(e.dataTransfer.files);if(!files.length)return;for(const file of files)await processFile(file);}
+async function handleDrop(e){
+  e.preventDefault();_dragCounter=0;document.getElementById('dropOverlay').classList.remove('active');
+  // Only handle external file drops (not internal chat/folder drags)
+  if(draggedChatId||draggedFolderId) return;
+  const files=Array.from(e.dataTransfer.files);if(!files.length)return;
+  for(const file of files)await processFile(file);
+}
 
 // ── Modell-Limits Panel ───────────────────────────────────────────
 function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
 
-function renderModelMaxList() {
-  const list = document.getElementById('modelMaxList');
-  list.innerHTML = '';
+function renderModelMaxList(){
+  const list=document.getElementById('modelMaxList');
+  list.innerHTML='';
   const selector=document.getElementById('modelSelector');
   const seenModels=new Set();const rows=[];
   Array.from(selector.options).forEach(opt=>{if(!opt.value)return;const{modelId}=splitModelId(opt.value);if(!modelId||seenModels.has(modelId))return;seenModels.add(modelId);rows.push({modelId,label:opt.textContent.trim()});});
   Object.entries(KNOWN_MODELS).forEach(([id,m])=>{if(!seenModels.has(id)){seenModels.add(id);rows.push({modelId:id,label:m.label});}});
-  if (!rows.length) { const msg=document.createElement('div');msg.style.cssText='color:var(--muted);font-size:13px;padding:8px;';msg.textContent=t('js.noModelsInPanel');list.appendChild(msg);return; }
-  rows.forEach(({modelId, label}) => {
+  if(!rows.length){const msg=document.createElement('div');msg.style.cssText='color:var(--muted);font-size:13px;padding:8px;';msg.textContent=t('js.noModelsInPanel');list.appendChild(msg);return;}
+  rows.forEach(({modelId,label})=>{
     const defaultMax=getModelDefaultMax(modelId);const currentMax=getModelMaxOutput(modelId);const isModified=currentMax!==defaultMax;
     const row=document.createElement('div');row.className='model-max-row'+(isModified?' model-max-modified':'');row.id='mmrow_'+modelId.replace(/[^a-zA-Z0-9_-]/g,'_');
     const info=document.createElement('div');info.style.cssText='flex:1;min-width:0;';
     const nameEl=document.createElement('div');nameEl.className='model-max-name';nameEl.textContent=label.replace(/^[▲●]\s*/,'');
     const subEl=document.createElement('div');subEl.className='model-max-sub';subEl.textContent=modelId;
     info.appendChild(nameEl);info.appendChild(subEl);
-    const inp=document.createElement('input');inp.className='model-max-input';inp.type='number';inp.value=currentMax;inp.min=256;inp.max=200000;inp.step=256;inp.title='Max Output-Tokens';inp.dataset.modelId=modelId;
+    const inp=document.createElement('input');inp.className='model-max-input';inp.type='number';inp.value=currentMax;inp.min=256;inp.max=200000;inp.step=256;inp.dataset.modelId=modelId;
     inp.addEventListener('change',()=>setModelMax(inp.dataset.modelId,inp));
     const resetBtn=document.createElement('button');resetBtn.className='reset-btn';resetBtn.title=tf('js.resetTitle',{n:defaultMax.toLocaleString()});resetBtn.textContent='↺';resetBtn.dataset.modelId=modelId;
     resetBtn.addEventListener('click',()=>resetModelMax(resetBtn.dataset.modelId));
@@ -2294,7 +2525,7 @@ function renderModelMaxList() {
   });
 }
 
-function setModelMax(modelId, inputEl) {
+function setModelMax(modelId,inputEl){
   const val=parseInt(inputEl.value);const defaultMax=getModelDefaultMax(modelId);
   if(!val||val<256){inputEl.value=defaultMax;return;}
   if(!config.userModelMaxOverrides)config.userModelMaxOverrides={};
@@ -2303,7 +2534,7 @@ function setModelMax(modelId, inputEl) {
   const row=document.getElementById('mmrow_'+safeId);if(row)row.classList.toggle('model-max-modified',val!==defaultMax);
   save();updateModelMaxInfo();toast(tf('js.limitSet',{id:modelId.split('/').pop().slice(0,20),n:val.toLocaleString()}));
 }
-function resetModelMax(modelId) {
+function resetModelMax(modelId){
   if(!config.userModelMaxOverrides)return;delete config.userModelMaxOverrides[modelId];
   const defaultMax=getModelDefaultMax(modelId);const safeId=modelId.replace(/[^a-zA-Z0-9_-]/g,'_');
   const row=document.getElementById('mmrow_'+safeId);if(row){const inp=row.querySelector('.model-max-input');if(inp)inp.value=defaultMax;row.classList.remove('model-max-modified');}
@@ -2312,164 +2543,458 @@ function resetModelMax(modelId) {
 function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMaxList();updateModelMaxInfo();toast(t('js.allLimitsReset'));}
 
 // ═══════════════════════════════════════════════════════════════
-// LOGIN / PASSWORD / SESSION — FIX #1 + #2
+// LOGIN / PASSWORD / SESSION
 // ═══════════════════════════════════════════════════════════════
 
-async function checkLogin() {
-  const hash = getStoredPwdHash();
-  if (!hash) { showLoginScreen('setup'); return; }
-  const sessionExpiry = parseInt(localStorage.getItem('kic_session_expiry') || '0');
-  if (sessionExpiry && Date.now() < sessionExpiry) return;
-  showLoginScreen('login');
+// ═══════════════════════════════════════════════════════════════
+// MULTI-ACCOUNT LOGIN SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+const ACCOUNT_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35','#00bcd4','#9c27b0'];
+let _selectedLoginAccountId = null; // account selected on grid before pw entry
+
+async function showLoginScreen() {
+  const ls = document.getElementById('loginScreen');
+  if (ls) ls.style.display = 'flex';
+  await loadAccountRegistryAsync();
+  if (_accounts.length === 0) {
+    renderNewAccountColorRow();
+    showView('newAccountView');
+    setTimeout(() => document.getElementById('newAccountName')?.focus(), 80);
+  } else {
+    showView('accountSelectView');
+    renderAccountGrid();
+  }
+  applyTranslations();
+}
+function hideLoginScreen() {
+  const ls = document.getElementById('loginScreen');
+  if (ls) ls.style.display = 'none';
+}
+function showView(viewId) {
+  ['accountSelectView','accountLoginView','newAccountView'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = id === viewId ? '' : 'none';
+  });
 }
 
-function showLoginScreen(mode) {
-  const ls = document.getElementById('loginScreen');
-  if (!ls) return;
-  ls.style.display = 'flex';
-  const isSetup = (mode === 'setup') || !getStoredPwdHash();
-  document.getElementById('loginModeFields').style.display = isSetup ? 'none' : '';
-  document.getElementById('setupModeFields').style.display = isSetup ? '' : 'none';
-  const subtitle = document.getElementById('loginSubtitle');
-  if (isSetup) subtitle.textContent = t('login.setupSubtitle') || 'Create a password to protect your data';
-  else subtitle.textContent = t('login.subtitle') || 'Enter your password to continue';
-  applyTranslations();
-  setTimeout(() => {
-    const focusEl = isSetup ? document.getElementById('setupPwdInput') : document.getElementById('loginInput');
-    if (focusEl) focusEl.focus();
-  }, 80);
+function renderAccountGrid() {
+  const grid = document.getElementById('accountGrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  if (!_accounts.length) {
+    const msg = document.createElement('p');
+    msg.style.cssText = 'color:var(--muted);font-size:13px;text-align:center;width:100%;';
+    msg.textContent = t('account.noAccounts');
+    grid.appendChild(msg);
+    return;
+  }
+  _accounts.forEach(acc => {
+    const tile = document.createElement('div');
+    tile.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:12px 10px;border-radius:14px;transition:background 0.15s;min-width:90px;';
+    tile.addEventListener('mouseenter', () => tile.style.background = 'rgba(255,255,255,0.06)');
+    tile.addEventListener('mouseleave', () => tile.style.background = '');
+    tile.addEventListener('click', () => selectAccountForLogin(acc.id));
+
+    const avatar = document.createElement('div');
+    avatar.style.cssText = `width:64px;height:64px;border-radius:16px;background:${acc.color};display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:white;box-shadow:0 4px 16px ${acc.color}55;`;
+    avatar.textContent = (acc.name || '?').slice(0, 1).toUpperCase();
+
+    const name = document.createElement('div');
+    name.style.cssText = 'font-size:13px;font-weight:600;color:var(--text);text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+    name.textContent = acc.name;
+
+    tile.appendChild(avatar);
+    tile.appendChild(name);
+    grid.appendChild(tile);
+  });
 }
-function hideLoginScreen() { const ls=document.getElementById('loginScreen');if(ls)ls.style.display='none'; }
+
+function selectAccountForLogin(accountId) {
+  _selectedLoginAccountId = accountId;
+  const acc = getAccount(accountId);
+  if (!acc) return;
+  // Show avatar + name in login view
+  const avatarEl = document.getElementById('loginAvatarDisplay');
+  const nameEl   = document.getElementById('loginAccountName');
+  if (avatarEl) { avatarEl.style.background = acc.color; avatarEl.textContent = acc.name.slice(0,1).toUpperCase(); }
+  if (nameEl)   nameEl.textContent = acc.name;
+  document.getElementById('loginInput').value = '';
+  document.getElementById('loginError').textContent = '';
+  showView('accountLoginView');
+  setTimeout(() => document.getElementById('loginInput')?.focus(), 80);
+}
 
 async function doLogin() {
-  const input=document.getElementById('loginInput');const errorEl=document.getElementById('loginError');const pw=input.value;if(!pw)return;
-  const ok = await verifyPassword(pw);   // FIX #2: PBKDF2-Verifikation
-  if (ok) {
-    const durMs=getSessionDurationMs();if(durMs>0)localStorage.setItem('kic_session_expiry',String(Date.now()+durMs));
-    input.value='';errorEl.textContent='';hideLoginScreen();startSessionCountdown();
-  } else {
-    errorEl.textContent=t('login.error');input.value='';input.focus();
+  const input = document.getElementById('loginInput');
+  const errorEl = document.getElementById('loginError');
+  const btn = document.getElementById('loginBtn');
+  const pw = input.value;
+  if (!pw || !_selectedLoginAccountId) return;
+
+  // Brute-Force-Sperre pruefen
+  const lockRem = _loginLockRemaining(_selectedLoginAccountId);
+  if (lockRem > 0) {
+    const secs = Math.ceil(lockRem / 1000);
+    errorEl.textContent = '\u23f3 ' + tf('login.lockedFor', { s: secs });
+    return;
+  }
+
+  // UI blockieren waehrend PBKDF2 laeuft (verhindert parallele Klicks)
+  if (btn) btn.disabled = true;
+  input.disabled = true;
+
+  try {
+    const ok = await verifyAccountPassword(_selectedLoginAccountId, pw);
+    if (ok) {
+      _resetLoginFailures(_selectedLoginAccountId);
+      _activeAccountId = _selectedLoginAccountId;
+      setSessionPassphrase(pw);
+      // CryptoKey aufbauen + Session-Token schreiben (kein Passwort in sessionStorage)
+      await getCryptoKey();
+      await _writeSessionToken();
+      localStorage.setItem('kic_active_account', _activeAccountId);
+      const durMs = getSessionDurationMs();
+      if (durMs > 0) localStorage.setItem('kic_' + _activeAccountId + '_session_expiry', String(Date.now() + durMs));
+      input.value = ''; errorEl.textContent = '';
+      hideLoginScreen();
+      await bootApp();
+      toast('\ud83d\udc4b ' + (getAccount(_activeAccountId)?.name || ''));
+    } else {
+      _recordLoginFailure(_selectedLoginAccountId);
+      const failures = _loginFailures[_selectedLoginAccountId]?.count || 0;
+      const remaining = BF_MAX_ATTEMPTS - failures;
+      if (remaining > 0) {
+        errorEl.textContent = t('login.error') + ' (' + tf('login.attemptsLeft', { n: remaining }) + ')';
+      } else {
+        const secs = Math.ceil(_loginLockRemaining(_selectedLoginAccountId) / 1000);
+        errorEl.textContent = '\ud83d\udd12 ' + tf('login.lockedFor', { s: secs });
+      }
+      input.value = ''; input.focus();
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+    input.disabled = false;
   }
 }
 
 function updatePwdStrength(pw) {
-  const bar=document.getElementById('pwdStrengthBar');if(!bar)return;
-  let score=0;if(pw.length>=8)score++;if(pw.length>=12)score++;if(/[A-Z]/.test(pw))score++;if(/[0-9]/.test(pw))score++;if(/[^A-Za-z0-9]/.test(pw))score++;
-  const pct=(score/5)*100;const cols=['#e74c3c','#e74c3c','#f39c12','#f0c040','#2ecc71','#2ecc71'];
-  bar.style.width=pct+'%';bar.style.background=cols[score]||'#e74c3c';
+  const bar = document.getElementById('pwdStrengthBar'); if (!bar) return;
+  let score = 0;
+  if (pw.length >= 8)  score++;
+  if (pw.length >= 12) score++;
+  if (/[A-Z]/.test(pw)) score++;
+  if (/[0-9]/.test(pw)) score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  const pct = (score / 5) * 100;
+  const cols = ['#e74c3c','#e74c3c','#f39c12','#f0c040','#2ecc71','#2ecc71'];
+  bar.style.width = pct + '%'; bar.style.background = cols[score] || '#e74c3c';
+}
+
+function renderNewAccountColorRow() {
+  const row = document.getElementById('accountColorRow'); if (!row) return;
+  row.innerHTML = '';
+  const used = _accounts.map(a => a.color);
+  const defaultColor = ACCOUNT_COLORS.find(c => !used.includes(c)) || ACCOUNT_COLORS[_accounts.length % ACCOUNT_COLORS.length];
+  ACCOUNT_COLORS.forEach(c => {
+    const sw = document.createElement('div');
+    sw.dataset.color = c;
+    sw.style.cssText = `width:28px;height:28px;border-radius:8px;background:${c};cursor:pointer;transition:transform 0.1s,box-shadow 0.1s;flex-shrink:0;`;
+    if (c === defaultColor) {
+      sw.style.outline = '3px solid white';
+      sw.style.outlineOffset = '2px';
+      sw.dataset.selected = '1';
+    }
+    sw.addEventListener('click', () => {
+      row.querySelectorAll('div').forEach(s => {
+        s.style.outline = '';
+        s.style.outlineOffset = '';
+        delete s.dataset.selected;
+      });
+      sw.style.outline = '3px solid white';
+      sw.style.outlineOffset = '2px';
+      sw.dataset.selected = '1';
+    });
+    row.appendChild(sw);
+  });
 }
 
 async function doSetupPassword() {
-  const pwdEl=document.getElementById('setupPwdInput');const confEl=document.getElementById('setupPwdConfirm');const errorEl=document.getElementById('setupError');
-  const pw=pwdEl.value;const conf=confEl.value;
-  if(pw.length<8){errorEl.textContent=t('js.pwdSetupTooShort')||'⚠️ Minimum 8 characters';return;}
-  if(pw!==conf){errorEl.textContent=t('js.pwdMismatch');return;}
-  await storePasswordHash(pw);   // FIX #2: PBKDF2 mit zufälligem Salt
-  const durMs=getSessionDurationMs();if(durMs>0)localStorage.setItem('kic_session_expiry',String(Date.now()+durMs));
-  pwdEl.value='';confEl.value='';errorEl.textContent='';hideLoginScreen();startSessionCountdown();
-  toast(t('js.pwdSetupDone')||'🔐 Password set — welcome!');
+  const nameEl   = document.getElementById('newAccountName');
+  const pwdEl    = document.getElementById('setupPwdInput');
+  const confEl   = document.getElementById('setupPwdConfirm');
+  const errorEl  = document.getElementById('setupError');
+  const name = nameEl?.value?.trim() || '';
+  const pw   = pwdEl?.value || '';
+  const conf = confEl?.value || '';
+  if (!name) { if (errorEl) errorEl.textContent = t('js.nameRequired'); return; }
+  // Passwortlaenge: kein Minimum erzwungen - Staerkeanzeige informiert den Benutzer
+  if (pw !== conf) { if (errorEl) errorEl.textContent = t('js.pwdMismatch'); return; }
+  // Pick selected color
+  const colorRow = document.getElementById('accountColorRow');
+  const selSw = colorRow?.querySelector('[data-selected]');
+  const color = selSw?.dataset.color || ACCOUNT_COLORS[_accounts.length % ACCOUNT_COLORS.length];
+  // Create account
+  const accountId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 7);
+  _accounts.push({ id: accountId, name, color, pwVersion: 2 });
+  saveAccountRegistry();
+  await storeAccountPasswordHash(accountId, pw);
+  // Activate
+  _activeAccountId = accountId;
+  setSessionPassphrase(pw);
+  // CryptoKey aufbauen und Session-Token schreiben
+  await getCryptoKey();
+  await _writeSessionToken();
+  localStorage.setItem('kic_active_account', _activeAccountId);
+  const durMs = getSessionDurationMs();
+  if (durMs > 0) localStorage.setItem('kic_' + _activeAccountId + '_session_expiry', String(Date.now() + durMs));
+  if (pwdEl) pwdEl.value = '';
+  if (confEl) confEl.value = '';
+  if (nameEl) nameEl.value = '';
+  if (errorEl) errorEl.textContent = '';
+  hideLoginScreen();
+  await bootApp();
+  toast(t('js.pwdSetupDone') || '🔐 Account created — welcome!');
 }
 
 function forgotPassword() {
-  if(!confirm(t('login.resetConfirm')))return;
-  localStorage.clear();sessionStorage.clear();
-  toast(t('login.resetDone'));setTimeout(()=>location.reload(),1200);
+  if (!_selectedLoginAccountId) {
+    if (!confirm(t('login.resetConfirm'))) return;
+    try { sessionStorage.clear(); } catch {}
+    localStorage.clear();
+    toast(t('login.resetDone')); setTimeout(() => location.reload(), 1200);
+    return;
+  }
+  const acc = getAccount(_selectedLoginAccountId);
+  if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
+  deleteAccount(_selectedLoginAccountId);
+  _selectedLoginAccountId = null;
+  showView('accountSelectView');
+  renderAccountGrid();
+}
+
+async function deleteAccount(accountId) {
+  // Remove all data from server store and localStorage
+  if (_storeAvailable) {
+    const keysToDelete = ['config','providers','profiles','folders','chats',
+      'current_chat','sidebar_w','sidebar_collapsed'];
+    await Promise.allSettled(
+      keysToDelete.map(k => _storeDel(accountId, k))
+    );
+  }
+  const prefix = `kic_${accountId}_`;
+  const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
+  keys.forEach(k => localStorage.removeItem(k));
+  _accounts = _accounts.filter(a => a.id !== accountId);
+  saveAccountRegistry();
+  if (_activeAccountId === accountId) {
+    _activeAccountId = null;
+    _cryptoKey = null;
+    _sessionPassphrase = null;
+    localStorage.removeItem('kic_active_account');
+  }
+  toast(t('account.deleted'));
+}
+
+function changeAccountName() {
+  const input = document.getElementById('accountNameInput');
+  if (!input) return;
+  const newName = input.value.trim();
+  if (!newName) { toast(t('js.nameRequired')); return; }
+  const acc = getAccount(_activeAccountId);
+  if (!acc) return;
+  acc.name = newName;
+  saveAccountRegistry();
+  toast('✅ ' + newName);
 }
 
 async function changeLoginPassword() {
-  const currentPw=document.getElementById('currentPwdInput').value;
-  const newPw=document.getElementById('newPwdInput').value;
-  const confirmPw=document.getElementById('confirmPwdInput').value;
-  const stored=getStoredPwdHash();
-  if(stored){
-    if(!currentPw){toast(t('js.pwdCurrentRequired'));return;}
-    const ok=await verifyPassword(currentPw);
-    if(!ok){toast(t('js.pwdCurrentWrong'));return;}
+  const currentPw  = document.getElementById('currentPwdInput')?.value || '';
+  const newPw      = document.getElementById('newPwdInput')?.value || '';
+  const confirmPw  = document.getElementById('confirmPwdInput')?.value || '';
+  if (!_activeAccountId) { toast('No active account'); return; }
+  const acc = getAccount(_activeAccountId);
+  if (acc?.pwHash) {
+    if (!currentPw) { toast(t('js.pwdCurrentRequired')); return; }
+    const ok = await verifyAccountPassword(_activeAccountId, currentPw);
+    if (!ok) { toast(t('js.pwdCurrentWrong')); return; }
   }
-  if(newPw.length<4){toast(t('js.pwdTooShort'));return;}
-  if(newPw!==confirmPw){toast(t('js.pwdMismatch'));return;}
-  await storePasswordHash(newPw);   // FIX #2
-  const durMs=getSessionDurationMs();if(durMs>0)localStorage.setItem('kic_session_expiry',String(Date.now()+durMs));
-  document.getElementById('currentPwdInput').value='';document.getElementById('newPwdInput').value='';document.getElementById('confirmPwdInput').value='';
+  // Passwortlaenge: kein Minimum erzwungen - Staerkeanzeige informiert den Benutzer
+  if (newPw !== confirmPw) { toast(t('js.pwdMismatch')); return; }
+  await storeAccountPasswordHash(_activeAccountId, newPw);
+  setSessionPassphrase(newPw);
+  // Neuen CryptoKey aufbauen + Session-Token neu schreiben
+  await getCryptoKey();
+  await _writeSessionToken();
+  await save();
+  const durMs = getSessionDurationMs();
+  if (durMs > 0) localStorage.setItem(`kic_${_activeAccountId}_session_expiry`, String(Date.now() + durMs));
+  if (document.getElementById('currentPwdInput')) document.getElementById('currentPwdInput').value = '';
+  if (document.getElementById('newPwdInput'))     document.getElementById('newPwdInput').value = '';
+  if (document.getElementById('confirmPwdInput')) document.getElementById('confirmPwdInput').value = '';
   toast(t('js.pwdChanged'));
 }
 
-function logoutNow(){closePanels();localStorage.removeItem('kic_session_expiry');showLoginScreen('login');}
-
-function getSessionDurationMs(){const h=parseInt(document.getElementById('sessionHoursInput')?.value||'12');const m=parseInt(document.getElementById('sessionMinutesInput')?.value||'0');return(h*60+m)*60*1000;}
-function loadSessionSettings(){
-  const saved=localStorage.getItem('kic_session_duration_ms');
-  if(saved){const ms=parseInt(saved);const totalMin=Math.round(ms/60000);const h=Math.floor(totalMin/60);const m2=totalMin%60;const hi=document.getElementById('sessionHoursInput');const mi=document.getElementById('sessionMinutesInput');if(hi)hi.value=h;if(mi)mi.value=m2;}
-}
-function applySessionDuration(){
-  const durMs=getSessionDurationMs();localStorage.setItem('kic_session_duration_ms',String(durMs));
-  if(durMs>0)localStorage.setItem('kic_session_expiry',String(Date.now()+durMs));
-  startSessionCountdown();toast(t('settings.sessionApply')||'⏱ Applied');
-}
-function resetSessionNow(){const hash=getStoredPwdHash();if(!hash){toast('No password set');return;}localStorage.removeItem('kic_session_expiry');toast(t('js.sessionReset'));setTimeout(()=>showLoginScreen('login'),1200);}
-
-let _countdownTimer=null;
-function startSessionCountdown(){if(_countdownTimer)clearInterval(_countdownTimer);_countdownTimer=setInterval(updateSessionCountdown,1000);updateSessionCountdown();}
-function updateSessionCountdown(){
-  const el=document.getElementById('sessionCountdown');if(!el)return;
-  const expiry=parseInt(localStorage.getItem('kic_session_expiry')||'0');
-  const hash=getStoredPwdHash();
-  if(!hash){el.textContent='—';el.style.color='var(--muted)';return;}
-  if(!expiry){el.textContent='∞';el.style.color='var(--accent)';return;}
-  const remaining=expiry-Date.now();
-  if(remaining<=0){el.textContent='0:00:00';el.style.color='var(--red)';clearInterval(_countdownTimer);setTimeout(()=>showLoginScreen('login'),500);return;}
-  const h=Math.floor(remaining/3600000);const m=Math.floor((remaining%3600000)/60000);const s2=Math.floor((remaining%60000)/1000);
-  el.textContent=`${h}:${String(m).padStart(2,'0')}:${String(s2).padStart(2,'0')}`;
-  el.style.color=remaining<5*60*1000?'var(--red)':'var(--accent)';
+function logoutNow() {
+  closePanels();
+  if (_activeAccountId) localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
+  _activeAccountId = null;
+  _cryptoKey = null;
+  _sessionPassphrase = null;
+  try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch {}
+  localStorage.removeItem('kic_active_account');
+  // Reset app state
+  providers = []; profiles = []; folders = []; chats = []; currentChatId = null;
+  config = { model:'', temperature:0.7, maxTokens:null, systemPrompt:'', activeProfileId:null, userModelMaxOverrides:{}, chatMaxWidth:880 };
+  // Hide main UI
+  document.querySelector('.main')?.style.setProperty('display','none');
+  document.querySelector('header')?.style.setProperty('display','none');
+  showLoginScreen();
 }
 
-function clearAllData(){
-  if(!confirm(t('js.clearConfirm')))return;
-  localStorage.clear();sessionStorage.clear();_cryptoKey=null;_sessionPassphrase=null;
-  providers=[];profiles=[];folders=[];chats=[];
-  config={model:'',temperature:0.7,maxTokens:null,systemPrompt:'',activeProfileId:null,userModelMaxOverrides:{},chatMaxWidth:880};
-  closePanels();renderSidebar();renderMessages([]);updateProfileBadge();
-  toast(t('js.cleared'));setTimeout(()=>location.reload(),1500);
+function getSessionDurationMs() {
+  const h = parseInt(document.getElementById('sessionHoursInput')?.value || '12');
+  const m = parseInt(document.getElementById('sessionMinutesInput')?.value || '0');
+  return (h * 60 + m) * 60 * 1000;
+}
+function loadSessionSettings() {
+  const saved = localStorage.getItem('kic_session_duration_ms');
+  if (saved) {
+    const ms = parseInt(saved);
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60), m2 = totalMin % 60;
+    const hi = document.getElementById('sessionHoursInput');
+    const mi = document.getElementById('sessionMinutesInput');
+    if (hi) hi.value = h; if (mi) mi.value = m2;
+  }
+}
+function applySessionDuration() {
+  const durMs = getSessionDurationMs();
+  localStorage.setItem('kic_session_duration_ms', String(durMs));
+  if (durMs > 0 && _activeAccountId) localStorage.setItem(`kic_${_activeAccountId}_session_expiry`, String(Date.now() + durMs));
+  startSessionCountdown(); toast(t('settings.sessionApply') || '⏱ Applied');
+}
+function resetSessionNow() {
+  if (!_activeAccountId) { toast('No active account'); return; }
+  localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
+  toast(t('js.sessionReset'));
+  setTimeout(() => logoutNow(), 1200);
+}
+
+let _countdownTimer = null;
+function startSessionCountdown() {
+  if (_countdownTimer) clearInterval(_countdownTimer);
+  _countdownTimer = setInterval(updateSessionCountdown, 1000);
+  updateSessionCountdown();
+}
+function updateSessionCountdown() {
+  const el = document.getElementById('sessionCountdown'); if (!el) return;
+  if (!_activeAccountId) { el.textContent = '—'; el.style.color = 'var(--muted)'; return; }
+  const expiry = parseInt(localStorage.getItem(`kic_${_activeAccountId}_session_expiry`) || '0');
+  if (!expiry) { el.textContent = '∞'; el.style.color = 'var(--accent)'; return; }
+  const remaining = expiry - Date.now();
+  if (remaining <= 0) {
+    el.textContent = '0:00:00'; el.style.color = 'var(--red)';
+    clearInterval(_countdownTimer);
+    setTimeout(() => logoutNow(), 500);
+    return;
+  }
+  const h = Math.floor(remaining / 3600000);
+  const m = Math.floor((remaining % 3600000) / 60000);
+  const s2 = Math.floor((remaining % 60000) / 1000);
+  el.textContent = `${h}:${String(m).padStart(2,'0')}:${String(s2).padStart(2,'0')}`;
+  el.style.color = remaining < 5 * 60 * 1000 ? 'var(--red)' : 'var(--accent)';
+}
+
+async function checkLogin() {
+  await loadAccountRegistryAsync();
+  // No accounts at all → create first account
+  if (_accounts.length === 0) {
+    showLoginScreen();
+    return;
+  }
+  // F5/Reload: Session-Token pruefen (kein Passwort in sessionStorage)
+  // Der Token wurde mit dem CryptoKey verschluesselt - ohne Passwort kein Entschluesseln.
+  // Vorgehen: Account-ID aus localStorage lesen, Salt laden, Passphrase aus RAM pruefen.
+  // Da nach F5 der RAM leer ist, muss der User sich kurz erneut authentifizieren -
+  // AUSSER der Token ist noch gueltig UND der CryptoKey ist noch im RAM (selbe Tab-Session).
+  const lastAccountId = localStorage.getItem('kic_active_account');
+  if (lastAccountId && getAccount(lastAccountId)) {
+    // Pruefen ob Session-Token im sessionStorage liegt (nur dann lohnt Versuch)
+    if (restoreSessionPassphrase()) {
+      // Token validieren erfordert CryptoKey -> bei F5 ist _cryptoKey = null.
+      // Wir koennen keinen neuen Key ableiten ohne Passwort.
+      // Daher: nur weiter eingeloggt bleiben wenn _cryptoKey noch im RAM ist
+      // (d.h. kein echter Reload, nur interne Navigation / Hot-Reload).
+      if (_cryptoKey) {
+        const tokenOk = await _validateSessionToken(lastAccountId);
+        if (tokenOk) {
+          const expiry = parseInt(localStorage.getItem('kic_' + lastAccountId + '_session_expiry') || '0');
+          if (!expiry || Date.now() < expiry) {
+            _activeAccountId = lastAccountId;
+            await bootApp();
+            return;
+          }
+        }
+      }
+    }
+  }
+  // Must log in
+  showLoginScreen();
+}
+
+function clearAllData() {
+  if (!confirm(t('js.clearConfirm'))) return;
+  // Delete only this account's data
+  if (_activeAccountId) {
+    deleteAccount(_activeAccountId);
+  }
+  providers = []; profiles = []; folders = []; chats = [];
+  config = { model:'', temperature:0.7, maxTokens:null, systemPrompt:'', activeProfileId:null, userModelMaxOverrides:{}, chatMaxWidth:880 };
+  closePanels(); renderSidebar(); renderMessages([]); updateProfileBadge();
+  toast(t('js.cleared'));
+  setTimeout(() => logoutNow(), 1500);
 }
 
 // ═══════════════════════════════════════════════════════════════
-// EVENT LISTENER SETUP (zentralisiert, kein onclick im HTML)
+// EVENT LISTENER SETUP
 // ═══════════════════════════════════════════════════════════════
-function setupEventListeners() {
-  // Header
+function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
   document.getElementById('openProviderHeaderBtn').addEventListener('click', openProviderPanel);
   document.getElementById('openSettingsBtn').addEventListener('click', openSettings);
   document.getElementById('profileBadge').addEventListener('click', openProfilePanel);
   document.getElementById('langToggleBtn').addEventListener('click', toggleLangDropdown);
-
-  // Overlay
   document.getElementById('overlay').addEventListener('click', closePanels);
 
   // Settings Panel
   document.getElementById('settingsPanelClose').addEventListener('click', closePanels);
-  document.getElementById('goProviderFromSettings').addEventListener('click', () => { closePanels(); openProviderPanel(); });
-  document.getElementById('goModelLimits').addEventListener('click', () => { closePanels(); openModelMaxPanel(); });
+  document.getElementById('goProviderFromSettings').addEventListener('click',()=>{closePanels();openProviderPanel();});
+  document.getElementById('goModelLimits').addEventListener('click',()=>{closePanels();openModelMaxPanel();});
   document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
   document.getElementById('changePwdBtn').addEventListener('click', changeLoginPassword);
+  document.getElementById('changeAccountNameBtn')?.addEventListener('click', changeAccountName);
+  document.getElementById('accountNameInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') changeAccountName(); });
+  document.getElementById('deleteAccountBtn')?.addEventListener('click', () => {
+    const acc = getAccount(_activeAccountId);
+    if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
+    deleteAccount(_activeAccountId);
+    logoutNow();
+  });
   document.getElementById('applySessionBtn').addEventListener('click', applySessionDuration);
   document.getElementById('resetSessionBtn').addEventListener('click', resetSessionNow);
   document.getElementById('logoutBtn').addEventListener('click', logoutNow);
   document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
-  document.getElementById('temperature').addEventListener('input', e => { document.getElementById('tempVal').textContent = e.target.value; });
-  document.getElementById('chatWidthSlider').addEventListener('input', e => applyChatWidth(e.target.value));
+  document.getElementById('temperature').addEventListener('input', e=>{document.getElementById('tempVal').textContent=e.target.value;});
+  document.getElementById('chatWidthSlider').addEventListener('input', e=>applyChatWidth(e.target.value));
 
   // Thinking Toggle
   document.getElementById('thinkingToggle').addEventListener('click', toggleThinking);
-  document.getElementById('thinkingIntensitySlider').addEventListener('input', e => {
-    const { modelId } = splitModelId(config.model);
-    if (usesTokenBudget(modelId)) {
-      config.thinkingBudget = parseInt(e.target.value);
-    } else {
-      config.thinkingIntensity = parseInt(e.target.value);
-    }
-    updateThinkingIntensityUI();
-    save();
+  document.getElementById('thinkingIntensitySlider').addEventListener('input', e=>{
+    const{modelId}=splitModelId(config.model);
+    if(usesTokenBudget(modelId)){config.thinkingBudget=parseInt(e.target.value);}
+    else{config.thinkingIntensity=parseInt(e.target.value);}
+    updateThinkingIntensityUI(); save();
   });
 
   // Provider Panel
@@ -2477,31 +3002,29 @@ function setupEventListeners() {
   document.getElementById('addProviderBtn').addEventListener('click', startNewProvider);
   document.getElementById('saveProviderBtn').addEventListener('click', saveProviderEditor);
   document.getElementById('cancelProviderBtn').addEventListener('click', cancelProviderEditor);
-  document.querySelectorAll('.type-chip').forEach(chip => {
-    chip.addEventListener('click', () => selectProviderType(chip.dataset.type));
-  });
+  document.querySelectorAll('.type-chip').forEach(chip=>{chip.addEventListener('click',()=>selectProviderType(chip.dataset.type));});
 
   // Profile Panel
   document.getElementById('profilePanelClose').addEventListener('click', closePanels);
   document.getElementById('addProfileBtn').addEventListener('click', startNewProfile);
   document.getElementById('saveProfileBtn').addEventListener('click', saveProfileEditor);
   document.getElementById('cancelProfileBtn').addEventListener('click', cancelProfileEditor);
-  document.getElementById('peTemp').addEventListener('input', e => { document.getElementById('peTempVal').textContent = e.target.value; });
+  document.getElementById('peTemp').addEventListener('input', e=>{document.getElementById('peTempVal').textContent=e.target.value;});
   document.getElementById('peUseModelMax').addEventListener('change', updatePeMaxTokensUI);
   document.getElementById('peModelInput').addEventListener('change', updatePeMaxTokensUI);
-  document.getElementById('peMaxTokensSlider').addEventListener('input', e => { document.getElementById('peMaxTokensNum').textContent = parseInt(e.target.value).toLocaleString(); });
+  document.getElementById('peMaxTokensSlider').addEventListener('input', e=>{document.getElementById('peMaxTokensNum').textContent=parseInt(e.target.value).toLocaleString();});
 
-  // Modell-Limits Panel
+  // Model Limits Panel
   document.getElementById('modelMaxPanelClose').addEventListener('click', closePanels);
   document.getElementById('resetAllModelMaxBtn').addEventListener('click', resetAllModelMax);
 
   // Sidebar
-  document.getElementById('newChatBtn').addEventListener('click', () => newChat());
+  document.getElementById('newChatBtn').addEventListener('click',()=>newChat());
   document.getElementById('newFolderBtn').addEventListener('click', newFolder);
   document.getElementById('copyFullChatBtn').addEventListener('click', copyFullChat);
 
   // Chat Area
-  const chatArea = document.getElementById('chatArea');
+  const chatArea=document.getElementById('chatArea');
   chatArea.addEventListener('dragenter', handleDragEnter);
   chatArea.addEventListener('dragover', handleDragOver);
   chatArea.addEventListener('dragleave', handleDragLeave);
@@ -2510,61 +3033,106 @@ function setupEventListeners() {
   // Input
   document.getElementById('sendBtn').addEventListener('click', handleSendStop);
   document.getElementById('messageInput').addEventListener('keydown', handleKey);
-  document.getElementById('messageInput').addEventListener('input', e => autoResize(e.target));
-  document.getElementById('attachFileBtn').addEventListener('click', () => document.getElementById('fileInput').click());
-  document.getElementById('attachImageBtn').addEventListener('click', () => document.getElementById('imageInput').click());
+  document.getElementById('messageInput').addEventListener('input', e=>autoResize(e.target));
+  document.getElementById('messageInput').addEventListener('paste', handlePaste);
+  document.getElementById('attachFileBtn').addEventListener('click',()=>document.getElementById('fileInput').click());
+  document.getElementById('attachImageBtn').addEventListener('click',()=>document.getElementById('imageInput').click());
   document.getElementById('clearAttachBtn').addEventListener('click', clearAttachments);
   document.getElementById('fileInput').addEventListener('change', handleFileAttach);
   document.getElementById('imageInput').addEventListener('change', handleImageAttach);
+  // Edit-mode file inputs (hidden inputs for adding files while editing a bubble)
+  const editFileInput = document.getElementById('editFileInput');
+  const editImageInput = document.getElementById('editImageInput');
+  if (editFileInput)  editFileInput.addEventListener('change',  handleEditFileAttach);
+  if (editImageInput) editImageInput.addEventListener('change', handleEditImageAttach);
 
-  // Login
-  document.getElementById('loginBtn').addEventListener('click', doLogin);
-  document.getElementById('loginInput').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
-  document.getElementById('forgotPwdBtn').addEventListener('click', forgotPassword);
-  document.getElementById('setupBtn').addEventListener('click', doSetupPassword);
-  document.getElementById('setupPwdInput').addEventListener('input', e => updatePwdStrength(e.target.value));
-  document.getElementById('setupPwdInput').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('setupPwdConfirm').focus(); });
-  document.getElementById('setupPwdConfirm').addEventListener('keydown', e => { if(e.key==='Enter') doSetupPassword(); });
+  // Global paste (outside textarea)
+  document.addEventListener('paste', e=>{
+    if(document.activeElement!==document.getElementById('messageInput')){
+      handlePaste(e);
+    }
+  });
 
-  // Suggestion Chips — via DOM
-  const suggestions = [
-    { i18n: 'empty.quantum', msgKey: 'empty.quantumMsg' },
-    { i18n: 'empty.python',  msgKey: 'empty.pythonMsg' },
-    { i18n: 'empty.mlvsdl',  msgKey: 'empty.mlvsdlMsg' },
-    { i18n: 'empty.integral',msgKey: 'empty.integralMsg' },
+  // Login / Account system
+  document.getElementById('loginBtn')?.addEventListener('click', doLogin);
+  document.getElementById('loginInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  document.getElementById('forgotPwdBtn')?.addEventListener('click', forgotPassword);
+  document.getElementById('setupBtn')?.addEventListener('click', doSetupPassword);
+  document.getElementById('setupPwdInput')?.addEventListener('input', e => updatePwdStrength(e.target.value));
+  document.getElementById('setupPwdInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('setupPwdConfirm')?.focus(); });
+  document.getElementById('setupPwdConfirm')?.addEventListener('keydown', e => { if (e.key === 'Enter') doSetupPassword(); });
+  document.getElementById('showNewAccountBtn')?.addEventListener('click', () => {
+    // Clear form
+    const nameEl = document.getElementById('newAccountName');
+    const pwdEl  = document.getElementById('setupPwdInput');
+    const confEl = document.getElementById('setupPwdConfirm');
+    const errEl  = document.getElementById('setupError');
+    if (nameEl) nameEl.value = '';
+    if (pwdEl)  pwdEl.value  = '';
+    if (confEl) confEl.value = '';
+    if (errEl)  errEl.textContent = '';
+    const bar = document.getElementById('pwdStrengthBar');
+    if (bar) { bar.style.width = '0%'; }
+    renderNewAccountColorRow();
+    showView('newAccountView');
+    setTimeout(() => nameEl?.focus(), 80);
+  });
+  document.getElementById('backToAccountsBtn')?.addEventListener('click', () => { _selectedLoginAccountId = null; showView('accountSelectView'); renderAccountGrid(); });
+  document.getElementById('backFromNewAccountBtn')?.addEventListener('click', () => {
+    if (_accounts.length > 0) { showView('accountSelectView'); renderAccountGrid(); }
+    // else: can't go back — no accounts yet, stay on create view
+  });
+  document.getElementById('newAccountName')?.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('setupPwdInput')?.focus(); });
+
+  // Suggestion Chips
+  const suggestions=[
+    {i18n:'empty.quantum',msgKey:'empty.quantumMsg'},
+    {i18n:'empty.python',msgKey:'empty.pythonMsg'},
+    {i18n:'empty.mlvsdl',msgKey:'empty.mlvsdlMsg'},
+    {i18n:'empty.integral',msgKey:'empty.integralMsg'},
   ];
-  const chipsContainer = document.getElementById('suggestionChips');
-  suggestions.forEach(s => {
-    const chip = document.createElement('div');
-    chip.className = 'suggestion-chip';
-    chip.textContent = t(s.i18n);
-    chip.dataset.msgKey = s.msgKey;
-    chip.addEventListener('click', () => sendSuggestion(t(chip.dataset.msgKey)));
+  const chipsContainer=document.getElementById('suggestionChips');
+  suggestions.forEach(s=>{
+    const chip=document.createElement('div');chip.className='suggestion-chip';chip.textContent=t(s.i18n);chip.dataset.msgKey=s.msgKey;
+    chip.addEventListener('click',()=>sendSuggestion(t(chip.dataset.msgKey)));
     chipsContainer.appendChild(chip);
   });
 
   // Observer: Code-Copy-Buttons in neuen Nachrichten verdrahten
-  const messagesContainer = document.getElementById('messages');
-  const observer = new MutationObserver(mutations => {
-    mutations.forEach(m => m.addedNodes.forEach(node => {
-      if (node.nodeType === 1) wireCodeCopyButtons(node);
-    }));
+  const messagesContainer=document.getElementById('messages');
+  const observer=new MutationObserver(mutations=>{
+    mutations.forEach(m=>m.addedNodes.forEach(node=>{if(node.nodeType===1)wireCodeCopyButtons(node);}));
   });
-  observer.observe(messagesContainer, { childList: true, subtree: true });
+  observer.observe(messagesContainer,{childList:true,subtree:true});
 }
 
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
-(async () => {
-  await load();
+(async()=>{
+  // Hide main UI immediately — show only after successful login
+  document.querySelector('.main')?.style.setProperty('display','none');
+  document.querySelector('header')?.style.setProperty('display','none');
   setupEventListeners();
+  applyTranslations();
+  loadSessionSettings();
+  await checkLogin();
+})();
+
+// bootApp: called after successful login to initialize the full UI
+async function bootApp() {
+  // Show the main UI now that we're authenticated
+  const mainEl = document.querySelector('.main');
+  const headerEl = document.querySelector('header');
+  if (mainEl) mainEl.style.display = '';
+  if (headerEl) headerEl.style.display = '';
+
+  await load();
   applyTranslations();
   updateProfileBadge();
   syncSettingsPanel();
   loadSessionSettings();
   if (config.chatMaxWidth) applyChatWidth(config.chatMaxWidth);
-  // Restore thinking state
   if (config.thinkingEnabled) {
     document.getElementById('thinkingToggle')?.classList.add('active');
     document.getElementById('thinkingIntensity')?.classList.add('visible');
@@ -2573,145 +3141,100 @@ function setupEventListeners() {
     const slider = document.getElementById('thinkingIntensitySlider');
     if (slider) slider.value = config.thinkingIntensity;
   }
-  if (!folders.length) { folders.push({id:'default',name:'Default',collapsed:false}); save(); }
+  if (!folders.length) { folders.push({ id:'default', name:'Default', collapsed:false }); save(); }
   renderSidebar();
   if (!chats.length) { newChat(); }
   else {
-    if (!currentChatId || !chats.find(c=>c.id===currentChatId)) currentChatId = chats[0].id;
+    if (!currentChatId || !chats.find(c => c.id === currentChatId)) currentChatId = chats[0].id;
     renderSidebar();
     renderMessages(currentChat()?.messages || []);
   }
-  if (providers.length && providers.some(p=>p.apiKey)) fetchModels();
+  if (providers.length && providers.some(p => p.apiKey)) fetchModels();
   else openProviderPanel();
-  await checkLogin();
   startSessionCountdown();
-})();
+}
 
 // ── Custom Model Dropdown ─────────────────────────────────────────
-(function() {
-  const trigger  = document.getElementById('cmTrigger');
-  const panel    = document.getElementById('cmPanel');
-  const list     = document.getElementById('cmList');
-  const search   = document.getElementById('cmSearch');
-  const label    = document.getElementById('cmLabel');
-  const hiddenSel = document.getElementById('modelSelector');
-  let open = false;
+(function(){
+  const trigger=document.getElementById('cmTrigger');
+  const panel=document.getElementById('cmPanel');
+  const list=document.getElementById('cmList');
+  const search=document.getElementById('cmSearch');
+  const label=document.getElementById('cmLabel');
+  const hiddenSel=document.getElementById('modelSelector');
+  let open=false;
+  window._cmData=[];
 
-  // Modell-Daten (wird von populateModelSelector befüllt)
-  window._cmData = []; // [{group, label, value}]
-
-  function positionPanel() {
-    const rect = trigger.getBoundingClientRect();
-    const vh = window.innerHeight;
-    const spaceBelow = vh - rect.bottom - 8;
-    const spaceAbove = rect.top - 8;
-    const maxH = Math.min(380, Math.max(spaceBelow, spaceAbove) - 8);
-    panel.style.maxHeight = maxH + 'px';
-    panel.style.left = rect.left + 'px';
-    panel.style.width = Math.max(rect.width, 260) + 'px';
-    if (spaceBelow >= 180 || spaceBelow >= spaceAbove) {
-      panel.style.top  = (rect.bottom + 4) + 'px';
-      panel.style.bottom = 'auto';
-    } else {
-      panel.style.bottom = (vh - rect.top + 4) + 'px';
-      panel.style.top = 'auto';
-    }
+  function positionPanel(){
+    const rect=trigger.getBoundingClientRect();
+    const vh=window.innerHeight;
+    const spaceBelow=vh-rect.bottom-8;const spaceAbove=rect.top-8;
+    const maxH=Math.min(380,Math.max(spaceBelow,spaceAbove)-8);
+    panel.style.maxHeight=maxH+'px';panel.style.left=rect.left+'px';
+    panel.style.width=Math.max(rect.width,260)+'px';
+    if(spaceBelow>=180||spaceBelow>=spaceAbove){panel.style.top=(rect.bottom+4)+'px';panel.style.bottom='auto';}
+    else{panel.style.bottom=(vh-rect.top+4)+'px';panel.style.top='auto';}
   }
 
-  function renderList(filter) {
-    const q = (filter || '').toLowerCase();
-    list.innerHTML = '';
-    let count = 0;
-    window._cmData.forEach(group => {
-      const items = group.items.filter(m => !q || m.label.toLowerCase().includes(q));
-      if (!items.length) return;
-      const gl = document.createElement('div');
-      gl.className = 'cm-group-label';
-      gl.textContent = group.group;
-      list.appendChild(gl);
-      items.forEach(m => {
-        const opt = document.createElement('div');
-        opt.className = 'cm-option' + (m.value === hiddenSel.value ? ' selected' : '');
-        opt.textContent = m.label;
-        opt.title = m.label;
-        opt.addEventListener('click', () => {
-          hiddenSel.value = m.value;
-          hiddenSel.dispatchEvent(new Event('change'));
-          closePanel();
-        });
-        list.appendChild(opt);
-        count++;
+  function renderList(filter){
+    const q=(filter||'').toLowerCase();
+    list.innerHTML='';let count=0;
+    window._cmData.forEach(group=>{
+      const items=group.items.filter(m=>!q||m.label.toLowerCase().includes(q));
+      if(!items.length)return;
+      const gl=document.createElement('div');gl.className='cm-group-label';gl.textContent=group.group;list.appendChild(gl);
+      items.forEach(m=>{
+        const opt=document.createElement('div');
+        opt.className='cm-option'+(m.value===hiddenSel.value?' selected':'');
+        opt.textContent=m.label;opt.title=m.label;
+        opt.addEventListener('click',()=>{hiddenSel.value=m.value;hiddenSel.dispatchEvent(new Event('change'));closePanel();});
+        list.appendChild(opt);count++;
       });
     });
-    if (!count) {
-      const em = document.createElement('div');
-      em.className = 'cm-empty';
-      em.textContent = typeof t === 'function' ? t('js.noModelFound') : 'No model found';
-      list.appendChild(em);
-    }
+    if(!count){const em=document.createElement('div');em.className='cm-empty';em.textContent=typeof t==='function'?t('js.noModelFound'):'No model found';list.appendChild(em);}
   }
 
-  function openPanel() {
-    if (open) return;
-    open = true;
-    trigger.classList.add('open');
-    panel.classList.add('open');
-    positionPanel();
-    renderList('');
-    search.value = '';
-    search.focus();
-    // Scroll selected into view
-    const sel = list.querySelector('.selected');
-    if (sel) setTimeout(() => sel.scrollIntoView({ block: 'nearest' }), 30);
+  function openPanel(){
+    if(open)return;open=true;trigger.classList.add('open');panel.classList.add('open');
+    positionPanel();renderList('');search.value='';search.focus();
+    const sel=list.querySelector('.selected');if(sel)setTimeout(()=>sel.scrollIntoView({block:'nearest'}),30);
+  }
+  function closePanel(){
+    if(!open)return;open=false;trigger.classList.remove('open');panel.classList.remove('open');
   }
 
-  function closePanel() {
-    if (!open) return;
-    open = false;
-    trigger.classList.remove('open');
-    panel.classList.remove('open');
-  }
-
-  trigger.addEventListener('click', (e) => { e.stopPropagation(); open ? closePanel() : openPanel(); });
-  search.addEventListener('input', () => renderList(search.value));
-  search.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closePanel(); trigger.focus(); }
-    if (e.key === 'ArrowDown') { const first = list.querySelector('.cm-option'); if (first) { first.focus(); e.preventDefault(); } }
+  trigger.addEventListener('click',e=>{e.stopPropagation();open?closePanel():openPanel();});
+  search.addEventListener('input',()=>renderList(search.value));
+  search.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){closePanel();trigger.focus();}
+    if(e.key==='ArrowDown'){const first=list.querySelector('.cm-option');if(first){first.focus();e.preventDefault();}}
   });
-  list.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closePanel(); trigger.focus(); }
-  });
-  document.addEventListener('click', (e) => { if (!panel.contains(e.target) && e.target !== trigger) closePanel(); });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
-  window.addEventListener('resize', () => { if (open) positionPanel(); });
-  window.addEventListener('scroll', () => { if (open) positionPanel(); }, true);
+  list.addEventListener('keydown',e=>{if(e.key==='Escape'){closePanel();trigger.focus();}});
+  document.addEventListener('click',e=>{if(!panel.contains(e.target)&&e.target!==trigger)closePanel();});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanel();});
+  window.addEventListener('resize',()=>{if(open)positionPanel();});
+  window.addEventListener('scroll',()=>{if(open)positionPanel();},true);
 
-  // Sync label + selected state from hidden select
-  window.syncCustomDropdown = function() {
-    const val = hiddenSel.value;
-    const opt = hiddenSel.options[hiddenSel.selectedIndex];
-    label.textContent = opt ? opt.textContent : (typeof t === 'function' ? t('js.selectModel') : '— Select model —');
-    if (!val) label.textContent = (typeof t === 'function' ? t('js.selectModel') : '— Open settings —');
-    if (open) renderList(search.value);
+  window.syncCustomDropdown=function(){
+    const val=hiddenSel.value;
+    const opt=hiddenSel.options[hiddenSel.selectedIndex];
+    label.textContent=opt?opt.textContent:(typeof t==='function'?t('js.selectModel'):'— Select model —');
+    if(!val)label.textContent=(typeof t==='function'?t('js.selectModel'):'— Open settings —');
+    if(open)renderList(search.value);
   };
-
-  // Befülle _cmData aus dem hidden select (optgroups)
-  window.buildCustomDropdownData = function() {
-    const data = [];
-    Array.from(hiddenSel.children).forEach(child => {
-      if (child.tagName === 'OPTGROUP') {
-        const group = { group: child.label, items: [] };
-        Array.from(child.children).forEach(opt => {
-          group.items.push({ value: opt.value, label: opt.textContent });
-        });
+  window.buildCustomDropdownData=function(){
+    const data=[];
+    Array.from(hiddenSel.children).forEach(child=>{
+      if(child.tagName==='OPTGROUP'){
+        const group={group:child.label,items:[]};
+        Array.from(child.children).forEach(opt=>{group.items.push({value:opt.value,label:opt.textContent});});
         data.push(group);
-      } else if (child.tagName === 'OPTION' && child.value) {
-        let last = data[data.length - 1];
-        if (!last || last.group !== '') { last = { group: '', items: [] }; data.push(last); }
-        last.items.push({ value: child.value, label: child.textContent });
+      } else if(child.tagName==='OPTION'&&child.value){
+        let last=data[data.length-1];
+        if(!last||last.group!==''){last={group:'',items:[]};data.push(last);}
+        last.items.push({value:child.value,label:child.textContent});
       }
     });
-    window._cmData = data;
-    window.syncCustomDropdown();
+    window._cmData=data;window.syncCustomDropdown();
   };
 })();

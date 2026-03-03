@@ -823,3 +823,39 @@ textarea::placeholder { color: var(--muted); }
   .message-row { padding: 10px 14px; }
   .input-zone  { padding: 12px 14px 16px; }
 }
+
+
+/* Folder drag & drop reordering */
+.folder.folder-dragging {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.folder.folder-drag-over > .folder-header {
+  background: rgba(61,126,255,0.15);
+  outline: 2px dashed var(--accent);
+  border-radius: 6px;
+}
+
+/* File chips inside chat bubbles */
+.msg-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.msg-file-chips .file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface2, rgba(255,255,255,0.07));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  color: var(--muted);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

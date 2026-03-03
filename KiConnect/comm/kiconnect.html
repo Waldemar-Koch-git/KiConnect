@@ -20,31 +20,17 @@
     upgrade-insecure-requests;
   ">
   <title>AI Chat</title>
-
   <link rel="stylesheet" href="kiconnect.css">
-
-  <!--
-    MathJax config MUST be defined inline before MathJax loads –
-    it cannot be moved to kiconnect.js without breaking async startup.
-  -->
   <script>
     window.MathJax = {
-      tex: {
-        inlineMath:  [['$', '$'], ['\\(', '\\)']],
-        displayMath: [['$$', '$$'], ['\\[', '\\]']],
-        processEscapes: true,
-      },
-      options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] },
-      startup: { typeset: false },
+      tex: { inlineMath:[['$','$'],['\\(','\\)']], displayMath:[['$$','$$'],['\\[','\\]']], processEscapes:true },
+      options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
+      startup: { typeset:false },
     };
   </script>
-
-  <!-- Third-party libraries (CDN) -->
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-
-  <!-- PDF.js worker – must follow the pdfjs-dist script -->
   <script>
     if (typeof pdfjsLib !== 'undefined') {
       pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -56,52 +42,89 @@
 <body>
 
 <div class="overlay" id="overlay"></div>
-<div class="toast"    id="toast"></div>
+<div class="toast"   id="toast"></div>
 <div class="ctx-menu" id="ctxMenu" style="display:none"></div>
 
 <!-- ════════════════════════════════════════════════════════════════
-     LOGIN SCREEN
+     LOGIN / ACCOUNT SCREEN
      ════════════════════════════════════════════════════════════════ -->
-<div id="loginScreen" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
-  <div style="text-align:center;margin-bottom:8px;">
-    <div style="font-size:48px;margin-bottom:12px;">🤖</div>
+<div id="loginScreen" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:20px;">
+
+  <!-- Logo -->
+  <div style="text-align:center;margin-bottom:4px;">
+    <div style="font-size:48px;margin-bottom:10px;">🤖</div>
     <h1 style="font-size:26px;font-weight:800;color:var(--text);" data-i18n="login.title">KI Connect</h1>
-    <p id="loginSubtitle" style="font-size:14px;color:var(--muted);margin-top:6px;" data-i18n="login.subtitle">Enter your password to continue</p>
   </div>
-  <div style="width:340px;max-width:90vw;">
 
-    <!-- Login mode -->
-    <div id="loginModeFields">
-      <input class="setting-input" type="password" id="loginInput"
-        placeholder="Password…" data-i18n="login.placeholder" data-i18n-attr="placeholder"
-        style="width:100%;font-size:16px;padding:12px 14px;margin-bottom:10px;">
-      <div style="color:var(--red);font-size:13px;min-height:18px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;" id="loginError"></div>
-      <button class="save-btn" style="width:100%;padding:12px;" id="loginBtn" data-i18n="login.btn">🔓 Login</button>
-      <div style="text-align:center;margin-top:14px;">
-        <button id="forgotPwdBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;text-decoration:underline;" data-i18n="login.forgot">Forgot password?</button>
+  <!-- ── Account selection (default view) ── -->
+  <div id="accountSelectView" style="width:100%;max-width:520px;padding:0 20px;">
+    <p style="text-align:center;font-size:13px;color:var(--muted);margin-bottom:20px;font-family:'IBM Plex Mono',monospace;" data-i18n="account.select">Select account</p>
+
+    <!-- Avatar grid -->
+    <div id="accountGrid" style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-bottom:24px;min-height:100px;"></div>
+
+    <!-- New account button -->
+    <div style="text-align:center;">
+      <button id="showNewAccountBtn" class="ghost-btn" style="width:auto;padding:10px 28px;" data-i18n="account.new">＋ New Account</button>
+    </div>
+  </div>
+
+  <!-- ── Password entry (after selecting an account) ── -->
+  <div id="accountLoginView" style="display:none;width:340px;max-width:90vw;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <div id="loginAvatarDisplay" style="width:52px;height:52px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:800;color:white;flex-shrink:0;"></div>
+      <div>
+        <div id="loginAccountName" style="font-size:18px;font-weight:700;color:var(--text);"></div>
+        <button id="backToAccountsBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;padding:0;margin-top:2px;" data-i18n="account.back">← Back</button>
       </div>
     </div>
-
-    <!-- Setup mode -->
-    <div id="setupModeFields" style="display:none;">
-      <p style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:12px;font-family:'IBM Plex Mono',monospace;" data-i18n="login.setupHint">
-        This password protects access to KI Connect and encrypts your API keys in the browser.
-      </p>
-      <input class="setting-input" type="password" id="setupPwdInput"
-        placeholder="New password (min. 8 chars)…" data-i18n="login.setupPlaceholder" data-i18n-attr="placeholder"
-        style="width:100%;font-size:16px;padding:12px 14px;margin-bottom:8px;">
-      <input class="setting-input" type="password" id="setupPwdConfirm"
-        placeholder="Confirm password…" data-i18n="login.setupConfirmPlaceholder" data-i18n-attr="placeholder"
-        style="width:100%;font-size:16px;padding:12px 14px;margin-bottom:10px;">
-      <div style="height:4px;border-radius:2px;background:var(--border);margin-bottom:12px;overflow:hidden;">
-        <div id="pwdStrengthBar" style="height:100%;width:0%;transition:width 0.3s,background 0.3s;border-radius:2px;"></div>
-      </div>
-      <div style="color:var(--red);font-size:13px;min-height:18px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;" id="setupError"></div>
-      <button class="save-btn" style="width:100%;padding:12px;" id="setupBtn" data-i18n="login.setupBtn">🔐 Create password &amp; start</button>
+    <input class="setting-input" type="password" id="loginInput"
+      placeholder="Password…" data-i18n="login.placeholder" data-i18n-attr="placeholder"
+      style="width:100%;font-size:16px;padding:12px 14px;margin-bottom:10px;">
+    <div style="color:var(--red);font-size:13px;min-height:18px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;" id="loginError"></div>
+    <button class="save-btn" style="width:100%;padding:12px;" id="loginBtn" data-i18n="login.btn">🔓 Login</button>
+    <div style="text-align:center;margin-top:12px;">
+      <button id="forgotPwdBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;text-decoration:underline;" data-i18n="login.forgot">Forgot password?</button>
     </div>
-
   </div>
-</div>
+
+  <!-- ── New account creation ── -->
+  <div id="newAccountView" style="display:none;width:360px;max-width:90vw;">
+    <p style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:16px;text-align:center;" data-i18n="account.newTitle">Create new account</p>
+
+    <!-- Username -->
+    <div class="setting-label" data-i18n="account.username">Username</div>
+    <input class="setting-input" type="text" id="newAccountName"
+      placeholder="Your name…" data-i18n="account.usernamePlaceholder" data-i18n-attr="placeholder"
+      style="margin-bottom:12px;">
+
+    <!-- Color picker -->
+    <div class="setting-label" data-i18n="account.chooseColor">Choose color</div>
+    <div id="accountColorRow" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+
+    <!-- Password setup -->
+    <div class="setting-label" data-i18n="login.setupSubtitle">Create password</div>
+    <p style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:10px;font-family:'IBM Plex Mono',monospace;" data-i18n="login.setupHint">
+      This password protects this account and encrypts all its data.
+    </p>
+    <input class="setting-input" type="password" id="setupPwdInput"
+      placeholder="New password (min. 8 chars)…" data-i18n="login.setupPlaceholder" data-i18n-attr="placeholder"
+      style="margin-bottom:8px;">
+    <input class="setting-input" type="password" id="setupPwdConfirm"
+      placeholder="Confirm password…" data-i18n="login.setupConfirmPlaceholder" data-i18n-attr="placeholder"
+      style="margin-bottom:10px;">
+    <div style="height:4px;border-radius:2px;background:var(--border);margin-bottom:12px;overflow:hidden;">
+      <div id="pwdStrengthBar" style="height:100%;width:0%;transition:width 0.3s,background 0.3s;border-radius:2px;"></div>
+    </div>
+    <div style="color:var(--red);font-size:13px;min-height:18px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;" id="setupError"></div>
+    <button class="save-btn" style="width:100%;padding:12px;" id="setupBtn" data-i18n="account.createBtn">🔐 Create account</button>
+    <div style="text-align:center;margin-top:10px;">
+      <button id="backFromNewAccountBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;text-decoration:underline;" data-i18n="account.back">← Back</button>
+    </div>
+  </div>
+
+</div><!-- /loginScreen -->
+
 
 <!-- ════════════════════════════════════════════════════════════════
      SETTINGS PANEL
@@ -159,10 +182,35 @@
 
   <hr class="divider">
   <div class="section-header" data-i18n="settings.security">🔒 Security</div>
-  <p style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:10px;" data-i18n="settings.secDesc">
+  <p style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:6px;" data-i18n="settings.secDesc">
     API keys are encrypted with AES-GCM-256 in the browser.
   </p>
+  <p style="font-size:11px;color:var(--accent);line-height:1.5;margin-bottom:12px;font-family:'IBM Plex Mono',monospace;" data-i18n="settings.fullEncNote">
+    🔐 All data is stored AES-256-GCM encrypted per account.
+  </p>
 
+  <!-- Image size limit -->
+  <div class="setting-group">
+    <div class="setting-label" data-i18n="settings.maxImgSize">Max. image storage size</div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input class="setting-input" type="number" id="maxImgSizeInput"
+        min="100" max="102400" step="100" value="500" style="flex:1;text-align:center;">
+      <span style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;flex-shrink:0;" data-i18n="settings.maxImgSizeKb">KB</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" data-i18n="settings.maxImgSizeHint">
+      Images above this limit: a dialog will ask to raise the limit.
+    </div>
+  </div>
+
+  <div class="section-header" style="margin-top:0;" data-i18n="account.username">Username</div>
+  <div class="setting-group">
+    <input class="setting-input" type="text" id="accountNameInput"
+      placeholder="Your name…" data-i18n="account.usernamePlaceholder" data-i18n-attr="placeholder"
+      style="width:100%;margin-bottom:6px;">
+    <button class="ghost-btn" style="margin:0;width:100%;" id="changeAccountNameBtn" data-i18n="account.saveUsername">✏️ Save username</button>
+  </div>
+
+  <hr class="divider">
   <div class="section-header" style="margin-top:0;" data-i18n="settings.changeLoginPwd">Change Login Password</div>
   <div class="setting-group">
     <div class="setting-label" data-i18n="settings.currentPwd">Current password</div>
@@ -204,6 +252,7 @@
 
   <hr class="divider">
   <button class="ghost-btn" style="margin-top:0;margin-bottom:6px;" id="logoutBtn" data-i18n="settings.logout">🔓 Log out now</button>
+  <button class="ghost-btn" style="border-color:var(--red);color:var(--red);margin-bottom:6px;" id="deleteAccountBtn" data-i18n="account.deleteBtn">🗑 Delete this account</button>
   <button class="ghost-btn" style="border-color:var(--red);color:var(--red);" id="clearAllBtn" data-i18n="settings.clearAll">🗑 Delete all data &amp; keys</button>
 </div>
 
@@ -221,7 +270,6 @@
   </p>
   <div class="provider-list" id="providerList"></div>
   <button class="ghost-btn" id="addProviderBtn" data-i18n="provider.addNew">＋ Add new provider</button>
-
   <div class="provider-editor" id="providerEditor" style="display:none">
     <div style="font-size:14px;font-weight:700;margin-bottom:12px;" id="providerEditorTitle" data-i18n="provider.edit">Edit provider</div>
     <div class="setting-label" data-i18n="provider.name">Name</div>
@@ -265,12 +313,9 @@
     <button class="close-btn" id="profilePanelClose">✕</button>
   </div>
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;"
-    data-i18n="profile.desc" data-i18n-html="true">
-    Profiles define roles or personas.
-  </p>
+    data-i18n="profile.desc" data-i18n-html="true">Profiles define roles or personas.</p>
   <div class="profile-list" id="profileList"></div>
   <button class="ghost-btn" id="addProfileBtn" data-i18n="profile.addNew">＋ Create new profile</button>
-
   <div class="profile-editor" id="profileEditor" style="display:none">
     <div style="font-size:14px;font-weight:700;margin-bottom:12px;" id="profileEditorTitle" data-i18n="profile.new">New Profile</div>
     <div class="setting-label" data-i18n="profile.name">Name</div>
@@ -325,9 +370,7 @@
     <button class="close-btn" id="modelMaxPanelClose">✕</button>
   </div>
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;"
-    data-i18n="modellimits.desc" data-i18n-html="true">
-    Adjust maximum output length per model.
-  </p>
+    data-i18n="modellimits.desc" data-i18n-html="true">Adjust maximum output length per model.</p>
   <div id="modelMaxList" style="display:flex;flex-direction:column;gap:6px;"></div>
   <button class="ghost-btn" style="margin-top:12px;" id="resetAllModelMaxBtn" data-i18n="modellimits.resetAll">↺ Reset all</button>
 </div>
@@ -339,8 +382,6 @@
   <div class="header-left">
     <button class="sidebar-toggle-btn" id="sidebarToggleBtn" title="Toggle sidebar">☰</button>
   </div>
-
-  <!-- Custom model dropdown (replaces native select to avoid overflow clipping) -->
   <div class="cm-wrap" id="cmWrap">
     <div class="cm-trigger" id="cmTrigger" title="Select model">
       <span class="cm-label" id="cmLabel" data-i18n="js.selectModel">— Open settings —</span>
@@ -353,12 +394,9 @@
       <div class="cm-list" id="cmList"></div>
     </div>
   </div>
-  <!-- Hidden select used as data store / compatibility shim -->
   <select class="model-select" id="modelSelector">
     <option value="" data-i18n="js.selectModel">— Open settings —</option>
   </select>
-
-  <!-- Thinking / Reasoning toggle -->
   <div class="thinking-group" id="thinkingGroup" style="display:none;">
     <div class="thinking-toggle" id="thinkingToggle" title="Enable Extended Thinking / Reasoning">
       <span class="brain-icon">🧠</span>
@@ -370,7 +408,6 @@
       <span class="intensity-val" id="thinkingIntensityVal">medium</span>
     </div>
   </div>
-
   <div class="header-right">
     <div class="profile-badge" id="profileBadge" title="User profiles">
       <div class="profile-dot" id="profileBadgeDot" style="background:var(--muted)"></div>
@@ -378,7 +415,7 @@
     </div>
     <div class="status-dot" id="statusDot"></div>
     <button class="settings-btn" id="openProviderHeaderBtn" title="Providers &amp; Servers">🔌</button>
-    <button class="settings-btn" id="openSettingsBtn"       title="Settings">⚙</button>
+    <button class="settings-btn" id="openSettingsBtn" title="Settings">⚙</button>
     <div class="lang-switcher" id="langSwitcher">
       <button class="lang-btn" id="langToggleBtn" title="Language / Sprache">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -396,7 +433,6 @@
      MAIN LAYOUT
      ════════════════════════════════════════════════════════════════ -->
 <div class="main">
-  <!-- Sidebar -->
   <div class="sidebar" id="sidebar">
     <div class="sidebar-scroll" id="folderContainer"></div>
     <div class="sidebar-actions">
@@ -407,13 +443,11 @@
     <div class="sidebar-resizer" id="sidebarResizer" title="Resize sidebar"></div>
   </div>
 
-  <!-- Chat area -->
   <div class="chat-area" id="chatArea">
     <div class="drop-overlay" id="dropOverlay">
       <div class="drop-overlay-icon">📂</div>
       <div class="drop-overlay-text" data-i18n="input.dropText">Drop file here</div>
     </div>
-
     <div class="messages" id="messages">
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">🤖</div>
@@ -422,7 +456,6 @@
         <div class="suggestions" id="suggestionChips"></div>
       </div>
     </div>
-
     <div class="input-zone">
       <div class="attachment-row" id="attachmentRow"></div>
       <div class="input-box">
@@ -452,15 +485,18 @@
   </div>
 </div>
 
-<!-- Hidden file inputs -->
+<!-- Hidden file inputs (also used by edit mode) -->
 <input type="file" id="fileInput"
   accept="text/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.py,.js,.ts,.html,.css,.sh,.bat,.ini,.cfg,.toml,.pdf,application/pdf"
   style="display:none">
 <input type="file" id="imageInput" accept="image/*" style="display:none">
+<!-- Edit-mode file inputs (same types, separate elements to avoid state conflicts) -->
+<input type="file" id="editFileInput"
+  accept="text/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.py,.js,.ts,.html,.css,.sh,.bat,.ini,.cfg,.toml,.pdf,application/pdf"
+  style="display:none">
+<input type="file" id="editImageInput" accept="image/*" style="display:none">
 
-<!-- Application scripts (load order matters) -->
 <script src="kiconnect-languages-i18n.js"></script>
 <script src="kiconnect.js"></script>
-
 </body>
 </html>
