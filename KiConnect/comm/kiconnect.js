@@ -4,7 +4,7 @@
 // ================================================================
 
 // ═══════════════════════════════════════════════════════════════
-// SECURITY / IMPROVEMENTS v4.5
+// SECURITY / IMPROVEMENTS v4.5 
 // ═══════════════════════════════════════════════════════════════
 // NEW: Full AES-256-GCM encryption of ALL localStorage data
 //      (config, chats, profiles, folders — not just API keys)

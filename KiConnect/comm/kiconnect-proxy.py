@@ -1,5 +1,5 @@
 """
-KI Connect NRW — CORS-Proxy + Storage-Server (v5.0 / Waitress WSGI)
+KI Connect NRW — CORS-Proxy + Storage-Server (v5.0 / Waitress WSGI) 
 ====================================================================
 CHANGELOG v5.0 (Browser-unabhaengige Persistenz):
   NEU: /store/ REST-API — Daten liegen in ./datas/ auf dem Dateisystem,
