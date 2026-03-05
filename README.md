@@ -17,7 +17,8 @@ Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthrop
   - OpenAI: Reasoning-Effort (low/medium/high)
 - 📁 **Chat-Organisation** mit Ordnern, Drag & Drop und Branches
 - 🖼️ **Bild- & PDF-Unterstützung** (Vision-Modelle, Ctrl+V Paste, PDF-Text-Extraktion)
-- 🌍 **Mehrsprachig** – weitere Sprachen können in `kiconnect-languages-i18n.js` ergänzt werden 
+- 🖨️ **Druckfunktion** – Vollständigen Chat oder einzelne Nachrichten drucken (inkl. LaTeX-Rendering)
+- 🌍 **Mehrsprachig** – weitere Sprachen können in `kiconnect-languages-i18n.js` ergänzt werden
   - Bereits enthalten: EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
 - ⚡ **Streaming-Antworten** in Echtzeit mit Thinking-Block-Anzeige
 - 📊 **Token-Statistik** pro Nachricht und Gesamtanzahl pro Chat
@@ -25,6 +26,41 @@ Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthrop
 - 📱 **Responsives Design** mit anpassbarer Chat-Breite
 - 🎨 **Agentenprofile** mit individuellen System-Prompts, Temperaturen und Modell-Limits
 - 🔄 **Ordner-Drag & Drop** für Umstrukturierung der Sidebar
+- 🔌 **Keine externen CDN-Abhängigkeiten** – alle JS-Bibliotheken werden lokal abgelegt (kein Tracking, kein Datenleck)
+
+---
+
+## Lokale Abhängigkeiten (JS-Bibliotheken)
+
+KI Connect lädt **keine Bibliotheken aus dem Internet**. Stattdessen müssen drei Dateien einmalig heruntergeladen und neben `kiconnect.html` abgelegt werden. Danach funktioniert die App vollständig offline – kein CDN, kein Tracking.
+
+
+### Dateistruktur
+
+```
+kiconnect/
+├──START_kiconnect_mit_installierten_python.bat
+├── comm/
+    ├── kiconnect.html
+    ├── kiconnect.css
+    ├── kiconnect.js
+    ├── kiconnect-proxy.py
+    ├── kiconnect-languages-i18n.js
+```
+
+---
+
+## Druckfunktion
+
+KI Connect unterstützt zwei Druckmodi:
+
+### Vollständigen Chat drucken
+Über den 🖨️-Button in der Sidebar-Leiste wird der gesamte aktive Chat als druckoptimierte Seite ausgegeben. Der Chat-Titel erscheint als Überschrift. Enthaltene LaTeX-Formeln werden vor dem Drucken vollständig gerendert (MathJax muss dafür geladen sein).
+
+### Einzelne Nachricht drucken
+Über das 🖨️-Symbol in den Aktions-Buttons einer Nachricht öffnet sich ein Vorschau-Dialog. Nach Bestätigung wird nur diese eine Nachricht – inklusive Codeblöcken und Formeln – in einem separaten Druckfenster ausgegeben.
+
+> **Hinweis:** Manche Browser blockieren standardmäßig Popup-Fenster. Sollte der Druck-Dialog nicht erscheinen, bitte Popups für `localhost` in den Browser-Einstellungen erlauben.
 
 ---
 
@@ -86,6 +122,9 @@ cd kiconnect-nrw
 # 2. Abhängigkeiten installieren
 pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0
 
+```
+Dann im Hauptordner
+```
 # 3. Proxy starten
 python kiconnect-proxy.py
 
@@ -162,6 +201,7 @@ Für unterstützte Modelle (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.):
 | Rate-Limiting | Thread-sicher (Lock), 120 Requests/60s pro IP | DoS, Brute-Force |
 | Datei-Schreiben | Atomares Schreiben via `.tmp` + `os.replace()` | Datenverlust bei Proxy-Absturz |
 | Response-Handling | Kein `accept-encoding`-Forwarding, `location`-Header-Filter | Response-Injection, Redirect-Exploits |
+| Externe Abhängigkeiten | Alle JS-Bibliotheken lokal – kein CDN, kein externer Netzwerkzugriff zur Laufzeit | Supply-Chain-Angriffe, Tracking |
 
 ### Bekannte Limitationen ⚠️
 
@@ -182,7 +222,9 @@ Für unterstützte Modelle (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.):
 │  (Verschlüsselung   │     │  CORS-Proxy + Storage-API │     │  (HTTPS, kein    │
 │   im Browser)       │     │  ./datas/ (verschlüsselt) │     │   TLS-Terminier.)│
 │  PBKDF2 (600k)      │     │  Thread-safe, atomic I/O  │     │                  │
-│  DOMPurify          │     │                           │     │                  │
+│  DOMPurify (lokal)  │     │                           │     │                  │
+│  MathJax (lokal)    │     │                           │     │                  │
+│  PDF.js (lokal)     │     │                           │     │                  │
 │  Brute-Force-Lock   │     │                           │     │                  │
 └─────────────────────┘     └──────────────────────────┘     └──────────────────┘
          ↑
@@ -205,6 +247,11 @@ Die Übersetzungen liegen in `kiconnect-languages-i18n.js`. Eine neue Sprache hi
 ---
 
 ## Sicherheits-Changelog
+
+### v5.1
+- ✅ **CDN-Abhängigkeiten** – MathJax, PDF.js und DOMPurify werden extern geladen, weil es sonst lokal ziemlich viele Fonts-Dateien gebe
+- ✅ **Vollständige i18n** – alle UI-Texte (title-Attribute, Platzhalter, Buttons) über `kiconnect-languages-i18n.js` übersetzt; keine hardcodierten Strings mehr
+- ✅ **Druckfunktion** – vollständigen Chat oder einzelne Nachrichten drucken, inkl. LaTeX-Rendering via MathJax
 
 ### v5.0
 - ✅ **Browser-unabhängige Persistenz** – Storage-API im Proxy, Daten in `./datas/`

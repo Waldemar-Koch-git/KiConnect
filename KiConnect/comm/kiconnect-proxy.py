@@ -1,7 +1,7 @@
 """
-KI Connect NRW — CORS-Proxy + Storage-Server (v5.0 / Waitress WSGI) 
+KI Connect NRW — CORS-Proxy + Storage-Server (v5.0 / Waitress WSGI)
 ====================================================================
-CHANGELOG v5.0 (Browser-unabhaengige Persistenz):
+CHANGELOG v5.1 (Browser-unabhaengige Persistenz):
   NEU: /store/ REST-API — Daten liegen in ./datas/ auf dem Dateisystem,
   unabhaengig vom Browser. Alle Browser teilen sich dieselben Accounts.
 
@@ -408,7 +408,7 @@ if __name__ == '__main__':
 
     print()
     print('╔══════════════════════════════════════════════════════════════════╗')
-    print('║  KI Connect — CORS-Proxy + Storage-Server  (v5.0 / Waitress)    ║')
+    print('║  KI Connect — CORS-Proxy + Storage-Server  (v5.1 / Waitress)    ║')
     print('╠══════════════════════════════════════════════════════════════════╣')
     print('║  Running on:  http://localhost:5000                              ║')
     print('║  Data dir:    ./datas/   (browser-unabhaengige Persistenz)       ║')

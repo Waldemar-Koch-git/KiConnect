@@ -4,7 +4,7 @@
 // ================================================================
 
 // ═══════════════════════════════════════════════════════════════
-// SECURITY / IMPROVEMENTS v4.5 
+// SECURITY / IMPROVEMENTS v4.5
 // ═══════════════════════════════════════════════════════════════
 // NEW: Full AES-256-GCM encryption of ALL localStorage data
 //      (config, chats, profiles, folders — not just API keys)
@@ -30,8 +30,11 @@ function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     const val = t(key);
-    if (el.getAttribute('data-i18n-attr') === 'placeholder') {
+    const attr = el.getAttribute('data-i18n-attr');
+    if (attr === 'placeholder') {
       el.placeholder = val;
+    } else if (attr === 'title') {
+      el.title = val;
     } else if (el.getAttribute('data-i18n-html')) {
       el.innerHTML = val;
     } else {
@@ -325,7 +328,10 @@ async function getCryptoKey() {
     const saltBuf = crypto.getRandomValues(new Uint8Array(16));
     encSalt = btoa(String.fromCharCode(...saltBuf));
     acc.encSalt = encSalt;
-    saveAccountRegistry();
+    // WICHTIG: await hier, damit der Salt garantiert persistiert ist
+    // bevor wir ihn zum Verschluesseln verwenden. Ohne await koennte
+    // ein Reload einen neuen Salt generieren -> falscher Key -> Datenverlust.
+    await _registryPut(_accounts);
   }
   const saltBytes = Uint8Array.from(atob(encSalt), c => c.charCodeAt(0));
   const passphrase = 'kic-enc-v5|' + (_sessionPassphrase || '');
@@ -461,6 +467,7 @@ async function verifyAccountPassword(accountId, pw) {
 let _accounts = [];
 let _activeAccountId = null;
 
+// todo: check this / double?
 function loadAccountRegistry() {
   try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
 }
@@ -1705,6 +1712,7 @@ function buildMsgEl(msg, idx) {
   actDiv.appendChild(makeActBtn(t('js.edit'),       '', startEditBubble, 'edit'));
   actDiv.appendChild(makeActBtn(t('js.branch'),     '', branchFromHere, 'branch'));
   if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate, 'regenerate'));
+  actDiv.appendChild(makeActBtn('🖨️',               '', openPrintSingleOverlay, 'print'));
   actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
 
   if (!isUser && msg._usage) {
@@ -1953,7 +1961,7 @@ function branchFromHere(idx) {
   const branchId=Date.now().toString();
   chats.unshift({id:branchId,title:`↩ ${chat.title.slice(0,32)} (ab #${idx+1})`,folderId:chat.folderId,branchOf:chat.id,messages:branchedMsgs});
   currentChatId=branchId; save(); renderSidebar(); renderMessages(branchedMsgs);
-  toast(`↩ Branch ab Nachricht ${idx+1}`);
+  toast(tf('js.branchFrom', {n: idx+1}));
 }
 
 async function regenerate(idx) {
@@ -1961,7 +1969,7 @@ async function regenerate(idx) {
   const chat=currentChat(); if(!chat) return;
   const msg=chat.messages[idx];
   if(!msg||msg.role!=='assistant') return;
-  if(isStreaming){toast('Bitte warten…');return;}
+  if(isStreaming){toast(t('js.pleaseWait'));return;}
   chat.messages.splice(idx,1);
   const userMsg=chat.messages[idx-1];
   if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
@@ -2186,6 +2194,7 @@ async function sendMessageCore(text, att) {
         actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble,'edit'));
         actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere,'branch'));
         actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
+        actDiv.appendChild(makeBtn('🖨️','',openPrintSingleOverlay,'print'));
         actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
         wrap.appendChild(actDiv);
         if(usageData) wrap.appendChild(buildTokenBadge(usageData));
@@ -2274,63 +2283,146 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function unescHtml(s){return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}
 function inlineMarkdown(escapedText) {
   let s=escapedText;
-  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
-  s=s.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
-  s=s.replace(/___(.+?)___/g,'<strong><em>$1</em></strong>');
-  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  s=s.replace(/__(.+?)__/g,'<strong>$1</strong>');
-  s=s.replace(/(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g,'<em>$1</em>');
-  s=s.replace(/(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)/g,'<em>$1</em>');
+  s=s.replace(/`([^`]+)`/g,(_,c)=>`<code>${escHtml(c)}</code>`);
+  // Bold+italic: ***text*** — content must not start/end with space
+  s=s.replace(/\*\*\*(\S(?:[^*\n]*\S)?)\*\*\*/g,'<strong><em>$1</em></strong>');
+  s=s.replace(/___(\S(?:[^_\n]*\S)?)___/g,'<strong><em>$1</em></strong>');
+  // Bold: **text** — content must not start/end with space
+  s=s.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g,'<strong>$1</strong>');
+  // Bold: __text__ — only between non-word characters (not inside identifiers)
+  s=s.replace(/(?<![a-zA-Z0-9])__(\S(?:[^_\n]*\S)?)__(?![a-zA-Z0-9])/g,'<strong>$1</strong>');
+  // Italic: *text* — opening * must not be preceded or followed by another *
+  s=s.replace(/(?<!\*)\*(?!\*)(\S[^*\n]*?\S|\S)\*(?!\*)/g,'<em>$1</em>');
+  // Italic: _text_ — only between non-word characters (avoids matching snake_case)
+  s=s.replace(/(?<![a-zA-Z0-9])_(\S[^_\n]*?\S|\S)_(?![a-zA-Z0-9])/g,'<em>$1</em>');
+  // Strikethrough
   s=s.replace(/~~(.+?)~~/g,'<del>$1</del>');
+  // Images: ![alt](url) — must come before link regex
+  s=s.replace(/!\[([^\]]*)\]\(((?:https?:|\/)[^\)"\s]+)(?:\s+"[^"]*")?\)/g,
+    (_,alt,url)=>`<img src="${url}" alt="${escHtml(alt)}" style="max-width:100%;max-height:320px;border-radius:6px;vertical-align:middle;" loading="lazy">`);
+  // Links: [text](url) — url must start with http/https/mailto or be relative
+  s=s.replace(/\[([^\]]+)\]\(((?:https?:|mailto:|\/)[^\)]*)\)/g,
+    (_,text,url)=>`<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`);
   return s;
 }
 
 function formatText(raw) {
   if(!raw) return '';
   const blocks=[];
-  let s=raw.replace(/```(\w*)\n?([\s\S]*?)```/g,(_,lang,code)=>{
+  let s=raw;
+  // Pre-process: collapse blank lines between consecutive list items
+  (function(){var lines=s.split('\n'),out=[],inList=false,i=0;while(i<lines.length){out.push(lines[i]);var cur=lines[i];if(/^[ \t]*(?:\d+\.|[-*+] )/.test(cur)){inList=true;}else if(cur===''){if(i+1<lines.length&&/^[ \t]*(?:\d+\.|[-*+] )/.test(lines[i+1])){if(inList)out.pop();}else{inList=false;}}i++;}s=out.join('\n');})();
+  // 4+ backtick fences first (can contain ``` inside)
+  s=s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm,(_,fence,lang,code)=>{
+    const idx=blocks.length;
+    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
+    const langLabel=escHtml((lang||'').trim()||'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
+    return`\x00BLK${idx}\x00`;
+  });
+  // 3 backtick fences (standard)
+  s=s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm,(_,lang,code)=>{
     const idx=blocks.length;
     const b64=btoa(unescape(encodeURIComponent(code)));
     const langLabel=escHtml(lang||'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code)}</code></pre></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
     return`\x00BLK${idx}\x00`;
+  });
+  // Bug 13: unclosed 4-backtick fence fallback
+  s=s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm,(_,fence,lang,code)=>{
+    const bi=blocks.length;
+    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
+    const ll=escHtml((lang||'').trim()||'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
+    return`\x00BLK${bi}\x00`;
+  });
+  // Bug 13: unclosed 3-backtick fence fallback
+  s=s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm,(_,lang,code)=>{
+    const bi=blocks.length;
+    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
+    const ll=escHtml(lang||'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
+    return`\x00BLK${bi}\x00`;
   });
   s=s.replace(/`([^`\n]+)`/g,(_,code)=>{const idx=blocks.length;blocks.push(`<code>${escHtml(code)}</code>`);return`\x00BLK${idx}\x00`;});
   s=s.replace(/\\\[([\s\S]*?)\\\]/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">\\[${math}\\]</span>`);return`\x00BLK${idx}\x00`;});
   s=s.replace(/\$\$([\s\S]*?)\$\$/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">$$${math}$$</span>`);return`\x00BLK${idx}\x00`;});
   s=s.replace(/\\\(([\s\S]*?)\\\)/g,(_,math)=>{const idx=blocks.length;blocks.push(`\\(${math}\\)`);return`\x00BLK${idx}\x00`;});
+  const _SAFE_INLINE = /(<\/?(u|s|ins|mark|small|kbd|sup|sub|br|abbr)(?:\s[^>]*)?>|<span\s+style="[^"]*"[^>]*>|<\/span>|<a\s+href="(?:https?:|mailto:|\/)([^"<>]*)"(?:\s+[^>]*)?>[\s\S]*?<\/a>)/gi;
+  s=s.replace(_SAFE_INLINE,blk=>{
+    const bi=blocks.length;
+    const safe=blk.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*')/gi,'');
+    blocks.push(safe);
+    return`\x00BLK${bi}\x00`;
+  });
+  // Bug 12+18: extract <details open> before escHtml
+  s=s.replace(/<details[\s\S]*?<\/details>/gi,blk=>{
+    const bi=blocks.length;
+    const safe=blk.replace(/on\w+\s*=\s*["'][^"']*["']/gi,'');
+    blocks.push(`<details open style="margin:8px 0;border:1px solid var(--border,#ddd);border-radius:6px;padding:6px 12px;">`
+      +safe.replace(/^<details[^>]*>/i,'').replace(/<\/details>$/i,'')
+      +'</details>');
+    return`\x00BLK${bi}\x00`;
+  });
   s=escHtml(s);
-  s=s.replace(/^### (.+)$/gm,(_,t)=>`<h3 style="margin:8px 0 4px;font-size:15px;">${inlineMarkdown(t)}</h3>`);
-  s=s.replace(/^## (.+)$/gm,(_,t)=>`<h2 style="margin:10px 0 4px;font-size:17px;">${inlineMarkdown(t)}</h2>`);
-  s=s.replace(/^# (.+)$/gm,(_,t)=>`<h1 style="margin:12px 0 4px;font-size:20px;">${inlineMarkdown(t)}</h1>`);
-  s=s.replace(/((?:^[^\n]*\|[^\n]*\n)+)/gm,(tableBlock)=>{
+  s=s.replace(/^###### (.+)$/gm,(_,t)=>`<h6 style="margin:6px 0 2px;font-size:12px;">${inlineMarkdown(unescHtml(t))}</h6>`);
+  s=s.replace(/^##### (.+)$/gm,(_,t)=>`<h5 style="margin:6px 0 2px;font-size:13px;">${inlineMarkdown(unescHtml(t))}</h5>`);
+  s=s.replace(/^#### (.+)$/gm,(_,t)=>`<h4 style="margin:6px 0 3px;font-size:14px;">${inlineMarkdown(unescHtml(t))}</h4>`);
+  s=s.replace(/^### (.+)$/gm,(_,t)=>`<h3 style="margin:8px 0 4px;font-size:15px;">${inlineMarkdown(unescHtml(t))}</h3>`);
+  s=s.replace(/^## (.+)$/gm,(_,t)=>`<h2 style="margin:10px 0 4px;font-size:17px;">${inlineMarkdown(unescHtml(t))}</h2>`);
+  s=s.replace(/^# (.+)$/gm,(_,t)=>`<h1 style="margin:12px 0 4px;font-size:20px;">${inlineMarkdown(unescHtml(t))}</h1>`);
+  // Horizontal rules: ---, ***, ___
+  s=s.replace(/^(?:---|\*\*\*|___)\s*$/gm,'<hr style="border:none;border-top:2px solid var(--border,#aaa);margin:12px 0;">');
+  // Blockquotes: lines starting with >
+  s=s.replace(/((?:^&gt;[^\n]*(?:\n|$))+)/gm,(block)=>{
+    let inner=block;while(/^(?:&gt;)+/m.test(inner)){inner=inner.replace(/^&gt; ?/gm,'');}inner=inner.trimEnd();
+    return`<blockquote style="border-left:3px solid var(--accent);margin:6px 0;padding:4px 12px;color:var(--muted);font-style:italic;">${inlineMarkdown(inner).replace(/\n/g,'<br>')}</blockquote>\n\n`;
+  });
+  const _fnDefs={};
+  s=s.replace(/^\[\^([^\]]+)\]: (.+)$/gm,(_,id,def)=>{_fnDefs[id]=def;return'';});
+  s=s.replace(/\[\^([^\]]+)\]/g,(_,id)=>_fnDefs[id]?`<sup title="${escHtml(_fnDefs[id])}" style="cursor:help;color:var(--accent,#3d7eff);font-size:.75em;">[${escHtml(id)}]</sup>`:`<sup style="color:var(--accent,#3d7eff);font-size:.75em;">[${escHtml(id)}]</sup>`);
+  s=s.replace(/((?:^[^\n]*\|[^\n]*(?:\n|$))+)/gm,(tableBlock)=>{
     const lines=tableBlock.trim().split('\n');if(lines.length<2)return tableBlock;
     const isSepRow=(line)=>/^[\|\-\s:]+$/.test(line);if(!isSepRow(lines[1]))return tableBlock;
-    const parseRow=(line)=>line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+    const parseRow=(line)=>line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim().replace(/&#124;/g,'|').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>'));
     const headers=parseRow(lines[0]);
     const aligns=parseRow(lines[1]).map(c=>{if(/^:-+:$/.test(c))return'center';if(/^-+:$/.test(c))return'right';return'left';});
     const ths=headers.map((h,i)=>`<th style="text-align:${aligns[i]||'left'};padding:6px 12px;border-bottom:2px solid var(--border);white-space:nowrap;">${inlineMarkdown(h)}</th>`).join('');
     const trs=lines.slice(2).map(line=>{if(!line.trim()||isSepRow(line))return'';const tds=parseRow(line).map((c,i)=>`<td style="text-align:${aligns[i]||'left'};padding:5px 12px;border-bottom:1px solid var(--border);">${inlineMarkdown(c)}</td>`).join('');return`<tr>${tds}</tr>`;}).filter(Boolean).join('');
     return`<div style="overflow-x:auto;margin:8px 0;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><thead><tr style="background:var(--surface2);">${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
   });
-  s=s.replace(/^[\-\*] (.+)$/gm,(_,item)=>`<li>${inlineMarkdown(item)}</li>`);
-  s=s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g,m=>`<ul style="margin:6px 0 6px 18px;">${m}</ul>`);
-  s=s.replace(/^\d+\. (.+)$/gm,(_,item)=>`<li>${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^---$/gm,'<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
-  s=s.split(/\n{2,}/).map(p=>{p=p.trim();if(!p)return'';if(p.startsWith('<'))return p;return`<p>${inlineMarkdown(p).replace(/\n/g,'<br>')}</p>`;}).filter(Boolean).join('');
+  // Task lists before regular lists
+  s=s.replace(/^[ \t]{2,}(?:[-*+]) \[x\] (.+)$/gm,(_,item)=>`<li class="ul-sub ts"><input type="checkbox" checked disabled style="margin-right:6px;accent-color:var(--accent,#3d7eff);"> ${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^[ \t]{2,}(?:[-*+]) \[ \] (.+)$/gm,(_,item)=>`<li class="ul-sub ts"><input type="checkbox" disabled style="margin-right:6px;"> ${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^[ \t]{2,}(?:[-*+]) (.+)$/gm,(_,item)=>`<li class="ul-sub">${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^[ \t]{2,}\d+\. (.+)$/gm,(_,item)=>`<li class="ol-sub">${inlineMarkdown(item)}</li>`);
+  s=s.replace(/((?:<li class="ul-sub ts">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:2px 0 2px 24px;list-style:none;padding-left:0;">${m.replace(/ class="ul-sub ts"/g,'')}</ul>`);
+  s=s.replace(/((?:<li class="ul-sub">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:2px 0 2px 24px;list-style-type:disc;">${m.replace(/ class="ul-sub"/g,'')}</ul>`);
+  s=s.replace(/((?:<li class="ol-sub">[\s\S]*?<\/li>\n?)+)/g,m=>`<ol style="margin:2px 0 2px 24px;">${m.replace(/ class="ol-sub"/g,'')}</ol>`);
+  s=s.replace(/^(?:[-*]) \[x\] (.+)$/gim,(_,item)=>`<li class="task-item" style="list-style:none;margin-left:-18px;"><input type="checkbox" checked disabled style="margin-right:6px;accent-color:var(--accent);"> ${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^(?:[-*]) \[ \] (.+)$/gm,(_,item)=>`<li class="task-item" style="list-style:none;margin-left:-18px;"><input type="checkbox" disabled style="margin-right:6px;"> ${inlineMarkdown(item)}</li>`);
+  s=s.replace(/^(?:[-*+]) (.+)$/gm,(_,item)=>`<li class="ul-item">${inlineMarkdown(item)}</li>`);
+  s=s.replace(/((?:<li class="task-item">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:6px 0 6px 18px;list-style:none;padding-left:0;">${m.replace(/ class="task-item"/g,'')}</ul>`);
+  s=s.replace(/((?:<li class="ul-item">[\s\S]*?<\/li>(?:\n(?!<li class="ul-item">)[^\n]+)*\n?)+)/g,m=>`<ul style="margin:6px 0 6px 18px;list-style-type:disc;padding-left:20px;">${m.replace(/ class="ul-item"/g,'')}</ul>`);
+  s=s.replace(/^\d+\. (.+)$/gm,(_,item)=>`<li class="ol-item">${inlineMarkdown(item)}</li>`);
+  s=s.replace(/((?:<li class="ol-item">[\s\S]*?<\/li>(?:\n(?!<li class="ol-item">)[^\n]+)*\n?)+)/g,m=>`<ol style="margin:6px 0 6px 18px;">${m.replace(/ class="ol-item"/g,'')}</ol>`);
+  s=s.replace(/<\/ol>\n(?!\n)/g,'</ol>\n\n');
+  s=s.split(/\n{2,}/).map(p=>{p=p.trim();if(!p)return'';if(p.startsWith('<')||p.startsWith('\x00'))return p;return`<p>${inlineMarkdown(p.replace(/ {2,}\n/g,'<br>\n').replace(/(?<!<br>)\n/g,' '))}</p>`;}).filter(Boolean).join('');
   s=s.replace(/\x00BLK(\d+)\x00/g,(_,idx)=>blocks[+idx]||'');
   // DOMPurify IMMER anwenden - bei CDN-Ausfall Fallback auf Null-Output als Sicherheitsnetz.
   // Hintergrund: formatText() verwendet escHtml() fuer alle User-Inputs, aber KI-Antworten
   // koennen manipulierten HTML-artigen Text enthalten. DOMPurify ist die letzte Verteidigungslinie.
   if (typeof DOMPurify !== 'undefined') {
     s = DOMPurify.sanitize(s, {
-      ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','ul','ol','li','code','pre',
+      ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','h4','h5','h6',
+                     'ul','ol','li','code','pre',
                      'hr','table','thead','tbody','tr','th','td','div','span','button',
                      'a','u','sup','sub','mark','small','s','ins','abbr','cite','kbd',
-                     'details','summary'],
-      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64'],
+                     'details','summary','blockquote','input'],
+      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','type','checked','disabled'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
       ALLOW_DATA_ATTR: false,
@@ -2400,7 +2492,7 @@ async function processImageBlob(blob, name) {
         const msg = `Das Bild ist ${Math.round(dataUrl.length/1024)} KB groß.\nAktuelles Limit: ${Math.round(maxBytes/1024)} KB.\n\nLimit auf ${newLimitKB} KB erhöhen?`;
         if (confirm(msg)) {
           setMaxImageStorageBytes(newLimitKB * 1024);
-          toast(`🖼️ Limit auf ${newLimitKB} KB erhöht`);
+          toast(tf('js.limitRaised', {kb: newLimitKB}));
         }
       }
       attachments.push({type:'image', name: name || 'clipboard-image.png', data: dataUrl});
@@ -2812,7 +2904,7 @@ async function changeLoginPassword() {
   const currentPw  = document.getElementById('currentPwdInput')?.value || '';
   const newPw      = document.getElementById('newPwdInput')?.value || '';
   const confirmPw  = document.getElementById('confirmPwdInput')?.value || '';
-  if (!_activeAccountId) { toast('No active account'); return; }
+  if (!_activeAccountId) { toast(t('js.noActiveAccount')); return; }
   const acc = getAccount(_activeAccountId);
   if (acc?.pwHash) {
     if (!currentPw) { toast(t('js.pwdCurrentRequired')); return; }
@@ -2875,7 +2967,7 @@ function applySessionDuration() {
   startSessionCountdown(); toast(t('settings.sessionApply') || '⏱ Applied');
 }
 function resetSessionNow() {
-  if (!_activeAccountId) { toast('No active account'); return; }
+  if (!_activeAccountId) { toast(t('js.noActiveAccount')); return; }
   localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
   toast(t('js.sessionReset'));
   setTimeout(() => logoutNow(), 1200);
@@ -3022,6 +3114,14 @@ function setupEventListeners(){
   document.getElementById('newChatBtn').addEventListener('click',()=>newChat());
   document.getElementById('newFolderBtn').addEventListener('click', newFolder);
   document.getElementById('copyFullChatBtn').addEventListener('click', copyFullChat);
+  document.getElementById('printFullChatBtn').addEventListener('click', printFullChat);
+
+  // Print-Single-Bubble Overlay
+  document.getElementById('printSingleConfirm')?.addEventListener('click', printSingleBubble);
+  document.getElementById('printSingleClose')?.addEventListener('click', closePrintSingleOverlay);
+  document.getElementById('printSingleOverlay')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('printSingleOverlay')) closePrintSingleOverlay();
+  });
 
   // Chat Area
   const chatArea=document.getElementById('chatArea');
@@ -3107,6 +3207,144 @@ function setupEventListeners(){
 }
 
 // ═══════════════════════════════════════════════════════════════
+// PRINT — Vollständiger Chat & Einzelne Bubble
+// ═══════════════════════════════════════════════════════════════
+
+function printFullChat() {
+  const chat = currentChat();
+  if (!chat || !chat.messages.length) { toast(t('js.noChatToPrint')); return; }
+  // Titel setzen (nur bei @media print sichtbar)
+  const titleEl = document.getElementById('printChatTitle');
+  if (titleEl) {
+    const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
+    titleEl.textContent = `${chat.title}  —  ${date}`;
+  }
+  // MathJax neu typesetten falls nötig, dann drucken
+  if (window.MathJax && MathJax.typesetPromise) {
+    MathJax.typesetPromise().then(() => { window.print(); }).catch(() => { window.print(); });
+  } else {
+    window.print();
+  }
+}
+
+// _printSingleIdx: Index der Bubble die gerade gedruckt werden soll
+let _printSingleIdx = null;
+
+function openPrintSingleOverlay(idx) {
+  idx = safeIdx(idx); if (idx === null) return;
+  const chat = currentChat(); if (!chat) return;
+  const msg = chat.messages[idx]; if (!msg) return;
+
+  let text = '';
+  if (typeof msg.content === 'string') text = msg.content;
+  else if (Array.isArray(msg.content))
+    text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
+
+  _printSingleIdx = idx;
+  const contentEl = document.getElementById('printSingleContent');
+  // Show formatted preview (same as chat rendering)
+  if (contentEl) {
+    contentEl.innerHTML = formatText(text);
+    // Trigger MathJax typesetting for the overlay content
+    if (window.MathJax && MathJax.typesetPromise) {
+      MathJax.typesetPromise([contentEl]).catch(() => {});
+    }
+  }
+  document.getElementById('printSingleOverlay')?.classList.add('show');
+}
+
+function closePrintSingleOverlay() {
+  _printSingleIdx = null;
+  document.getElementById('printSingleOverlay')?.classList.remove('show');
+}
+
+function printSingleBubble() {
+  if (_printSingleIdx === null) return;
+  const chat = currentChat(); if (!chat) return;
+  const msg = chat.messages[_printSingleIdx]; if (!msg) return;
+
+  let text = '';
+  if (typeof msg.content === 'string') text = msg.content;
+  else if (Array.isArray(msg.content))
+    text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
+
+  // Formatted HTML via formatText (same rendering as in chat)
+  const formattedHtml = formatText(text);
+  const role = msg.role === 'user' ? 'Du' : (splitModelId(msg._model || config.model).modelId || 'KI');
+  const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const win = window.open('', '_blank', 'width=820,height=700');
+  if (!win) { toast(t('js.popupBlocked')); return; }
+  win.document.write(`<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <title>Nachricht von ${escHtml(role)}</title>
+    <script>
+      window.MathJax = {
+        tex: { inlineMath:[['$','$'],['\\\\(','\\\\)']], displayMath:[['$$','$$'],['\\\\[','\\\\]']], processEscapes:true },
+        options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
+        startup: { typeset: true },
+      };
+    <\/script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js" crossorigin="anonymous"><\/script>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; }
+      body { font-family: Georgia, 'Times New Roman', serif; max-width: 740px; margin: 40px auto; color: #111; font-size: 12pt; line-height: 1.65; }
+      .meta { font-size: 10pt; color: #555; margin-bottom: 16px; border-bottom: 1px solid #ccc; padding-bottom: 8px; }
+      p  { margin: 0 0 10px; }
+      p:last-child { margin-bottom: 0; }
+      strong { font-weight: 700; }
+      em     { font-style: italic; }
+      del    { text-decoration: line-through; }
+      h1 { font-size: 18pt; margin: 14px 0 6px; }
+      h2 { font-size: 15pt; margin: 12px 0 4px; }
+      h3 { font-size: 13pt; margin: 10px 0 4px; }
+      ul, ol { margin: 6px 0 6px 22px; }
+      li { margin-bottom: 3px; }
+      code { font-family: 'Courier New', monospace; font-size: 10pt; background: #f4f4f4; padding: 1px 4px; border-radius: 3px; }
+      pre  { font-family: 'Courier New', monospace; font-size: 9.5pt; background: #f4f4f4; border: 1px solid #ddd; padding: 10px 14px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; margin: 8px 0; }
+      pre code { background: none; padding: 0; }
+      .code-block { margin: 8px 0; }
+      .code-block-header { display: none; }
+      .math-block { display: block; margin: 10px 0; }
+      table { border-collapse: collapse; width: 100%; font-size: 11pt; margin: 8px 0; }
+      th, td { border: 1px solid #bbb; padding: 5px 10px; }
+      th { background: #eef; }
+      hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
+      @media print {
+        body { margin: 20px; }
+        .code-block-header { display: none !important; }
+      }
+    </style>
+  </head><body>
+    <div class="meta"><strong>${escHtml(role)}</strong> · ${escHtml(date)}</div>
+    <div class="content">${formattedHtml}</div>
+    <script>
+      var _printed = false;
+      function doPrint() {
+        if (_printed) return;
+        _printed = true;
+        if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
+          MathJax.startup.promise.then(() => {
+            MathJax.typesetPromise().then(() => { window.print(); }).catch(() => { window.print(); });
+          }).catch(() => { window.print(); });
+        } else {
+          window.print();
+        }
+      }
+      if (document.readyState === 'complete') {
+        setTimeout(doPrint, 300);
+      } else {
+        window.addEventListener('load', function() { setTimeout(doPrint, 300); });
+      }
+      // Hard fallback: falls MathJax nach 4s noch nicht fertig
+      setTimeout(function() { if (!_printed) doPrint(); }, 4000);
+    <\/script>
+  </body></html>`);
+  win.document.close();
+  win.focus();
+  closePrintSingleOverlay();
+}
+
+// ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
 (async()=>{
@@ -3145,8 +3383,10 @@ async function bootApp() {
   renderSidebar();
   if (!chats.length) { newChat(); }
   else {
-    if (!currentChatId || !chats.find(c => c.id === currentChatId)) currentChatId = chats[0].id;
-    renderSidebar();
+    // Falls der gespeicherte currentChatId nicht existiert, nutze den ersten Chat
+    if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
+      currentChatId = chats[0].id;
+    }
     renderMessages(currentChat()?.messages || []);
   }
   if (providers.length && providers.some(p => p.apiKey)) fetchModels();

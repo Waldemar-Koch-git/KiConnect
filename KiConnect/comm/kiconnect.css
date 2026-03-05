@@ -1,5 +1,5 @@
 /* ================================================================
-   kiconnect.css  –  KI Connect styles v2.0 rdy
+   kiconnect.css  –  KI Connect styles
    ================================================================ */
 
 
@@ -858,4 +858,105 @@ textarea::placeholder { color: var(--muted); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Print Single Overlay ──────────────────────────────────────────────────── */
+#printSingleOverlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 9000;
+  align-items: center; justify-content: center;
+}
+#printSingleOverlay.show { display: flex; }
+#printSingleBox {
+  background: var(--surface, #1a1d24);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  width: min(680px, 92vw);
+  max-height: 80vh;
+  display: flex; flex-direction: column; gap: 14px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+}
+#printSingleBox h3 { margin: 0; font-size: 15px; }
+.print-single-bubble {
+  flex: 1; overflow-y: auto;
+  background: var(--ai-bg, #12151c);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  font-size: 14px; line-height: 1.65;
+  /* Inherit bubble markdown styles */
+}
+/* Markdown inside preview */
+.print-single-bubble p      { margin: 0 0 8px; }
+.print-single-bubble strong { font-weight: 700; }
+.print-single-bubble em     { font-style: italic; }
+.print-single-bubble del    { text-decoration: line-through; }
+.print-single-bubble h1     { font-size: 20px; margin: 12px 0 4px; }
+.print-single-bubble h2     { font-size: 17px; margin: 10px 0 4px; }
+.print-single-bubble h3     { font-size: 15px; margin: 8px 0 4px; }
+.print-single-bubble ul,
+.print-single-bubble ol     { margin: 6px 0 6px 18px; }
+.print-single-bubble code   { font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; }
+.print-single-bubble pre    { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.print-single-bubble .code-block-header { display: none; }
+.print-single-bubble table  { border-collapse: collapse; width: 100%; font-size: 13px; }
+.print-single-bubble th, .print-single-bubble td { border: 1px solid var(--border); padding: 5px 10px; }
+.print-single-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ── Print ────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Reset layout constraints that clip content to one page */
+  html, body            { height: auto !important; overflow: visible !important; }
+  .main                 { display: block !important; overflow: visible !important; height: auto !important; }
+  header                { display: none !important; }
+  .sidebar              { display: none !important; }
+  .sidebar-resizer      { display: none !important; }
+  .chat-area            { display: block !important; overflow: visible !important; height: auto !important; flex: none !important; }
+  .input-area           { display: none !important; }
+  .bubble-actions       { display: none !important; }
+  .bubble-act-btn       { display: none !important; }
+  .code-copy-btn        { display: none !important; }
+  .token-badge          { display: none !important; }
+  .chat-token-total     { display: none !important; }
+  .model-label          { display: none !important; }
+  .avatar               { display: none !important; }
+  .avatar-col           { display: none !important; }
+  .overlay, .toast, .ctx-menu { display: none !important; }
+  #printChatTitle       { display: block !important; font-size: 14pt; font-weight: bold; margin-bottom: 16pt; border-bottom: 1pt solid #ccc; padding-bottom: 8pt; }
+  #dropOverlay          { display: none !important; }
+  #chatTokenTotal       { display: none !important; }
+
+  /* Messages scroll container → full height */
+  .messages {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+  }
+
+  /* Bubbles: readable, page-break-friendly */
+  .message-row          { page-break-inside: avoid; break-inside: avoid; margin-bottom: 12pt; }
+  .bubble-wrap          { width: 100% !important; max-width: 100% !important; }
+  .bubble {
+    background: #fff !important;
+    border: 1pt solid #ccc !important;
+    color: #111 !important;
+    padding: 8pt 12pt !important;
+    border-radius: 4pt !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+  }
+  .message-row.user .bubble { background: #f0f4ff !important; border-color: #b0bfee !important; }
+  .message-row.ai   .bubble { background: #f9f9f9 !important; }
+
+  /* Code blocks */
+  .bubble pre  { white-space: pre-wrap !important; word-break: break-word !important; font-size: 9pt !important; background: #f4f4f4 !important; border: 1pt solid #ddd !important; padding: 6pt !important; page-break-inside: avoid; break-inside: avoid; }
+  .code-block-header { display: none !important; }
+
+  /* Tables */
+  table { page-break-inside: avoid; break-inside: avoid; border-collapse: collapse; }
+  th, td { border: 1pt solid #bbb !important; padding: 4pt 8pt !important; color: #111 !important; }
 }
