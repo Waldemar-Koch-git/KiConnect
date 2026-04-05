@@ -271,6 +271,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Attach image',
     'input.clearAttach':       'Clear attachments',
     'js.printSingle':          '🖨️ Print',
+	
+	'js.apiDomainBlocked':       'API domain not allowed.',
+    'js.cancelSelection':        'Cancel selection',
+    'js.chosenChats':            '{n} chosen',
+    'js.selectedChats':          'Selected chats',
+    'js.selectAll':              'Select all',
+    'js.deleteSelectedItems':    'Delete selected items',
+    'js.deleteChatsConfirm':     'Delete {n} chat(s) permanently?',
+    'js.multiSelect':            'Multi Select',
+    'js.moveToFolder':           'Move to Folder',
+    'js.imageTooBigDialog':      'The image is {size} KB.\nCurrent limit: {limit} KB.\n\nRaise limit to {newLimit} KB?',
+    'js.originalReattach':       'Original — re-attach to replace',
+    'js.printMessageFrom':       'Message from {role}'
   },
   
   de: {
@@ -512,6 +525,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Bild anhängen',
     'input.clearAttach':       'Anhänge entfernen',
     'js.printSingle':          '🖨️ Drucken',
+	
+	'js.apiDomainBlocked':       'API-Domain nicht erlaubt.',
+    'js.cancelSelection':        'Auswahl beenden',
+    'js.chosenChats':            '{n} ausgewählt',
+    'js.selectedChats':          'Ausgewählte Chats',
+    'js.selectAll':              'Alle auswählen',
+    'js.deleteSelectedItems':    'Ausgewählte löschen',
+    'js.deleteChatsConfirm':     '{n} Chat(s) endgültig löschen?',
+    'js.multiSelect':            'Mehrfachauswahl',
+    'js.moveToFolder':           'In Ordner verschieben',
+    'js.imageTooBigDialog':      'Das Bild ist {size} KB groß.\nAktuelles Limit: {limit} KB.\n\nLimit auf {newLimit} KB erhöhen?',
+    'js.originalReattach':       'Original — neu anhängen zum Ersetzen',
+    'js.printMessageFrom':       'Nachricht von {role}'
   },
 
   // ── Add further languages below this line ──────────────────────
@@ -603,6 +629,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Joindre une image',
     'input.clearAttach':       'Supprimer les pièces jointes',
     'js.printSingle':          '🖨️ Imprimer',
+	
+	'js.apiDomainBlocked':       'Domaine API non autorisé.',
+    'js.cancelSelection':        'Annuler la sélection',
+    'js.chosenChats':            '{n} sélectionnés',
+    'js.selectedChats':          'Chats sélectionnés',
+    'js.selectAll':              'Tout sélectionner',
+    'js.deleteSelectedItems':    'Supprimer les éléments sélectionnés',
+    'js.deleteChatsConfirm':     'Supprimer {n} chat(s) définitivement ?',
+    'js.multiSelect':            'Sélection multiple',
+    'js.moveToFolder':           'Déplacer vers le dossier',
+    'js.imageTooBigDialog':      'L\'image fait {size} Ko.\nLimite actuelle : {limit} Ko.\n\nAugmenter la limite à {newLimit} Ko ?',
+    'js.originalReattach':       'Original — réattachez pour remplacer',
+    'js.printMessageFrom':       'Message de {role}'
   },
 
   es: {
@@ -689,6 +728,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Adjuntar imagen',
     'input.clearAttach':       'Eliminar adjuntos',
     'js.printSingle':          '🖨️ Imprimir',
+	
+	'js.apiDomainBlocked':       'Dominio de API no permitido.',
+    'js.cancelSelection':        'Cancelar selección',
+    'js.chosenChats':            '{n} seleccionados',
+    'js.selectedChats':          'Chats seleccionados',
+    'js.selectAll':              'Seleccionar todo',
+    'js.deleteSelectedItems':    'Eliminar elementos seleccionados',
+    'js.deleteChatsConfirm':     '¿Eliminar {n} chat(s) permanentemente?',
+    'js.multiSelect':            'Selección múltiple',
+    'js.moveToFolder':           'Mover a la carpeta',
+    'js.imageTooBigDialog':      'La imagen pesa {size} KB.\nLímite actual: {limit} KB.\n\n¿Aumentar límite a {newLimit} KB?',
+    'js.originalReattach':       'Original — volver a adjuntar para reemplazar',
+    'js.printMessageFrom':       'Mensaje de {role}'
   },
 
   it: {
@@ -775,6 +827,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Allega immagine',
     'input.clearAttach':       'Rimuovi allegati',
     'js.printSingle':          '🖨️ Stampa',
+	
+	'js.apiDomainBlocked':       'Dominio API non consentito.',
+    'js.cancelSelection':        'Annulla selezione',
+    'js.chosenChats':            '{n} selezionati',
+    'js.selectedChats':          'Chat selezionate',
+    'js.selectAll':              'Seleziona tutto',
+    'js.deleteSelectedItems':    'Elimina elementi selezionati',
+    'js.deleteChatsConfirm':     'Eliminare {n} chat in modo permanente?',
+    'js.multiSelect':            'Selezione multipla',
+    'js.moveToFolder':           'Sposta nella cartella',
+    'js.imageTooBigDialog':      'L\'immagine è di {size} KB.\nLimite attuale: {limit} KB.\n\nAumentare il limite a {newLimit} KB?',
+    'js.originalReattach':       'Originale — riallega per sostituire',
+    'js.printMessageFrom':       'Messaggio da {role}'
   },
 
   tr: {
@@ -861,6 +926,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Resim ekle',
     'input.clearAttach':       'Ekleri temizle',
     'js.printSingle':          '🖨️ Yazdır',
+	
+	'js.apiDomainBlocked':       'API alan adına izin verilmiyor.',
+    'js.cancelSelection':        'Seçimi iptal et',
+    'js.chosenChats':            '{n} seçildi',
+    'js.selectedChats':          'Seçili sohbetler',
+    'js.selectAll':              'Hepsini seç',
+    'js.deleteSelectedItems':    'Seçili öğeleri sil',
+    'js.deleteChatsConfirm':     '{n} sohbet kalıcı olarak silinsin mi?',
+    'js.multiSelect':            'Çoklu Seçim',
+    'js.moveToFolder':           'Klasöre taşı',
+    'js.imageTooBigDialog':      'Resim {size} KB.\nGüncel limit: {limit} KB.\n\nLimit {newLimit} KB\'a çıkarılsın mı?',
+    'js.originalReattach':       'Orijinal — değiştirmek için tekrar ekleyin',
+    'js.printMessageFrom':       '{role} tarafından gönderilen mesaj'
   },
 
   ru: {
@@ -947,6 +1025,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Прикрепить изображение',
     'input.clearAttach':       'Удалить вложения',
     'js.printSingle':          '🖨️ Печать',
+	
+	'js.apiDomainBlocked':       'API-домен не разрешен.',
+    'js.cancelSelection':        'Отменить выбор',
+    'js.chosenChats':            'Выбрано: {n}',
+    'js.selectedChats':          'Выбранные чаты',
+    'js.selectAll':              'Выбрать все',
+    'js.deleteSelectedItems':    'Удалить выбранные элементы',
+    'js.deleteChatsConfirm':     'Удалить {n} чат(ов) навсегда?',
+    'js.multiSelect':            'Множественный выбор',
+    'js.moveToFolder':           'Переместить в папку',
+    'js.imageTooBigDialog':      'Размер изображения {size} КБ.\nТекущий лимит: {limit} КБ.\n\nУвеличить лимит до {newLimit} КБ?',
+    'js.originalReattach':       'Оригинал — прикрепите заново для замены',
+    'js.printMessageFrom':       'Сообщение от {role}'
   },
   
   el: {
@@ -1197,6 +1288,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'Επισύναψη εικόνας',
     'input.clearAttach':       'Εκκαθάριση συνημμένων',
     'js.printSingle':          '🖨️ Εκτύπωση',
+	
+	'js.apiDomainBlocked':       'Ο τομέας API δεν επιτρέπεται.',
+    'js.cancelSelection':        'Ακύρωση επιλογής',
+    'js.chosenChats':            '{n} επιλεγμένα',
+    'js.selectedChats':          'Επιλεγμένες συνομιλίες',
+    'js.selectAll':              'Επιλογή όλων',
+    'js.deleteSelectedItems':    'Διαγραφή επιλεγμένων',
+    'js.deleteChatsConfirm':     'Οριστική διαγραφή {n} συνομιλιών;',
+    'js.multiSelect':            'Πολλαπλή επιλογή',
+    'js.moveToFolder':           'Μετακίνηση σε φάκελο',
+    'js.imageTooBigDialog':      'Η εικόνα είναι {size} KB.\nΤρέχον όριο: {limit} KB.\n\nΑύξηση ορίου σε {newLimit} KB;',
+    'js.originalReattach':       'Πρωτότυπο — επανασυνδέστε για αντικατάσταση',
+    'js.printMessageFrom':       'Μήνυμα από {role}'
   },
 
   zh: {
@@ -1283,6 +1387,19 @@ const TRANSLATIONS = {
     'input.attachImage':       '附加图片',
 	'input.clearAttach':       '清除附件',
     'js.printSingle':          '🖨️ 打印',
+	
+	'js.apiDomainBlocked':       '不允许的 API 域名。',
+    'js.cancelSelection':        '取消选择',
+    'js.chosenChats':            '已选择 {n} 个',
+    'js.selectedChats':          '选定的聊天',
+    'js.selectAll':              '全选',
+    'js.deleteSelectedItems':    '删除选定项目',
+    'js.deleteChatsConfirm':     '永久删除这 {n} 个聊天吗？',
+    'js.multiSelect':            '多选',
+    'js.moveToFolder':           '移动到文件夹',
+    'js.imageTooBigDialog':      '图片大小为 {size} KB。\n当前限制：{limit} KB。\n\n将限制提高到 {newLimit} KB 吗？',
+    'js.originalReattach':       '原始文件 — 重新附加以替换',
+    'js.printMessageFrom':       '来自 {role} 的消息'
   },
 
   ar: {
@@ -1369,6 +1486,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'إرفاق صورة',
     'input.clearAttach':       'إزالة المرفقات',
     'js.printSingle':          '🖨️ طباعة',
+	
+	'js.apiDomainBlocked':       'نطاق API غير مسموح به.',
+    'js.cancelSelection':        'إلغاء التحديد',
+    'js.chosenChats':            'تم اختيار {n}',
+    'js.selectedChats':          'المحادثات المختارة',
+    'js.selectAll':              'تحديد الكل',
+    'js.deleteSelectedItems':    'حذف العناصر المختارة',
+    'js.deleteChatsConfirm':     'هل تريد حذف {n} محادثة بشكل دائم؟',
+    'js.multiSelect':            'تحديد متعدد',
+    'js.moveToFolder':           'نقل إلى المجلد',
+    'js.imageTooBigDialog':      'حجم الصورة {size} كب.\nالحد الحالي: {limit} كب.\n\nهل تريد رفع الحد إلى {newLimit} كب؟',
+    'js.originalReattach':       'الأصل — أعد الإرفاق للاستبدال',
+    'js.printMessageFrom':       'رسالة من {role}'
   },
 
   hi: {
@@ -1455,6 +1585,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'छवि संलग्न करें',
     'input.clearAttach':       'संलग्नक हटाएं',
     'js.printSingle':          '🖨️ प्रिंट',
+	
+	'js.apiDomainBlocked':       'API डोमेन की अनुमति नहीं है।',
+    'js.cancelSelection':        'चयन रद्द करें',
+    'js.chosenChats':            '{n} चुने गए',
+    'js.selectedChats':          'चुनी गई चैट',
+    'js.selectAll':              'सभी चुनें',
+    'js.deleteSelectedItems':    'चुने हुए आइटम हटाएं',
+    'js.deleteChatsConfirm':     'क्या {n} चैट को स्थायी रूप से हटाना चाहते हैं?',
+    'js.multiSelect':            'मल्टी सेलेक्ट',
+    'js.moveToFolder':           'फ़ोल्डर में ले जाएं',
+    'js.imageTooBigDialog':      'छवि {size} KB की है।\nवर्तमान सीमा: {limit} KB।\n\nक्या सीमा को {newLimit} KB तक बढ़ाना है?',
+    'js.originalReattach':       'ओरिजिनल — बदलने के लिए फिर से जोड़ें',
+    'js.printMessageFrom':       '{role} का संदेश'
   },
 
   ta: {
@@ -1541,6 +1684,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'படம் இணை',
     'input.clearAttach':       'இணைப்புகளை அழி',
     'js.printSingle':          '🖨️ அச்சிடு',
+	
+	'js.apiDomainBlocked':       'API டொமைன் அனுமதிக்கப்படவில்லை.',
+    'js.cancelSelection':        'தேர்வை ரத்துசெய்',
+    'js.chosenChats':            '{n} தேர்ந்தெடுக்கப்பட்டது',
+    'js.selectedChats':          'தேர்ந்தெடுக்கப்பட்ட அரட்டைகள்',
+    'js.selectAll':              'அனைத்தையும் தேர்ந்தெடு',
+    'js.deleteSelectedItems':    'தேர்ந்தெடுக்கப்பட்டவற்றை நீக்கு',
+    'js.deleteChatsConfirm':     '{n} அரட்டைகளை நிரந்தரமாக நீக்கவா?',
+    'js.multiSelect':            'மல்டி செலக்ட்',
+    'js.moveToFolder':           'கோப்புறைக்கு நகர்த்து',
+    'js.imageTooBigDialog':      'படத்தின் அளவு {size} KB.\nதற்போதைய வரம்பு: {limit} KB.\n\nவரம்பை {newLimit} KB ஆக உயர்த்தவா?',
+    'js.originalReattach':       'அசல் — மாற்ற மீண்டும் இணைக்கவும்',
+    'js.printMessageFrom':       '{role}-லிருந்து செய்தி'
   },
 
   bn: {
@@ -1627,6 +1783,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'ছবি সংযুক্ত করুন',
     'input.clearAttach':       'সংযুক্তি সরান',
     'js.printSingle':          '🖨️ প্রিন্ট',
+	
+	'js.apiDomainBlocked':       'API ডোমেইন অনুমোদিত নয়।',
+    'js.cancelSelection':        'নির্বাচন বাতিল করুন',
+    'js.chosenChats':            '{n}টি নির্বাচিত',
+    'js.selectedChats':          'নির্বাচিত চ্যাট',
+    'js.selectAll':              'সব নির্বাচন করুন',
+    'js.deleteSelectedItems':    'নির্বাচিত আইটেম মুছুন',
+    'js.deleteChatsConfirm':     'স্থায়ীভাবে {n}টি চ্যাট মুছবেন কি?',
+    'js.multiSelect':            'মাল্টি সিলেক্ট',
+    'js.moveToFolder':           'ফোল্ডারে সরান',
+    'js.imageTooBigDialog':      'ছবিটি {size} KB।\nবর্তমান সীমা: {limit} KB।\n\nসীমা {newLimit} KB এ বাড়াবেন?',
+    'js.originalReattach':       'আসল — প্রতিস্থাপন করতে আবার সংযুক্ত করুন',
+    'js.printMessageFrom':       '{role} এর থেকে বার্তা'
   },
 
   pa: {
@@ -1713,6 +1882,19 @@ const TRANSLATIONS = {
     'input.attachImage':       'ਤਸਵੀਰ ਨੱਥੀ ਕਰੋ',
     'input.clearAttach':       'ਨੱਥੀਆਂ ਹਟਾਓ',
     'js.printSingle':          '🖨️ ਪ੍ਰਿੰਟ',
+	
+	'js.apiDomainBlocked':       'API ਡੋਮੇਨ ਦੀ ਇਜਾਜ਼ਤ ਨਹੀਂ ਹੈ।',
+    'js.cancelSelection':        'ਚੋਣ ਰੱਦ ਕਰੋ',
+    'js.chosenChats':            '{n} ਚੁਣੇ ਗਏ',
+    'js.selectedChats':          'ਚੁਣੀਆਂ ਗਈਆਂ ਚੈਟਾਂ',
+    'js.selectAll':              'ਸਭ ਚੁਣੋ',
+    'js.deleteSelectedItems':    'ਚੁਣੀਆਂ ਆਈਟਮਾਂ ਹਟਾਓ',
+    'js.deleteChatsConfirm':     'ਕੀ {n} ਚੈਟਾਂ ਨੂੰ ਪੱਕੇ ਤੌਰ \'ਤੇ ਹਟਾਉਣਾ ਚਾਹੁੰਦੇ ਹੋ?',
+    'js.multiSelect':            'ਮਲਟੀ ਸਿਲੈਕਟ',
+    'js.moveToFolder':           'ਫੋਲਡਰ ਵਿੱਚ ਭੇਜੋ',
+    'js.imageTooBigDialog':      'ਤਸਵੀਰ {size} KB ਦੀ ਹੈ।\nਮੌਜੂਦਾ ਸੀਮਾ: {limit} KB।\n\nਕੀ ਸੀਮਾ ਨੂੰ {newLimit} KB ਤੱਕ ਵਧਾਉਣਾ ਹੈ?',
+    'js.originalReattach':       'ਅਸਲੀ — ਬਦਲਣ ਲਈ ਦੁਬਾਰਾ ਨੱਥੀ ਕਰੋ',
+    'js.printMessageFrom':       '{role} ਦਾ ਸੁਨੇਹਾ'
   },
 
   ur: {
@@ -1799,5 +1981,18 @@ const TRANSLATIONS = {
     'input.attachImage':       'تصویر منسلک کریں',
     'input.clearAttach':       'منسلکات ہٹائیں',
     'js.printSingle':          '🖨️ پرنٹ',
+	
+	'js.apiDomainBlocked':       'API ڈومین کی اجازت نہیں ہے۔',
+    'js.cancelSelection':        'انتخاب منسوخ کریں',
+    'js.chosenChats':            '{n} منتخب',
+    'js.selectedChats':          'منتخب کردہ چیٹس',
+    'js.selectAll':              'سب منتخب کریں',
+    'js.deleteSelectedItems':    'منتخب اشیاء حذف کریں',
+    'js.deleteChatsConfirm':     'کیا آپ {n} چیٹس مستقل طور پر حذف کرنا چاہتے ہیں؟',
+    'js.multiSelect':            'ملٹی سلیکٹ',
+    'js.moveToFolder':           'فولڈر میں منتقل کریں',
+    'js.imageTooBigDialog':      'تصویر کا سائز {size} KB ہے۔\nموجودہ حد: {limit} KB ہے۔\n\nکیا حد کو {newLimit} KB تک بڑھانا ہے؟',
+    'js.originalReattach':       'اصل — تبدیل کرنے کے لیے دوبارہ منسلک کریں',
+    'js.printMessageFrom':       '{role} کا پیغام'
   },
 };

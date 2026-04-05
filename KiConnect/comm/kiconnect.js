@@ -263,6 +263,9 @@ let editingProviderId = null;
 let draggedChatId   = null;
 let draggedFolderId = null;   // NEW: folder drag state
 let sidebarCollapsed = false;
+// Multi-select state
+let _selectedChatIds = new Set();
+let _multiSelectMode = false;
 
 // ═══════════════════════════════════════════════════════════════
 // CRYPTO — PBKDF2 + Full Storage Encryption
@@ -750,7 +753,7 @@ function isSafeApiUrl(url) {
   } catch { return false; }
 }
 function proxyUrl(url) {
-  if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error('API-Domain nicht erlaubt.'); }
+  if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
   return USE_PROXY ? '/proxy/' + url : url;
 }
 
@@ -1421,7 +1424,10 @@ function newChat(folderId=null) {
 }
 function switchChat(id) {
   currentChatId = id;
-  localStorage.setItem(accountKey('current_chat'), id);
+  // Persist via server store (encrypted) – not raw localStorage
+  _storePut(_activeAccountId, 'current_chat', id).catch(() => {
+    localStorage.setItem(accountKey('current_chat'), id);
+  });
   renderSidebar();
   const c = chats.find(x=>x.id===id);
   if (c) renderMessages(c.messages);
@@ -1454,21 +1460,100 @@ function showChatCtxMenu(e, chatId) {
   e.preventDefault(); e.stopPropagation();
   const menu = document.getElementById('ctxMenu');
   menu.innerHTML = '';
+
+  // Rename
   const renameItem = document.createElement('div');
   renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
   renameItem.dataset.id = chatId;
   renameItem.addEventListener('click', () => { startRenamingChat(renameItem.dataset.id); hideCtx(); });
+
+  // Move to folder submenu
+  if (folders.length > 0) {
+    const moveItem = document.createElement('div');
+    moveItem.className = 'ctx-item ctx-item-submenu';
+    moveItem.textContent = '📂 ' + (t('js.moveToFolder') || 'Move to Folder') + ' ▶';
+    const submenu = document.createElement('div');
+    submenu.className = 'ctx-submenu';
+    // "No folder" option
+    const noFolderOpt = document.createElement('div');
+    noFolderOpt.className = 'ctx-item';
+    noFolderOpt.textContent = t('js.noFolder') || '— No Folder —';
+    noFolderOpt.addEventListener('click', () => { moveChat(chatId, null); hideCtx(); });
+    submenu.appendChild(noFolderOpt);
+    folders.forEach(f => {
+      const opt = document.createElement('div');
+      opt.className = 'ctx-item';
+      const chat = chats.find(c => c.id === chatId);
+      if (chat && chat.folderId === f.id) opt.style.opacity = '0.5';
+      opt.textContent = f.name;
+      opt.dataset.fid = f.id;
+      opt.addEventListener('click', () => { moveChat(chatId, opt.dataset.fid); hideCtx(); });
+      submenu.appendChild(opt);
+    });
+    moveItem.appendChild(submenu);
+    moveItem.addEventListener('mouseenter', () => submenu.classList.add('open'));
+    moveItem.addEventListener('mouseleave', () => submenu.classList.remove('open'));
+    menu.appendChild(renameItem);
+    menu.appendChild(moveItem);
+  } else {
+    menu.appendChild(renameItem);
+  }
+
   const delItem = document.createElement('div');
   delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
   delItem.dataset.id = chatId;
   delItem.addEventListener('click', () => { deleteChat(delItem.dataset.id); hideCtx(); });
-  menu.appendChild(renameItem); menu.appendChild(delItem);
+  menu.appendChild(delItem);
+
   menu.style.display = 'block';
-  menu.style.left = Math.min(e.clientX, window.innerWidth-170)+'px';
-  menu.style.top  = Math.min(e.clientY, window.innerHeight-80)+'px';
+  const x = Math.min(e.clientX, window.innerWidth-180);
+  const y = Math.min(e.clientY, window.innerHeight-120);
+  menu.style.left = x+'px';
+  menu.style.top  = y+'px';
 }
 function hideCtx() { document.getElementById('ctxMenu').style.display='none'; }
 document.addEventListener('click', hideCtx);
+
+// ── Multi-select helpers ──────────────────────────────────────────
+function toggleChatSelect(id) {
+  if (_selectedChatIds.has(id)) _selectedChatIds.delete(id);
+  else _selectedChatIds.add(id);
+  if (_selectedChatIds.size === 0) _multiSelectMode = false;
+  renderSidebar();
+}
+function enterMultiSelectMode() {
+  _multiSelectMode = true;
+  _selectedChatIds.clear();
+  document.body.classList.add('multiselect-active');
+  renderSidebar();
+}
+function exitMultiSelectMode() {
+  _multiSelectMode = false;
+  _selectedChatIds.clear();
+  document.body.classList.remove('multiselect-active');
+  renderSidebar();
+}
+function deleteSelectedChats() {
+  if (_selectedChatIds.size === 0) return;
+  const ids = [..._selectedChatIds];
+  ids.forEach(id => {
+    chats = chats.filter(c => c.id !== id);
+  });
+  if (ids.includes(currentChatId)) {
+    currentChatId = chats[0]?.id || null;
+    if (currentChatId) renderMessages(currentChat().messages);
+    else {
+      const cont = document.getElementById('messages');
+      const empty = document.getElementById('emptyState');
+      Array.from(cont.children).forEach(el => { if(el!==empty) el.remove(); });
+      if (empty) empty.style.display = '';
+    }
+  }
+  _selectedChatIds.clear();
+  _multiSelectMode = false;
+  document.body.classList.remove('multiselect-active');
+  save(); renderSidebar();
+}
 function onDragStart(e, id) { draggedChatId=id; e.dataTransfer.effectAllowed='move'; }
 function onDropFolder(e, folderId) {
   e.preventDefault();
@@ -1480,6 +1565,74 @@ function onDropFolder(e, folderId) {
 function renderSidebar() {
   const container = document.getElementById('folderContainer');
   container.innerHTML = '';
+
+  // Multi-select toolbar
+  const actionsEl = document.querySelector('.sidebar-actions');
+  let msBar = document.getElementById('multiSelectBar');
+  if (actionsEl) {
+    if (!msBar) {
+      msBar = document.createElement('div');
+      msBar.id = 'multiSelectBar';
+      msBar.style.cssText = 'display:none;align-items:center;gap:4px;padding:4px 6px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0;';
+      actionsEl.parentNode.insertBefore(msBar, actionsEl);
+    }
+    if (_multiSelectMode) {
+      msBar.style.display = 'flex';
+      msBar.innerHTML = '';
+      // Cancel button
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'sidebar-action-btn';
+      cancelBtn.title = t('js.cancelSelection') || 'Cancel selection';
+      cancelBtn.textContent = '✕';
+      cancelBtn.style.cssText = 'flex:0 0 auto;min-width:28px;';
+      cancelBtn.addEventListener('click', exitMultiSelectMode);
+      // Count label
+      const countLbl = document.createElement('span');
+      countLbl.style.cssText = 'flex:1;font-size:11px;color:var(--muted);font-family:"IBM Plex Mono",monospace;';
+      countLbl.textContent = _selectedChatIds.size > 0 ? tf('js.chosenChats', {n: _selectedChatIds.size}) : (t('js.selectedChats') || 'Selected chats');
+      // Select all
+      const selAllBtn = document.createElement('button');
+      selAllBtn.className = 'sidebar-action-btn';
+      selAllBtn.title = t('js.selectAll') || 'Select all';
+      selAllBtn.textContent = '☑';
+      selAllBtn.style.cssText = 'flex:0 0 auto;min-width:28px;';
+      selAllBtn.addEventListener('click', () => {
+        chats.forEach(c => _selectedChatIds.add(c.id));
+        renderSidebar();
+      });
+      // Delete selected
+      const delBtn = document.createElement('button');
+      delBtn.className = 'sidebar-action-btn';
+      delBtn.title = t('js.deleteSelectedItems') || 'Delete selected items';
+      delBtn.textContent = '🗑';
+      delBtn.style.cssText = 'flex:0 0 auto;min-width:28px;color:var(--red);';
+      delBtn.disabled = _selectedChatIds.size === 0;
+      delBtn.addEventListener('click', () => {
+        if (_selectedChatIds.size === 0) return;
+        if (confirm(tf('js.deleteChatsConfirm', {n: _selectedChatIds.size}))) deleteSelectedChats();
+      });
+      msBar.appendChild(cancelBtn);
+      msBar.appendChild(countLbl);
+      msBar.appendChild(selAllBtn);
+      msBar.appendChild(delBtn);
+      // Add multi-select toggle to normal actions bar (hide it)
+      actionsEl.style.display = 'none';
+    } else {
+      msBar.style.display = 'none';
+      actionsEl.style.display = '';
+      // Ensure the multi-select enter button exists in sidebar-actions
+      if (!document.getElementById('multiSelectEnterBtn')) {
+        const msBtn = document.createElement('button');
+        msBtn.className = 'sidebar-action-btn';
+        msBtn.id = 'multiSelectEnterBtn';
+        msBtn.title = t('js.multiSelect') || 'Multi Select';
+        msBtn.textContent = '☐';
+        msBtn.addEventListener('click', enterMultiSelectMode);
+        actionsEl.appendChild(msBtn);
+      }
+    }
+  }
+
   const unfiled = chats.filter(c=>!c.folderId||!folders.find(f=>f.id===c.folderId));
 
   folders.forEach(f => {
@@ -1583,20 +1736,40 @@ function renderSidebar() {
 
 function buildChatItem(c) {
   const div = document.createElement('div');
-  div.className = 'chat-item' + (c.id === currentChatId ? ' active' : '');
-  div.draggable = true;
+  const isSelected = _selectedChatIds.has(c.id);
+  div.className = 'chat-item'
+    + (c.id === currentChatId ? ' active' : '')
+    + (_multiSelectMode && isSelected ? ' multi-selected' : '');
+  div.draggable = !_multiSelectMode;
   div.dataset.id = c.id;
-  div.addEventListener('dragstart', e => { e.stopPropagation(); onDragStart(e, div.dataset.id); });
-  div.addEventListener('click',     () => switchChat(div.dataset.id));
+
+  // Checkbox for multi-select mode
+  const cb = document.createElement('span');
+  cb.className = 'chat-item-cb';
+  cb.textContent = isSelected ? '☑' : '☐';
+  cb.addEventListener('click', e => { e.stopPropagation(); toggleChatSelect(c.id); });
+
+  div.addEventListener('dragstart', e => {
+    if (_multiSelectMode) { e.preventDefault(); return; }
+    e.stopPropagation(); onDragStart(e, div.dataset.id);
+  });
+  div.addEventListener('click', () => {
+    if (_multiSelectMode) { toggleChatSelect(div.dataset.id); return; }
+    switchChat(div.dataset.id);
+  });
   div.addEventListener('contextmenu', e => showChatCtxMenu(e, div.dataset.id));
+
   const titleSpan = document.createElement('span');
   titleSpan.className = 'chat-item-title';
   titleSpan.id = `ctitle_${c.id}`;
   titleSpan.textContent = c.title;
+
   const menuBtn = document.createElement('button');
   menuBtn.className = 'chat-item-menu'; menuBtn.textContent = '⋯'; menuBtn.title = t('js.options');
   menuBtn.dataset.id = c.id;
-  menuBtn.addEventListener('click', e => showChatCtxMenu(e, menuBtn.dataset.id));
+  menuBtn.addEventListener('click', e => { e.stopPropagation(); showChatCtxMenu(e, menuBtn.dataset.id); });
+
+  div.appendChild(cb);
   div.appendChild(titleSpan);
   if (c.branchOf) { const bb=document.createElement('span'); bb.className='branch-badge'; bb.textContent='↩'; div.appendChild(bb); }
   div.appendChild(menuBtn);
@@ -1760,6 +1933,11 @@ function buildTokenBadge(usage) {
     const s=document.createElement('span'); s.className='cache'; s.title='Cache read';
     s.textContent=tf('js.tokensCacheRead',{n:usage.cache_read_input_tokens.toLocaleString()}); badge.appendChild(s);
   }
+  if (usage.cache_creation_input_tokens) {
+    const s=document.createElement('span'); s.className='cache'; s.title='Cache write';
+    s.style.opacity='0.75';
+    s.textContent='💾 '+usage.cache_creation_input_tokens.toLocaleString(); badge.appendChild(s);
+  }
   const total=(usage.input_tokens||0)+(usage.output_tokens||0);
   if (total>0) {
     const s=document.createElement('span');
@@ -1872,7 +2050,7 @@ function renderEditFileChips() {
     const icon = a.type === 'image' ? '🖼️' : '📄';
     const nameSpan = document.createElement('span');
     nameSpan.textContent = icon + ' ' + a.name;
-    if (a._storedOnly) { nameSpan.style.opacity = '0.6'; nameSpan.title = 'Original — re-attach to replace'; }
+    if (a._storedOnly) { nameSpan.style.opacity = '0.6'; nameSpan.title = t('js.originalReattach') || 'Original — re-attach to replace'; }
     const rem = document.createElement('button');
     rem.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;';
     rem.textContent = '\u2715';
@@ -2097,16 +2275,31 @@ async function sendMessageCore(text, att) {
       const anthropicMsgs=[];
       chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')anthropicMsgs.push({role:m.role,content:toAnthropicContent(m.content)});});
       anthropicMsgs.push({role:'user',content:toAnthropicContent(userContent)});
+      // Prompt Caching: mark the last assistant turn (or last history message) with cache_control
+      // so the KV cache is reused for all messages up to that point on the next turn.
+      if(anthropicMsgs.length>1){
+        const lastHistMsg=anthropicMsgs[anthropicMsgs.length-2];
+        if(lastHistMsg){
+          const c=lastHistMsg.content;
+          if(typeof c==='string'){
+            lastHistMsg.content=[{type:'text',text:c,cache_control:{type:'ephemeral'}}];
+          } else if(Array.isArray(c)&&c.length){
+            const lastPart=c[c.length-1];
+            if(lastPart&&!lastPart.cache_control)lastPart.cache_control={type:'ephemeral'};
+          }
+        }
+      }
       const{modelId:_aModelId}=splitModelId(config.model);
       const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
-      if(config.systemPrompt)body.system=config.systemPrompt;
+      // Prompt Caching: cache system prompt if present (saves tokens on every turn)
+      if(config.systemPrompt)body.system=[{type:'text',text:config.systemPrompt,cache_control:{type:'ephemeral'}}];
       if(config.thinkingEnabled&&isThinkingCapable(_aModelId)){
         const budget=usesTokenBudget(_aModelId)?(config.thinkingBudget||8000):CLAUDE_BUDGET[config.thinkingIntensity||2];
         body.thinking={type:'enabled',budget_tokens:budget};
         body.temperature=1;
         body.max_tokens=Math.max(body.max_tokens,budget+2000);
       }
-      const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
+      const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-beta':'prompt-caching-2024-07-31','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
       if(!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
       removeTyping(typingId);
       const aiEl=appendEmptyAI();
@@ -2310,133 +2503,138 @@ function inlineMarkdown(escapedText) {
 }
 
 function formatText(raw) {
-  if(!raw) return '';
-  const blocks=[];
-  let s=raw;
-  // Pre-process: collapse blank lines between consecutive list items
-  (function(){var lines=s.split('\n'),out=[],inList=false,i=0;while(i<lines.length){out.push(lines[i]);var cur=lines[i];if(/^[ \t]*(?:\d+\.|[-*+] )/.test(cur)){inList=true;}else if(cur===''){if(i+1<lines.length&&/^[ \t]*(?:\d+\.|[-*+] )/.test(lines[i+1])){if(inList)out.pop();}else{inList=false;}}i++;}s=out.join('\n');})();
-  // 4+ backtick fences first (can contain ``` inside)
-  s=s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm,(_,fence,lang,code)=>{
-    const idx=blocks.length;
-    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
-    const langLabel=escHtml((lang||'').trim()||'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
-    return`\x00BLK${idx}\x00`;
+  if (!raw) return '';
+  const blocks = [];
+  // Platzhalter: HTML-Kommentare die marked unverändert durchlässt
+  const PH = (i) => `<!--KICBLK${i}-->`;
+  const PH_RE = /<!--KICBLK(\d+)-->/g;
+  let s = raw;
+
+  // ── Schritt 1: Code- und LaTeX-Blöcke VOR marked schützen ────────
+
+  // 4+-Backtick-Fences
+  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => {
+    const i = blocks.length;
+    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const ll = escHtml((lang || '').trim() || 'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    return PH(i);
   });
-  // 3 backtick fences (standard)
-  s=s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm,(_,lang,code)=>{
-    const idx=blocks.length;
-    const b64=btoa(unescape(encodeURIComponent(code)));
-    const langLabel=escHtml(lang||'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${langLabel}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
-    return`\x00BLK${idx}\x00`;
+
+  // 3-Backtick-Fences
+  s = s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => {
+    const i = blocks.length;
+    const b64 = btoa(unescape(encodeURIComponent(code)));
+    const ll = escHtml(lang || 'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    return PH(i);
   });
-  // Bug 13: unclosed 4-backtick fence fallback
-  s=s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm,(_,fence,lang,code)=>{
-    const bi=blocks.length;
-    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
-    const ll=escHtml((lang||'').trim()||'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
-    return`\x00BLK${bi}\x00`;
+
+  // Nicht-geschlossene Fences (Fallback)
+  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => {
+    const i = blocks.length;
+    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const ll = escHtml((lang || '').trim() || 'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    return PH(i);
   });
-  // Bug 13: unclosed 3-backtick fence fallback
-  s=s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm,(_,lang,code)=>{
-    const bi=blocks.length;
-    const b64=btoa(unescape(encodeURIComponent(code.replace(/\n$/,''))));
-    const ll=escHtml(lang||'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/,''))}</code></pre></div>`);
-    return`\x00BLK${bi}\x00`;
+  s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => {
+    const i = blocks.length;
+    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const ll = escHtml(lang || 'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    return PH(i);
   });
-  s=s.replace(/`([^`\n]+)`/g,(_,code)=>{const idx=blocks.length;blocks.push(`<code>${escHtml(code)}</code>`);return`\x00BLK${idx}\x00`;});
-  s=s.replace(/\\\[([\s\S]*?)\\\]/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">\\[${math}\\]</span>`);return`\x00BLK${idx}\x00`;});
-  s=s.replace(/\$\$([\s\S]*?)\$\$/g,(_,math)=>{const idx=blocks.length;blocks.push(`<span class="math-block">$$${math}$$</span>`);return`\x00BLK${idx}\x00`;});
-  s=s.replace(/\\\(([\s\S]*?)\\\)/g,(_,math)=>{const idx=blocks.length;blocks.push(`\\(${math}\\)`);return`\x00BLK${idx}\x00`;});
-  const _SAFE_INLINE = /(<\/?(u|s|ins|mark|small|kbd|sup|sub|br|abbr)(?:\s[^>]*)?>|<span\s+style="[^"]*"[^>]*>|<\/span>|<a\s+href="(?:https?:|mailto:|\/)([^"<>]*)"(?:\s+[^>]*)?>[\s\S]*?<\/a>)/gi;
-  s=s.replace(_SAFE_INLINE,blk=>{
-    const bi=blocks.length;
-    const safe=blk.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*')/gi,'');
-    blocks.push(safe);
-    return`\x00BLK${bi}\x00`;
+
+  // Inline-Code
+  s = s.replace(/`([^`\n]+)`/g, (_, code) => {
+    const i = blocks.length;
+    blocks.push(`<code>${escHtml(code)}</code>`);
+    return PH(i);
   });
-  // Bug 12+18: extract <details open> before escHtml
-  s=s.replace(/<details[\s\S]*?<\/details>/gi,blk=>{
-    const bi=blocks.length;
-    const safe=blk.replace(/on\w+\s*=\s*["'][^"']*["']/gi,'');
-    blocks.push(`<details open style="margin:8px 0;border:1px solid var(--border,#ddd);border-radius:6px;padding:6px 12px;">`
-      +safe.replace(/^<details[^>]*>/i,'').replace(/<\/details>$/i,'')
-      +'</details>');
-    return`\x00BLK${bi}\x00`;
+
+  // LaTeX Display: \[ ... \]
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
+    const i = blocks.length;
+    blocks.push(`<div class="math-block">\\[${math}\\]</div>`);
+    return PH(i);
   });
-  s=escHtml(s);
-  s=s.replace(/^###### (.+)$/gm,(_,t)=>`<h6 style="margin:6px 0 2px;font-size:12px;">${inlineMarkdown(unescHtml(t))}</h6>`);
-  s=s.replace(/^##### (.+)$/gm,(_,t)=>`<h5 style="margin:6px 0 2px;font-size:13px;">${inlineMarkdown(unescHtml(t))}</h5>`);
-  s=s.replace(/^#### (.+)$/gm,(_,t)=>`<h4 style="margin:6px 0 3px;font-size:14px;">${inlineMarkdown(unescHtml(t))}</h4>`);
-  s=s.replace(/^### (.+)$/gm,(_,t)=>`<h3 style="margin:8px 0 4px;font-size:15px;">${inlineMarkdown(unescHtml(t))}</h3>`);
-  s=s.replace(/^## (.+)$/gm,(_,t)=>`<h2 style="margin:10px 0 4px;font-size:17px;">${inlineMarkdown(unescHtml(t))}</h2>`);
-  s=s.replace(/^# (.+)$/gm,(_,t)=>`<h1 style="margin:12px 0 4px;font-size:20px;">${inlineMarkdown(unescHtml(t))}</h1>`);
-  // Horizontal rules: ---, ***, ___
-  s=s.replace(/^(?:---|\*\*\*|___)\s*$/gm,'<hr style="border:none;border-top:2px solid var(--border,#aaa);margin:12px 0;">');
-  // Blockquotes: lines starting with >
-  s=s.replace(/((?:^&gt;[^\n]*(?:\n|$))+)/gm,(block)=>{
-    let inner=block;while(/^(?:&gt;)+/m.test(inner)){inner=inner.replace(/^&gt; ?/gm,'');}inner=inner.trimEnd();
-    return`<blockquote style="border-left:3px solid var(--accent);margin:6px 0;padding:4px 12px;color:var(--muted);font-style:italic;">${inlineMarkdown(inner).replace(/\n/g,'<br>')}</blockquote>\n\n`;
+
+  // LaTeX Display: $$ ... $$
+  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
+    const i = blocks.length;
+    blocks.push(`<div class="math-block">$$${math}$$</div>`);
+    return PH(i);
   });
-  const _fnDefs={};
-  s=s.replace(/^\[\^([^\]]+)\]: (.+)$/gm,(_,id,def)=>{_fnDefs[id]=def;return'';});
-  s=s.replace(/\[\^([^\]]+)\]/g,(_,id)=>_fnDefs[id]?`<sup title="${escHtml(_fnDefs[id])}" style="cursor:help;color:var(--accent,#3d7eff);font-size:.75em;">[${escHtml(id)}]</sup>`:`<sup style="color:var(--accent,#3d7eff);font-size:.75em;">[${escHtml(id)}]</sup>`);
-  s=s.replace(/((?:^[^\n]*\|[^\n]*(?:\n|$))+)/gm,(tableBlock)=>{
-    const lines=tableBlock.trim().split('\n');if(lines.length<2)return tableBlock;
-    const isSepRow=(line)=>/^[\|\-\s:]+$/.test(line);if(!isSepRow(lines[1]))return tableBlock;
-    const parseRow=(line)=>line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim().replace(/&#124;/g,'|').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>'));
-    const headers=parseRow(lines[0]);
-    const aligns=parseRow(lines[1]).map(c=>{if(/^:-+:$/.test(c))return'center';if(/^-+:$/.test(c))return'right';return'left';});
-    const ths=headers.map((h,i)=>`<th style="text-align:${aligns[i]||'left'};padding:6px 12px;border-bottom:2px solid var(--border);white-space:nowrap;">${inlineMarkdown(h)}</th>`).join('');
-    const trs=lines.slice(2).map(line=>{if(!line.trim()||isSepRow(line))return'';const tds=parseRow(line).map((c,i)=>`<td style="text-align:${aligns[i]||'left'};padding:5px 12px;border-bottom:1px solid var(--border);">${inlineMarkdown(c)}</td>`).join('');return`<tr>${tds}</tr>`;}).filter(Boolean).join('');
-    return`<div style="overflow-x:auto;margin:8px 0;"><table style="border-collapse:collapse;width:100%;font-size:14px;"><thead><tr style="background:var(--surface2);">${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
+
+  // LaTeX Inline: \( ... \)
+  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
+    const i = blocks.length;
+    blocks.push(`<span class="math-inline">\\(${math}\\)</span>`);
+    return PH(i);
   });
-  // Task lists before regular lists
-  s=s.replace(/^[ \t]{2,}(?:[-*+]) \[x\] (.+)$/gm,(_,item)=>`<li class="ul-sub ts"><input type="checkbox" checked disabled style="margin-right:6px;accent-color:var(--accent,#3d7eff);"> ${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^[ \t]{2,}(?:[-*+]) \[ \] (.+)$/gm,(_,item)=>`<li class="ul-sub ts"><input type="checkbox" disabled style="margin-right:6px;"> ${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^[ \t]{2,}(?:[-*+]) (.+)$/gm,(_,item)=>`<li class="ul-sub">${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^[ \t]{2,}\d+\. (.+)$/gm,(_,item)=>`<li class="ol-sub">${inlineMarkdown(item)}</li>`);
-  s=s.replace(/((?:<li class="ul-sub ts">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:2px 0 2px 24px;list-style:none;padding-left:0;">${m.replace(/ class="ul-sub ts"/g,'')}</ul>`);
-  s=s.replace(/((?:<li class="ul-sub">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:2px 0 2px 24px;list-style-type:disc;">${m.replace(/ class="ul-sub"/g,'')}</ul>`);
-  s=s.replace(/((?:<li class="ol-sub">[\s\S]*?<\/li>\n?)+)/g,m=>`<ol style="margin:2px 0 2px 24px;">${m.replace(/ class="ol-sub"/g,'')}</ol>`);
-  s=s.replace(/^(?:[-*]) \[x\] (.+)$/gim,(_,item)=>`<li class="task-item" style="list-style:none;margin-left:-18px;"><input type="checkbox" checked disabled style="margin-right:6px;accent-color:var(--accent);"> ${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^(?:[-*]) \[ \] (.+)$/gm,(_,item)=>`<li class="task-item" style="list-style:none;margin-left:-18px;"><input type="checkbox" disabled style="margin-right:6px;"> ${inlineMarkdown(item)}</li>`);
-  s=s.replace(/^(?:[-*+]) (.+)$/gm,(_,item)=>`<li class="ul-item">${inlineMarkdown(item)}</li>`);
-  s=s.replace(/((?:<li class="task-item">[\s\S]*?<\/li>\n?)+)/g,m=>`<ul style="margin:6px 0 6px 18px;list-style:none;padding-left:0;">${m.replace(/ class="task-item"/g,'')}</ul>`);
-  s=s.replace(/((?:<li class="ul-item">[\s\S]*?<\/li>(?:\n(?!<li class="ul-item">)[^\n]+)*\n?)+)/g,m=>`<ul style="margin:6px 0 6px 18px;list-style-type:disc;padding-left:20px;">${m.replace(/ class="ul-item"/g,'')}</ul>`);
-  s=s.replace(/^\d+\. (.+)$/gm,(_,item)=>`<li class="ol-item">${inlineMarkdown(item)}</li>`);
-  s=s.replace(/((?:<li class="ol-item">[\s\S]*?<\/li>(?:\n(?!<li class="ol-item">)[^\n]+)*\n?)+)/g,m=>`<ol style="margin:6px 0 6px 18px;">${m.replace(/ class="ol-item"/g,'')}</ol>`);
-  s=s.replace(/<\/ol>\n(?!\n)/g,'</ol>\n\n');
-  s=s.split(/\n{2,}/).map(p=>{p=p.trim();if(!p)return'';if(p.startsWith('<')||p.startsWith('\x00'))return p;return`<p>${inlineMarkdown(p.replace(/ {2,}\n/g,'<br>\n').replace(/(?<!<br>)\n/g,' '))}</p>`;}).filter(Boolean).join('');
-  s=s.replace(/\x00BLK(\d+)\x00/g,(_,idx)=>blocks[+idx]||'');
-  // DOMPurify IMMER anwenden - bei CDN-Ausfall Fallback auf Null-Output als Sicherheitsnetz.
-  // Hintergrund: formatText() verwendet escHtml() fuer alle User-Inputs, aber KI-Antworten
-  // koennen manipulierten HTML-artigen Text enthalten. DOMPurify ist die letzte Verteidigungslinie.
+
+  // LaTeX Inline: $...$ (kein Leerzeichen am Rand, kein Zeilenumbruch)
+  s = s.replace(/\$([^\s$\n][^$\n]*?[^\s$\n]|\S)\$/g, (_, math) => {
+    const i = blocks.length;
+    blocks.push(`<span class="math-inline">\\(${math}\\)</span>`);
+    return PH(i);
+  });
+
+  // ── Schritt 2: marked.js rendern ─────────────────────────────────
+  if (typeof marked !== 'undefined') {
+    // Eigenen Renderer für Code-Blöcke (falls marked doch einen trifft)
+    const renderer = new marked.Renderer();
+    renderer.code = function(token) {
+      const text = (token && typeof token === 'object') ? (token.text || '') : String(token || '');
+      const lang = (token && typeof token === 'object') ? (token.lang || 'code') : 'code';
+      const i = blocks.length;
+      const b64 = btoa(unescape(encodeURIComponent(text)));
+      const ll = escHtml(lang || 'code');
+      blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(text)}</code></pre></div>`);
+      return PH(i);
+    };
+    try {
+      s = marked.parse(s, { renderer, gfm: true, breaks: false });
+    } catch(e) {
+      // Fallback falls marked fehlschlägt
+      s = escHtml(s).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
+      s = '<p>' + s + '</p>';
+    }
+  } else {
+    // Fallback ohne marked
+    s = escHtml(s);
+    s = s.split(/\n{2,}/).map(p => {
+      p = p.trim(); if (!p) return '';
+      if (p.startsWith('<') || p.startsWith('<!--')) return p;
+      return `<p>${p.replace(/\n/g, '<br>')}</p>`;
+    }).filter(Boolean).join('');
+  }
+
+  // ── Schritt 3: Platzhalter wiederherstellen ───────────────────────
+  s = s.replace(PH_RE, (_, i) => blocks[+i] || '');
+
+  // ── Schritt 4: DOMPurify ─────────────────────────────────────────
   if (typeof DOMPurify !== 'undefined') {
     s = DOMPurify.sanitize(s, {
       ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','h4','h5','h6',
-                     'ul','ol','li','code','pre',
-                     'hr','table','thead','tbody','tr','th','td','div','span','button',
-                     'a','u','sup','sub','mark','small','s','ins','abbr','cite','kbd',
-                     'details','summary','blockquote','input'],
-      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','type','checked','disabled'],
+                     'ul','ol','li','code','pre','hr','table','thead','tbody','tr','th','td',
+                     'div','span','button','a','u','sup','sub','mark','small','s','ins',
+                     'abbr','cite','kbd','details','summary','blockquote','input','img'],
+      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64',
+                     'type','checked','disabled','src','alt','loading'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
       ALLOW_DATA_ATTR: false,
       FORCE_BODY: false,
     });
   } else {
-    // DOMPurify nicht verfuegbar (z.B. CDN offline): Sicherheits-Fallback.
-    // Alle Block-Platzhalter ( BLKn ) wurden bereits ersetzt; jetzt
-    // alle verbleibenden HTML-Tags aus dem String entfernen.
-    console.warn('[KIC] DOMPurify not loaded - applying strict HTML strip fallback');
-    s = s.replace(/<(?!\/?(p|br|strong|em|del|h[1-3]|ul|ol|li|code|pre|hr|table|thead|tbody|tr|th|td|div|span|button|a|u|sup|sub|mark|small|s|ins|abbr|cite|kbd|details|summary)[\s>\/])[^>]*>/gi, '');
+    console.warn('[KIC] DOMPurify not loaded - HTML strip fallback');
+    /* DOMPurify fallback - strip unknown tags */ s = s.replace(/<[^>]+>/g, '');
   }
   return s;
 }
+
 
 function wireCodeCopyButtons(container) {
   container.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
@@ -2489,7 +2687,7 @@ async function processImageBlob(blob, name) {
       // If image exceeds limit, ask user if they want to raise the limit
       if (dataUrl.length > maxBytes) {
         const newLimitKB = Math.ceil(dataUrl.length / 1024 / 100) * 100; // round up to next 100 KB
-        const msg = `Das Bild ist ${Math.round(dataUrl.length/1024)} KB groß.\nAktuelles Limit: ${Math.round(maxBytes/1024)} KB.\n\nLimit auf ${newLimitKB} KB erhöhen?`;
+        const msg = tf('js.imageTooBigDialog', { size: Math.round(dataUrl.length/1024), limit: Math.round(maxBytes/1024), newLimit: newLimitKB });
         if (confirm(msg)) {
           setMaxImageStorageBytes(newLimitKB * 1024);
           toast(tf('js.limitRaised', {kb: newLimitKB}));
@@ -2647,7 +2845,7 @@ let _selectedLoginAccountId = null; // account selected on grid before pw entry
 
 async function showLoginScreen() {
   const ls = document.getElementById('loginScreen');
-  if (ls) ls.style.display = 'flex';
+  if (ls) { ls.style.display = 'flex'; ls.classList.add('visible'); }
   await loadAccountRegistryAsync();
   if (_accounts.length === 0) {
     renderNewAccountColorRow();
@@ -2661,7 +2859,7 @@ async function showLoginScreen() {
 }
 function hideLoginScreen() {
   const ls = document.getElementById('loginScreen');
-  if (ls) ls.style.display = 'none';
+  if (ls) { ls.style.display = 'none'; ls.classList.remove('visible'); }
 }
 function showView(viewId) {
   ['accountSelectView','accountLoginView','newAccountView'].forEach(id => {
@@ -3276,7 +3474,7 @@ function printSingleBubble() {
   if (!win) { toast(t('js.popupBlocked')); return; }
   win.document.write(`<!DOCTYPE html><html><head>
     <meta charset="UTF-8">
-    <title>Nachricht von ${escHtml(role)}</title>
+    <title>${tf('js.printMessageFrom', {role: escHtml(role)})}</title>
     <script>
       window.MathJax = {
         tex: { inlineMath:[['$','$'],['\\\\(','\\\\)']], displayMath:[['$$','$$'],['\\\\[','\\\\]']], processEscapes:true },
@@ -3406,14 +3604,17 @@ async function bootApp() {
   window._cmData=[];
 
   function positionPanel(){
-    const rect=trigger.getBoundingClientRect();
-    const vh=window.innerHeight;
-    const spaceBelow=vh-rect.bottom-8;const spaceAbove=rect.top-8;
-    const maxH=Math.min(380,Math.max(spaceBelow,spaceAbove)-8);
-    panel.style.maxHeight=maxH+'px';panel.style.left=rect.left+'px';
-    panel.style.width=Math.max(rect.width,260)+'px';
-    if(spaceBelow>=180||spaceBelow>=spaceAbove){panel.style.top=(rect.bottom+4)+'px';panel.style.bottom='auto';}
-    else{panel.style.bottom=(vh-rect.top+4)+'px';panel.style.top='auto';}
+    // Use rAF so Firefox completes its reflow before measuring getBoundingClientRect
+    requestAnimationFrame(()=>{
+      const rect=trigger.getBoundingClientRect();
+      const vh=window.innerHeight;
+      const spaceBelow=vh-rect.bottom-8;const spaceAbove=rect.top-8;
+      const maxH=Math.min(380,Math.max(spaceBelow,spaceAbove)-8);
+      panel.style.maxHeight=maxH+'px';panel.style.left=rect.left+'px';
+      panel.style.width=Math.max(rect.width,260)+'px';
+      if(spaceBelow>=180||spaceBelow>=spaceAbove){panel.style.top=(rect.bottom+4)+'px';panel.style.bottom='auto';}
+      else{panel.style.bottom=(vh-rect.top+4)+'px';panel.style.top='auto';}
+    });
   }
 
   function renderList(filter){

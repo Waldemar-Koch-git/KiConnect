@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat</title>
+  <title>AI Chat 2.4</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -48,15 +48,20 @@
   <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js" async
           crossorigin="anonymous"></script>
 
+  <!-- marked.js 12.0.0 via CDN – Markdown-Rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"
+          crossorigin="anonymous"></script>
+
   <!-- DOMPurify 3.2.4 via CDN -->
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"
           crossorigin="anonymous"></script>
 
-  <!-- PDF.js lokal (pdf.min.js + pdf.worker.min.js muessen exakt gleiche Version haben!) -->
-  <script src="pdf.min.js"></script>
+  <!-- PDF.js 3.11.174 via CDN (pdf.min.js + pdf.worker.min.js muessen exakt gleiche Version haben!) -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"
+        crossorigin="anonymous"></script>
   <script>
     if (typeof pdfjsLib !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
       window._pdfjsLib = pdfjsLib;
     }
   </script>
