@@ -140,12 +140,15 @@ const PROVIDER_HINTS = {
   'xai':           '💡 API Key von console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
   'groq':          '💡 API Key von console.groq.com · Ultra-schnelle Inferenz · Modelle live',
 };
+// Static entries only needed for providers that don't expose live model metadata
+// (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
 const THINKING_MODELS = new Set([
-  'claude-opus-4-6','claude-sonnet-4-6','claude-3-7-sonnet-20250219',
   'o1','o1-mini','o1-pro','o3','o3-mini','o4-mini','o4-mini-high',
   'gpt-4.5-preview','gpt-4.1','gpt-4.1-mini',
 ]);
 
+// KNOWN_MODELS: used only as metadata fallback (maxOutput, vision) when the live API
+// doesn't provide these values. The display list is always built dynamically from fetchModels().
 const KNOWN_MODELS = {
   'claude-opus-4-6':            { label:'Claude Opus 4.6',           maxOutput:32000,  vision:true  },
   'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:64000,  vision:true  },
@@ -469,14 +472,6 @@ async function verifyAccountPassword(accountId, pw) {
 // ── Multi-Account Registry ────────────────────────────────────────
 let _accounts = [];
 let _activeAccountId = null;
-
-// todo: check this / double?
-function loadAccountRegistry() {
-  try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
-}
-function saveAccountRegistry() {
-  localStorage.setItem('kic_accounts', JSON.stringify(_accounts));
-}
 function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
 function accountKey(key) { return `kic_${_activeAccountId}_${key}`; }
 
@@ -2148,15 +2143,138 @@ async function regenerate(idx) {
   const msg=chat.messages[idx];
   if(!msg||msg.role!=='assistant') return;
   if(isStreaming){toast(t('js.pleaseWait'));return;}
-  chat.messages.splice(idx,1);
+
+  // Remove only the AI reply — keep the user message intact in chat.messages
+  chat.messages.splice(idx, 1);
   const userMsg=chat.messages[idx-1];
   if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
-  let userText='';
-  if(typeof userMsg.content==='string') userText=userMsg.content;
-  else if(Array.isArray(userMsg.content)) userText=userMsg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
-  chat.messages.splice(idx-1,1);
+
+  // Re-render the existing messages (user bubble renders correctly from stored state)
   save(); renderMessages(chat.messages);
-  await sendMessageCore(userText,[]);
+
+  // Now fire the AI call using the existing chat history (which includes the user msg)
+  await rerunFromUserMsg(userMsg);
+}
+
+// Fires a new AI completion using the current chat.messages state (no user-msg rebuild).
+// Used by regenerate() so images/PDFs stored in the user message are sent correctly.
+async function rerunFromUserMsg(userMsg) {
+  if(!currentChatId) newChat();
+  const chat=currentChat(); if(!chat) return;
+  const provider=providerForModel(config.model)||providers[0];
+  if(!provider||!provider.apiKey){toast(t('js.noProvider'));openProviderPanel();return;}
+
+  const typingId=showTyping();
+  isStreaming=true; setSendMode('stop'); abortController=new AbortController();
+  let assistantText='', usageData=null;
+
+  try {
+    if(provider.type==='anthropic'){
+      function toAnthropicContent(content){
+        if(!Array.isArray(content)) return content;
+        return content.map(p=>{
+          if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')){const[meta,b64]=url.split(',');return{type:'image',source:{type:'base64',media_type:meta.replace('data:','').replace(';base64',''),data:b64}};}return{type:'image',source:{type:'url',url}};}
+          if(p.type==='pdf_base64') return{type:'document',source:{type:'base64',media_type:'application/pdf',data:p.data}};
+          return p;
+        });
+      }
+      const anthropicMsgs=[];
+      // Send all current messages (including the user msg we kept)
+      chat.messages.forEach(m=>{if(m.role==='user'||m.role==='assistant')anthropicMsgs.push({role:m.role,content:toAnthropicContent(m.content)});});
+      // Prompt caching on second-to-last message
+      if(anthropicMsgs.length>1){
+        const prev=anthropicMsgs[anthropicMsgs.length-2];
+        if(prev){const c=prev.content;if(typeof c==='string'){prev.content=[{type:'text',text:c,cache_control:{type:'ephemeral'}}];}else if(Array.isArray(c)&&c.length){const lp=c[c.length-1];if(lp&&!lp.cache_control)lp.cache_control={type:'ephemeral'};}}
+      }
+      const{modelId:_aModelId}=splitModelId(config.model);
+      const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
+      if(config.systemPrompt)body.system=[{type:'text',text:config.systemPrompt,cache_control:{type:'ephemeral'}}];
+      if(config.thinkingEnabled&&isThinkingCapable(_aModelId)){
+        const budget=usesTokenBudget(_aModelId)?(config.thinkingBudget||8000):CLAUDE_BUDGET[config.thinkingIntensity||2];
+        body.thinking={type:'enabled',budget_tokens:budget};body.temperature=1;
+        body.max_tokens=Math.max(body.max_tokens,budget+2000);
+      }
+      const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-beta':'prompt-caching-2024-07-31','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
+      if(!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+      removeTyping(typingId);
+      const aiEl=appendEmptyAI();
+      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
+      let thinkingText='',inThinkingBlock=false;
+      while(true){
+        const{done,value}=await reader.read();if(done)break;
+        buf+=decoder.decode(value,{stream:true});
+        const lines=buf.split('\n');buf=lines.pop();
+        for(const line of lines){
+          if(!line.startsWith('data: '))continue;
+          try{
+            const ev=JSON.parse(line.slice(6).trim());
+            if(ev.type==='message_start'&&ev.message?.usage){usageData={...(usageData||{}),...ev.message.usage};}
+            else if(ev.type==='message_delta'&&ev.usage){usageData={...(usageData||{}),...ev.usage};}
+            else if(ev.type==='content_block_start'){inThinkingBlock=ev.content_block?.type==='thinking';}
+            else if(ev.type==='content_block_stop'){inThinkingBlock=false;}
+            else if(ev.type==='content_block_delta'){
+              if(ev.delta?.type==='thinking_delta'&&inThinkingBlock){thinkingText+=ev.delta.thinking||'';const bubble=aiEl.querySelector('.bubble');const th=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';bubble.innerHTML=th+formatText(assistantText);}
+              else if(ev.delta?.type==='text_delta'){assistantText+=ev.delta.text;const bubble=aiEl.querySelector('.bubble');const th=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';bubble.innerHTML=th+formatText(assistantText);scrollToBottom();}
+            }
+          }catch{}
+        }
+      }
+      if(thinkingText) assistantText=`<thinking>\n${thinkingText}\n</thinking>\n\n`+assistantText;
+      typesetMath();
+    } else {
+      const endpoint=getProviderEndpoint(provider);
+      const apiMsgs=[];
+      if(config.systemPrompt)apiMsgs.push({role:'system',content:config.systemPrompt});
+      chat.messages.forEach(m=>{if(m.role==='user'||m.role==='assistant')apiMsgs.push({role:m.role,content:m.content});});
+      const{modelId:_oModelId}=splitModelId(config.model);
+      const reqBody={model:_oModelId,messages:apiMsgs,stream:true};
+      const isOSeries=/^o\d/.test(_oModelId);
+      if(isOSeries){reqBody.max_completion_tokens=effectiveMaxTokens();if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];}
+      else{reqBody.temperature=config.temperature;reqBody.max_tokens=effectiveMaxTokens();if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];}
+      reqBody.stream_options={include_usage:true};
+      const extraHeaders={};
+      if(provider.type==='openrouter'){extraHeaders['HTTP-Referer']=window.location.origin;extraHeaders['X-Title']='KI Connect NRW';}
+      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},body:JSON.stringify(reqBody),signal:abortController.signal});
+      if(!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      removeTyping(typingId);
+      const aiEl=appendEmptyAI();
+      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
+      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const payload=line.slice(6).trim();if(payload==='[DONE]')continue;try{const chunk=JSON.parse(payload);const delta=chunk.choices?.[0]?.delta?.content||'';assistantText+=delta;if(delta){aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}if(chunk.usage){const u=chunk.usage;usageData={input_tokens:u.prompt_tokens,output_tokens:u.completion_tokens,cache_read_input_tokens:u.prompt_tokens_details?.cached_tokens||0};}}catch{}}}
+      typesetMath();
+    }
+  } catch(e) {
+    removeTyping(typingId);
+    if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
+    else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
+  }
+
+  if(assistantText){
+    const msgObj={role:'assistant',content:assistantText,_model:config.model};
+    if(usageData) msgObj._usage=usageData;
+    chat.messages.push(msgObj);
+    const aiIdx=chat.messages.length-1;
+    const c=document.getElementById('messages');
+    const _aiEls=c.querySelectorAll('.message-row.ai');const lastAiEl=_aiEls.length?_aiEls[_aiEls.length-1]:null;
+    if(lastAiEl&&!lastAiEl.dataset.idx){
+      lastAiEl.dataset.idx=aiIdx;
+      const wrap=lastAiEl.querySelector('.bubble-wrap');
+      if(wrap&&!wrap.querySelector('.bubble-actions')){
+        const actDiv=document.createElement('div');actDiv.className='bubble-actions';
+        const makeBtn=(lbl,cls2,handler,action)=>{const b=document.createElement('button');b.className='bubble-act-btn'+(cls2?' '+cls2:'');b.textContent=lbl;if(action)b.setAttribute('data-action',action);b.dataset.idx=aiIdx;b.addEventListener('click',()=>handler(parseInt(b.dataset.idx)));return b;};
+        actDiv.appendChild(makeBtn(t('js.copy'),'',i=>{const firstBtn=actDiv.querySelector('.bubble-act-btn');copyBubble(firstBtn,i);},'copy'));
+        actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble,'edit'));
+        actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere,'branch'));
+        actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
+        actDiv.appendChild(makeBtn('🖨️','',openPrintSingleOverlay,'print'));
+        actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
+        wrap.appendChild(actDiv);
+        if(usageData) wrap.appendChild(buildTokenBadge(usageData));
+      }
+    }
+    updateChatTokenTotal();
+    save();
+  }
+  isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
 
 // ── Send / Stop ───────────────────────────────────────────────────
@@ -2223,7 +2341,11 @@ async function sendMessageCore(text, att) {
         else{const b64=(a.data||'').split(',')[1]||a.data;userContent.push({type:'pdf_base64',name:a.name,data:b64});}
       } else if(a.type==='text-file'){
         fileNames.push(a.name);
-        userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`});
+        // _fromHistory: content already in AI context, skip re-injection to avoid duplication
+        if(!a._fromHistory) userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`});
+      } else if(a.type==='_chip_only'){
+        // Chip-only placeholder (e.g. PDF from history whose binary is gone): show chip, no content
+        fileNames.push(a.name);
       } else{
         fileNames.push(a.name);
         userContent.push({type:'text',text:`[${tf('js.unreadableFormat',{name:a.name})}]`});
@@ -2249,8 +2371,9 @@ async function sendMessageCore(text, att) {
   if(chat.messages.length===1){chat.title=(text||t('js.imageFileTitle')).slice(0,40);renderSidebar();}
 
   // Build display message: only text + images visible, files as chips
+  // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
   const displayContent = Array.isArray(userContent)
-    ? userContent.filter(p => p.type==='text'&&!p.text.startsWith('---')||p.type==='image_url')
+    ? userContent.filter(p => (p.type==='text' && !p.text.startsWith('---')) || p.type==='image_url')
     : userContent;
   const idx=chat.messages.length-1;
   const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames},idx);
