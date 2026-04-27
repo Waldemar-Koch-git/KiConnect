@@ -1,28 +1,37 @@
 @echo off
-echo KI Connect - Proxy starting...
+title KI Connect
+cd /d "%~dp0"
+
+echo.
+echo  ==========================================
+echo       KI Connect - Starting...
+echo  ==========================================
 echo.
 
-REM Check for Python
+REM -- Update laden -------------------------------------------
+call "%~dp0update.bat"
+
+REM -- Python pruefen -----------------------------------------
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Python not found. Please install Python: https://python.org
+    echo  [FEHLER] Python nicht gefunden.
+    echo  Bitte installieren: https://python.org
+    echo.
     pause
     exit /b 1
 )
 
-echo Installing / updating dependencies...
+echo  Installiere / aktualisiere Abhaengigkeiten...
 pip install "flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" --quiet --upgrade
 
 echo.
-echo Starting proxy (Waitress WSGI)...
-echo Open in browser: http://localhost:5000
-echo Stop with:       Ctrl+C
+echo  ------------------------------------------
+echo   Proxy startet  ^(Waitress WSGI^)
+echo   Browser:  http://localhost:5000
+echo   Stoppen:  Strg+C oder Fenster schliessen
+echo  ------------------------------------------
 echo.
 
-REM Change to script directory
-cd /d "%~dp0"
-
-REM Start the proxy
-python ./comm/kiconnect-proxy.py
+python "%~dp0comm\kiconnect-proxy.py"
 
 pause
