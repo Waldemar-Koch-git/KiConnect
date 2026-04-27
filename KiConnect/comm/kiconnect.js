@@ -121,24 +121,26 @@ document.addEventListener('click', e => {
 // ─── Konstanten ───────────────────────────────────────────────────
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
 const PROVIDER_TYPES = {
-  'openai-compat': { label:'OpenAI-kompatibel', needsUrl:true  },
+  'openai-compat': { label:'OpenAI-kompatibel',  needsUrl:true  },
   'anthropic':     { label:'Anthropic (Claude)', needsUrl:false },
   'openai-direct': { label:'OpenAI direkt',      needsUrl:false },
-  'openrouter':    { label:'OpenRouter',          needsUrl:false },
-  'mistral':       { label:'Mistral AI',          needsUrl:false },
-  'gemini':        { label:'Google Gemini',       needsUrl:false },
-  'xai':           { label:'xAI Grok',            needsUrl:false },
-  'groq':          { label:'Groq',                needsUrl:false },
+  'openrouter':    { label:'OpenRouter',         needsUrl:false },
+  'mistral':       { label:'Mistral AI',         needsUrl:false },
+  'gemini':        { label:'Google Gemini',      needsUrl:false },
+  'xai':           { label:'xAI Grok',           needsUrl:false },
+  'groq':          { label:'Groq',               needsUrl:false },
+  'deepseek':      { label:'DeepSeek',           needsUrl:false },
 };
 const PROVIDER_HINTS = {
   'openai-compat': '💡 Server-URL + opt. API Key · für KI Connect NRW, LM Studio, Ollama, …',
-  'anthropic':     '💡 API Key von console.anthropic.com · 🧠 Extended Thinking für Claude 3.7+/4',
-  'openai-direct': '💡 API Key von platform.openai.com · 🧠 Reasoning für o1/o3/o4',
-  'openrouter':    '💡 API Key von openrouter.ai · 200+ Modelle live geladen · 🧠 Thinking für Reasoning-Modelle',
-  'mistral':       '💡 API Key von console.mistral.ai · Modelle werden live geladen',
-  'gemini':        '💡 API Key von aistudio.google.com (AI Studio) · Modelle werden live geladen',
-  'xai':           '💡 API Key von console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
-  'groq':          '💡 API Key von console.groq.com · Ultra-schnelle Inferenz · Modelle live',
+  'anthropic':     '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3.7+/4',
+  'openai-direct': '💡 API Key : platform.openai.com · 🧠 Reasoning  o1/o3/o4',
+  'openrouter':    '💡 API Key : openrouter.ai · 200+ Modelle live geladen · 🧠 Thinking für Reasoning-Modelle',
+  'mistral':       '💡 API Key : console.mistral.ai · Modelle werden live geladen',
+  'gemini':        '💡 API Key : aistudio.google.com (AI Studio) · Modelle werden live geladen',
+  'xai':           '💡 API Key : console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
+  'groq':          '💡 API Key : console.groq.com · Ultra-schnelle Inferenz · Modelle live',
+  'deepseek':      '💡 API Key : platform.deepseek.com · Modelle live geladen, Reasoning für R1',
 };
 // Static entries only needed for providers that don't expose live model metadata
 // (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
@@ -193,6 +195,8 @@ const KNOWN_MODELS = {
   'deepseek-r1-distill-llama-70b':{ label:'DeepSeek R1 Distill 70B 🧠', maxOutput:8000, vision:false },
   'deepseek-chat':              { label:'DeepSeek V3',               maxOutput:8192,   vision:false },
   'deepseek-reasoner':          { label:'DeepSeek R1 🧠',            maxOutput:8192,   vision:false },
+  'deepseek-v4-pro':            { label: 'DeepSeek V4 Pro',      maxOutput: 393216, vision:false },
+  'deepseek-v4-flash':          { label: 'DeepSeek V4 Flash',        maxOutput: 393216, vision:false },
 };
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
@@ -725,6 +729,7 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'gemini')        return 'https://generativelanguage.googleapis.com/v1beta/openai';
   if (provider.type === 'xai')           return 'https://api.x.ai/v1';
   if (provider.type === 'groq')          return 'https://api.groq.com/openai/v1';
+  if (provider.type === 'deepseek')      return 'https://api.deepseek.com/v1';
   return null;
 }
 function effectiveMaxTokens() {
@@ -739,7 +744,7 @@ function effectiveMaxTokens() {
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
-  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com',
+  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com',
 ];
 function isSafeApiUrl(url) {
   try {
@@ -1278,7 +1283,7 @@ function isThinkingCapable(modelId) {
   const bare = modelId.split('/').pop().toLowerCase();
   return THINKING_MODELS.has(modelId) || THINKING_MODELS.has(bare) ||
     /^o\d/.test(bare) || /claude-(opus|sonnet)-4/.test(bare) || /claude-3-7/.test(bare) ||
-    /thinking|reason/i.test(bare) || /deepseek-r|qwen.*think|qwq|llama.*reason/i.test(bare);
+    /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare);
 }
 function isAnthropicThinkingModel(modelId) {
   return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
@@ -2929,7 +2934,7 @@ function renderModelMaxList(){
     const nameEl=document.createElement('div');nameEl.className='model-max-name';nameEl.textContent=label.replace(/^[▲●]\s*/,'');
     const subEl=document.createElement('div');subEl.className='model-max-sub';subEl.textContent=modelId;
     info.appendChild(nameEl);info.appendChild(subEl);
-    const inp=document.createElement('input');inp.className='model-max-input';inp.type='number';inp.value=currentMax;inp.min=256;inp.max=200000;inp.step=256;inp.dataset.modelId=modelId;
+    const inp=document.createElement('input');inp.className='model-max-input';inp.type='number';inp.value=currentMax;inp.min=256;inp.max=1000000;inp.step=256;inp.dataset.modelId=modelId;
     inp.addEventListener('change',()=>setModelMax(inp.dataset.modelId,inp));
     const resetBtn=document.createElement('button');resetBtn.className='reset-btn';resetBtn.title=tf('js.resetTitle',{n:defaultMax.toLocaleString()});resetBtn.textContent='↺';resetBtn.dataset.modelId=modelId;
     resetBtn.addEventListener('click',()=>resetModelMax(resetBtn.dataset.modelId));

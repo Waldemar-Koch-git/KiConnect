@@ -204,7 +204,7 @@ def check_origin():
 ALLOWED_DOMAINS = {
     'chat.kiconnect.nrw', 'api.anthropic.com', 'api.openai.com',
     'openrouter.ai', 'api.mistral.ai', 'generativelanguage.googleapis.com',
-    'api.x.ai', 'api.groq.com',
+    'api.x.ai', 'api.groq.com','api.deepseek.com', 
 }
 
 # ── Private IP-Bereiche (SSRF-Schutz) ────────────────────────────
@@ -301,6 +301,7 @@ SECURITY_HEADERS = {
         "https://chat.kiconnect.nrw https://openrouter.ai "
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
         "https://api.x.ai https://api.groq.com; "
+        "https://api.deepseek.com; " 
         "img-src 'self' data: blob:; "
         "font-src 'self' https://cdn.jsdelivr.net; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
@@ -408,7 +409,7 @@ if __name__ == '__main__':
 
     print()
     print('╔══════════════════════════════════════════════════════════════════╗')
-    print('║  KI Connect — CORS-Proxy + Storage-Server  (v5.1 / Waitress)    ║')
+    print('║  KI Connect — CORS-Proxy + Storage-Server  (v5.1 / Waitress)     ║')
     print('╠══════════════════════════════════════════════════════════════════╣')
     print('║  Running on:  http://localhost:5000                              ║')
     print('║  Data dir:    ./datas/   (browser-unabhaengige Persistenz)       ║')
@@ -419,9 +420,9 @@ if __name__ == '__main__':
     print('║    GET/PUT/DELETE /store/<id>/<k>  Datei lesen/schreiben         ║')
     print('║                                                                  ║')
     print('║  Proxy-Allowlist:                                                ║')
-    print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com      ║')
-    print('║    openrouter.ai · api.mistral.ai · googleapis.com              ║')
-    print('║    api.x.ai · api.groq.com                                       ║')
+    print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com       ║')
+    print('║    openrouter.ai · api.mistral.ai · googleapis.com               ║')
+    print('║    api.x.ai · api.groq.com · api.deepseek.com                    ║')
     print('║                                                                  ║')
     print('║  Stop: Ctrl+C                                                    ║')
     print('╚══════════════════════════════════════════════════════════════════╝')
