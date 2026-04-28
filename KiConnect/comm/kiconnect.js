@@ -1262,8 +1262,10 @@ async function fetchModels() {
             });
           if (orCacheUpdated) _saveOrCache();
         } else {
+		  const EMBED_FILTER = /embed|e5-|bge-|rerank|whisper|tts|dall-e/i;
           rawModels.forEach(m => {
             const id = m.id || m.name || ''; if (!id) return;
+			if (EMBED_FILTER.test(id)) return;
             const knownLabel = KNOWN_MODELS[id]?.label;
             const isThinking = THINKING_MODELS.has(id) || isThinkingCapable(id);
             const lbl = (knownLabel || id) + (isThinking ? ' 🧠' : '');
