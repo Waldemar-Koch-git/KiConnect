@@ -37,6 +37,7 @@ call :download "comm\kiconnect.html"
 call :download "comm\kiconnect.js"
 call :download "comm\kiconnect-languages-i18n.js"
 call :download "comm\kiconnect-proxy.py"
+call :download "update.bat"
 
 
 echo.
