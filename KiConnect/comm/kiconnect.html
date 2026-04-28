@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.6.2</title>
+  <title>AI Chat 2.7</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -162,6 +162,48 @@
     <button class="close-btn" id="settingsPanelClose">✕</button>
   </div>
 
+  <!-- Theme -->
+  <div class="section-header">🎨 Theme</div>
+  <div class="theme-switcher" id="themeSwitcher">
+    <div>
+      <div class="theme-swatch active" data-theme="dark" title="Dark" onclick="setTheme('dark')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Dark</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="oled" title="OLED Black" onclick="setTheme('oled')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">OLED</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="white" title="White" onclick="setTheme('white')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">White</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="gold" title="Dark Gold" onclick="setTheme('gold')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Gold</div>
+    </div>
+  </div>
+
+  <hr class="divider" style="margin-top:16px;">
   <div class="section-header" data-i18n="settings.activeProvider">Provider (active)</div>
   <div class="info-box" id="activeProviderInfo" data-i18n="settings.noProvider">No provider selected.</div>
   <button class="ghost-btn" id="goProviderFromSettings" data-i18n="settings.manageProviders">🔌 Manage providers →</button>
@@ -304,6 +346,7 @@
     <div class="setting-label" style="margin-top:10px;" data-i18n="provider.type">Type</div>
     <div class="provider-type-row" id="providerTypeRow">
       <div class="type-chip selected" data-type="openai-compat">OpenAI-compatible</div>
+      <div class="type-chip" data-type="kiconnect-nrw">KiConnect NRW</div>
       <div class="type-chip" data-type="anthropic">Anthropic</div>
       <div class="type-chip" data-type="openai-direct">OpenAI</div>
       <div class="type-chip" data-type="openrouter">OpenRouter</div>

@@ -24,7 +24,9 @@
 
 /* ── Design tokens ───────────────────────────────────────────────── */
 
-:root {
+/* ── DARK (default) ─────────────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
   --bg:         #0e0f13;
   --surface:    #16181f;
   --surface2:   #1d2029;
@@ -41,6 +43,143 @@
   --sidebar-w:  240px;
   --chat-max-w: 880px;
 }
+
+/* ── OLED BLACK ─────────────────────────────────────────────────── */
+[data-theme="oled"] {
+  --bg:         #000000;
+  --surface:    #0a0a0a;
+  --surface2:   #111111;
+  --border:     #1e1e1e;
+  --accent:     #3d7eff;
+  --accent2:    #7c5cfc;
+  --green:      #2ecc71;
+  --red:        #e74c3c;
+  --text:       #e8eaf0;
+  --muted:      #4a4a5a;
+  --user-bg:    #0d1520;
+  --ai-bg:      #080808;
+  --radius:     14px;
+  --sidebar-w:  240px;
+  --chat-max-w: 880px;
+}
+
+/* ── WHITE / LIGHT ──────────────────────────────────────────────── */
+[data-theme="white"] {
+  --bg:         #f0f2f8;
+  --surface:    #ffffff;
+  --surface2:   #f4f6fb;
+  --border:     #d8dce8;
+  --accent:     #2d6ef0;
+  --accent2:    #6b42f0;
+  --green:      #16a34a;
+  --red:        #dc2626;
+  --text:       #1a1d2e;
+  --muted:      #8891aa;
+  --user-bg:    #e8effe;
+  --ai-bg:      #f8f9fd;
+  --radius:     14px;
+  --sidebar-w:  240px;
+  --chat-max-w: 880px;
+}
+
+/* Light-theme specific overrides */
+[data-theme="white"] ::-webkit-scrollbar-thumb { background: #c5cad8; }
+[data-theme="white"] .cm-panel { box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
+[data-theme="white"] .lang-dropdown { box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+[data-theme="white"] .ctx-menu { box-shadow: 0 8px 24px rgba(0,0,0,0.12); }
+[data-theme="white"] .code-block { background: #f0f2f8; border-color: #d0d5e8; }
+[data-theme="white"] .code-block-header { background: #e4e8f4; color: #8891aa; }
+[data-theme="white"] pre, [data-theme="white"] code { color: #1a1d2e; }
+[data-theme="white"] .bubble pre { background: #eaecf6; }
+[data-theme="white"] .status-dot { box-shadow: 0 0 8px var(--green); }
+
+/* ── DARK GOLD ──────────────────────────────────────────────────── */
+[data-theme="gold"] {
+  --bg:         #0d0c09;
+  --surface:    #14120c;
+  --surface2:   #1c1910;
+  --border:     #2e2a1a;
+  --accent:     #c9a84c;
+  --accent2:    #e8c96a;
+  --green:      #5a9c5a;
+  --red:        #c0392b;
+  --text:       #f0e8d0;
+  --muted:      #6b6040;
+  --user-bg:    #1a160a;
+  --ai-bg:      #110f09;
+  --radius:     14px;
+  --sidebar-w:  240px;
+  --chat-max-w: 880px;
+}
+[data-theme="gold"] .send-btn {
+  background: linear-gradient(135deg, #c9a84c, #e8c96a) !important;
+  color: #0d0c09 !important;
+}
+[data-theme="gold"] .save-btn {
+  background: linear-gradient(135deg, #c9a84c, #e8c96a) !important;
+  color: #0d0c09 !important;
+}
+[data-theme="gold"] .status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+[data-theme="gold"] .cm-option.selected { color: var(--accent); background: rgba(201,168,76,0.1); }
+[data-theme="gold"] .input-box:focus-within { border-color: var(--accent); }
+[data-theme="gold"] .code-block { background: #100e08; border-color: #2e2a1a; }
+[data-theme="gold"] .code-block-header { background: #1c1910; color: var(--muted); }
+
+/* ── Theme switcher widget ──────────────────────────────────────── */
+.theme-switcher {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.theme-swatch {
+  position: relative;
+  width: 52px; height: 40px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s, transform 0.15s;
+  flex-shrink: 0;
+}
+.theme-swatch:hover { transform: scale(1.08); }
+.theme-swatch.active { border-color: var(--accent); }
+.theme-swatch-inner {
+  width: 100%; height: 100%;
+  display: flex; flex-direction: column;
+}
+.theme-swatch-top { flex: 1; }
+.theme-swatch-bottom { height: 12px; display: flex; }
+.theme-swatch-bottom span { flex: 1; }
+.theme-swatch-label {
+  font-size: 9px; font-family: 'IBM Plex Mono', monospace;
+  color: var(--muted); text-align: center;
+  margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px;
+}
+/* Swatch color previews */
+.theme-swatch[data-theme="dark"]  .theme-swatch-top    { background: #0e0f13; }
+.theme-swatch[data-theme="dark"]  .theme-swatch-bottom span:nth-child(1) { background: #16181f; }
+.theme-swatch[data-theme="dark"]  .theme-swatch-bottom span:nth-child(2) { background: #3d7eff; }
+.theme-swatch[data-theme="dark"]  .theme-swatch-bottom span:nth-child(3) { background: #7c5cfc; }
+
+.theme-swatch[data-theme="oled"]  .theme-swatch-top    { background: #000000; }
+.theme-swatch[data-theme="oled"]  .theme-swatch-bottom span:nth-child(1) { background: #0a0a0a; }
+.theme-swatch[data-theme="oled"]  .theme-swatch-bottom span:nth-child(2) { background: #3d7eff; }
+.theme-swatch[data-theme="oled"]  .theme-swatch-bottom span:nth-child(3) { background: #7c5cfc; }
+
+.theme-swatch[data-theme="white"] .theme-swatch-top    { background: #f0f2f8; }
+.theme-swatch[data-theme="white"] .theme-swatch-bottom span:nth-child(1) { background: #ffffff; }
+.theme-swatch[data-theme="white"] .theme-swatch-bottom span:nth-child(2) { background: #2d6ef0; }
+.theme-swatch[data-theme="white"] .theme-swatch-bottom span:nth-child(3) { background: #6b42f0; }
+
+.theme-swatch[data-theme="gold"]  .theme-swatch-top    { background: #0d0c09; }
+.theme-swatch[data-theme="gold"]  .theme-swatch-bottom span:nth-child(1) { background: #14120c; }
+.theme-swatch[data-theme="gold"]  .theme-swatch-bottom span:nth-child(2) { background: #c9a84c; }
+.theme-swatch[data-theme="gold"]  .theme-swatch-bottom span:nth-child(3) { background: #e8c96a; }
+
 
 
 /* ── Reset ───────────────────────────────────────────────────────── */
