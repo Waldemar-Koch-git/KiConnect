@@ -124,7 +124,19 @@ def store_registry():
     with _store_lock:
         tmp = rpath + '.tmp'
         with open(tmp, 'wb') as f: f.write(body)
-        os.replace(tmp, rpath)
+        # Retry os.replace() — on Windows, Nextcloud/AV can briefly lock files
+        _replaced = False
+        for _attempt in range(8):
+            try:
+                os.replace(tmp, rpath)
+                _replaced = True
+                break
+            except PermissionError:
+                time.sleep(0.15 * (_attempt + 1))
+        if not _replaced:
+            with open(rpath, 'wb') as fw: fw.write(body)
+            try: os.remove(tmp)
+            except Exception: pass
     return Response('{"ok":true}', 200, content_type='application/json')
 
 
@@ -177,7 +189,23 @@ def store_key(account_id, key):
             os.makedirs(adir, exist_ok=True)
             tmp = fpath + '.tmp'
             with open(tmp, 'wb') as f: f.write(body)
-            os.replace(tmp, fpath)
+            # Retry os.replace() — on Windows, Nextcloud/AV can briefly lock files
+            _replaced = False
+            for _attempt in range(8):
+                try:
+                    os.replace(tmp, fpath)
+                    _replaced = True
+                    break
+                except PermissionError:
+                    time.sleep(0.15 * (_attempt + 1))
+            if not _replaced:
+                # Last-resort fallback: direct write without atomic replace
+                try:
+                    with open(fpath, 'wb') as fw: fw.write(body)
+                    try: os.remove(tmp)
+                    except Exception: pass
+                except Exception as e:
+                    return Response(f'{{"error":"Write failed: {e}"}}', 500, content_type='application/json')
         return Response('{"ok":true}', 200, content_type='application/json')
 
     if request.method == 'DELETE':
