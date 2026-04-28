@@ -14,7 +14,30 @@
 // NEW: Folder drag & drop reordering (same level only)
 // ═══════════════════════════════════════════════════════════════
 
-// ── i18n ─────────────────────────────────────────────────────────
+// ── Theme ─────────────────────────────────────────────────────────
+const THEMES = ['dark', 'oled', 'white', 'gold'];
+
+function applyTheme(name) {
+  if (!THEMES.includes(name)) name = 'dark';
+  document.documentElement.setAttribute('data-theme', name);
+  // Update swatch active states
+  document.querySelectorAll('.theme-swatch').forEach(sw => {
+    sw.classList.toggle('active', sw.getAttribute('data-theme') === name);
+  });
+}
+
+function setTheme(name) {
+  applyTheme(name);
+  localStorage.setItem('kic_theme', name);
+}
+
+// Apply saved theme immediately (before DOMContentLoaded to avoid flash)
+(function() {
+  const saved = localStorage.getItem('kic_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+})();
+
+
 let currentLang = localStorage.getItem('kic_lang') || 'en';
 
 function t(key) {
@@ -121,9 +144,10 @@ document.addEventListener('click', e => {
 // ─── Konstanten ───────────────────────────────────────────────────
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
 const PROVIDER_TYPES = {
-  'openai-compat': { label:'OpenAI-kompatibel',  needsUrl:true  },
-  'anthropic':     { label:'Anthropic (Claude)', needsUrl:false },
-  'openai-direct': { label:'OpenAI direkt',      needsUrl:false },
+  'openai-compat':   { label:'OpenAI-kompatibel',    needsUrl:true  },
+  'kiconnect-nrw':   { label:'KiConnect NRW',         needsUrl:false },
+  'anthropic':       { label:'Anthropic (Claude)',    needsUrl:false },
+  'openai-direct':   { label:'OpenAI direkt',         needsUrl:false },
   'openrouter':    { label:'OpenRouter',         needsUrl:false },
   'mistral':       { label:'Mistral AI',         needsUrl:false },
   'gemini':        { label:'Google Gemini',      needsUrl:false },
@@ -132,8 +156,9 @@ const PROVIDER_TYPES = {
   'deepseek':      { label:'DeepSeek',           needsUrl:false },
 };
 const PROVIDER_HINTS = {
-  'openai-compat': '💡 Server-URL + opt. API Key · für KI Connect NRW, LM Studio, Ollama, …',
-  'anthropic':     '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3.7+/4',
+  'openai-compat':  '💡 Server-URL + opt. API Key · für LM Studio, Ollama, eigene Instanzen …',
+  'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-kompatibel',
+  'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3.7+/4',
   'openai-direct': '💡 API Key : platform.openai.com · 🧠 Reasoning  o1/o3/o4',
   'openrouter':    '💡 API Key : openrouter.ai · 200+ Modelle live geladen · 🧠 Thinking für Reasoning-Modelle',
   'mistral':       '💡 API Key : console.mistral.ai · Modelle werden live geladen',
@@ -304,6 +329,29 @@ function _loginLockRemaining(accountId) {
   if (!f || !f.lockedUntil) return 0;
   const rem = f.lockedUntil - Date.now();
   return rem > 0 ? rem : 0;
+}
+
+let _lockCountdownTimer = null;
+function _startLockCountdown(accountId, errorEl, btn, input) {
+  if (_lockCountdownTimer) clearInterval(_lockCountdownTimer);
+  _lockCountdownTimer = setInterval(() => {
+    const rem = _loginLockRemaining(accountId);
+    if (rem <= 0) {
+      clearInterval(_lockCountdownTimer);
+      _lockCountdownTimer = null;
+      errorEl.textContent = '';
+      if (btn) btn.disabled = false;
+      if (input) { input.disabled = false; input.focus(); }
+    } else {
+      const secs = Math.ceil(rem / 1000);
+      errorEl.textContent = '⏳ ' + tf('login.lockedFor', { s: secs });
+      if (btn) btn.disabled = true;
+      if (input) input.disabled = true;
+    }
+  }, 1000);
+}
+function _stopLockCountdown() {
+  if (_lockCountdownTimer) { clearInterval(_lockCountdownTimer); _lockCountdownTimer = null; }
 }
 
 async function deriveKeyPBKDF2(passphrase, saltBytes) {
@@ -722,6 +770,7 @@ function providerForModel(fullModelId) {
 function getProviderEndpoint(provider) {
   if (!provider) return null;
   if (provider.type === 'openai-compat') return (provider.serverUrl || '').replace(/\/+$/, '');
+  if (provider.type === 'kiconnect-nrw') return 'https://chat.kiconnect.nrw/api/v1';
   if (provider.type === 'anthropic')     return 'https://api.anthropic.com';
   if (provider.type === 'openai-direct') return 'https://api.openai.com/v1';
   if (provider.type === 'openrouter')    return 'https://openrouter.ai/api/v1';
@@ -867,6 +916,7 @@ function editProvider(id) {
 function selectProviderType(type) {
   document.querySelectorAll('.type-chip').forEach(el => el.classList.toggle('selected', el.dataset.type === type));
   document.getElementById('pvServerUrlGroup').style.display = (type === 'openai-compat') ? 'block' : 'none';
+  // kiconnect-nrw uses a fixed URL – no manual input needed
   const hint = document.getElementById('pvProviderHint');
   if (hint) {
     const hintText = PROVIDER_HINTS[type];
@@ -2312,7 +2362,7 @@ async function sendMessageCore(text, att) {
   const empty=document.getElementById('emptyState');
   if(empty) empty.style.display='none';
   const provider=providerForModel(config.model)||providers[0];
-  const isKiConnect=provider?.type==='openai-compat'&&(provider.serverUrl||'').includes('kiconnect.nrw');
+  const isKiConnect=provider?.type==='kiconnect-nrw'||(provider?.type==='openai-compat'&&(provider.serverUrl||'').includes('kiconnect.nrw'));
   const documentIds=[];
 
   for(const a of att){
@@ -2373,7 +2423,7 @@ async function sendMessageCore(text, att) {
   };
   const chat=currentChat();
   chat.messages.push(userMsgForStorage);
-  if(chat.messages.length===1){chat.title=(text||t('js.imageFileTitle')).slice(0,40);renderSidebar();}
+  if(chat.messages.length===1){chat.title='…';renderSidebar();autoGenerateChatTitle(chat,text);}
 
   // Build display message: only text + images visible, files as chips
   // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
@@ -2525,6 +2575,76 @@ async function sendMessageCore(text, att) {
     save();
   }
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
+}
+
+// ── Auto-Title Generation ─────────────────────────────────────────
+// Called immediately when the first user message is sent (parallel to the main stream).
+// Uses userText as a fast seed; once the AI response arrives it will have updated already.
+async function autoGenerateChatTitle(chat, userText) {
+  if(!chat) return;
+  try {
+    const provider = providerForModel(config.model) || providers[0];
+    if(!provider || !provider.apiKey) return;
+
+    const snippet = (userText||'').slice(0, 500);
+    if(!snippet) return;
+
+    const titlePrompt = 'Generate a concise chat title (max 6 words, no quotes, no trailing punctuation) for a conversation that starts with this user message:\n\n' + snippet;
+
+    let titleText = '';
+
+    if(provider.type === 'anthropic') {
+      const { modelId } = splitModelId(config.model);
+      const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': provider.apiKey,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: modelId || 'claude-haiku-4-5-20251001',
+          max_tokens: 20,
+          messages: [{ role: 'user', content: titlePrompt }]
+        })
+      });
+      if(res.ok) { const d = await res.json(); titleText = d.content?.[0]?.text || ''; }
+    } else {
+      // OpenAI-compatible (OpenAI, OpenRouter, KiConnect NRW, Mistral, Groq, DeepSeek …)
+      const endpoint = getProviderEndpoint(provider);
+      const { modelId } = splitModelId(config.model);
+      const extraHeaders = {};
+      if(provider.type === 'openrouter') {
+        extraHeaders['HTTP-Referer'] = window.location.origin;
+        extraHeaders['X-Title'] = 'KI Connect NRW';
+      }
+      const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${provider.apiKey}`,
+          ...extraHeaders
+        },
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 20,
+          temperature: 0.3,
+          messages: [{ role: 'user', content: titlePrompt }]
+        })
+      });
+      if(res.ok) { const d = await res.json(); titleText = d.choices?.[0]?.message?.content || ''; }
+    }
+
+    titleText = titleText.trim().replace(/^["']+|["']+$/g, '').replace(/[.!?]+$/, '').trim();
+    if(titleText && titleText.length > 1) {
+      chat.title = titleText.slice(0, 60);
+      save();
+      renderSidebar();
+    }
+  } catch(e) {
+    console.warn('[autoTitle] failed:', e.message);
+    // Leave the '…' placeholder — user can rename manually
+  }
 }
 
 // ── Message UI ─────────────────────────────────────────────────────
@@ -2899,7 +3019,7 @@ function closePanels(){
   document.getElementById('overlay').classList.remove('show');
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
-function openSettings(){syncSettingsPanel();document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
+function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
@@ -3029,6 +3149,7 @@ function renderAccountGrid() {
 }
 
 function selectAccountForLogin(accountId) {
+  _stopLockCountdown();
   _selectedLoginAccountId = accountId;
   const acc = getAccount(accountId);
   if (!acc) return;
@@ -3051,10 +3172,11 @@ async function doLogin() {
   if (!pw || !_selectedLoginAccountId) return;
 
   // Brute-Force-Sperre pruefen
-  const lockRem = _loginLockRemaining(_selectedLoginAccountId);
-  if (lockRem > 0) {
-    const secs = Math.ceil(lockRem / 1000);
-    errorEl.textContent = '\u23f3 ' + tf('login.lockedFor', { s: secs });
+  const lockRemCheck = _loginLockRemaining(_selectedLoginAccountId);
+  if (lockRemCheck > 0) {
+    const secs = Math.ceil(lockRemCheck / 1000);
+    errorEl.textContent = '⏳ ' + tf('login.lockedFor', { s: secs });
+    _startLockCountdown(_selectedLoginAccountId, errorEl, btn, input);
     return;
   }
 
@@ -3065,6 +3187,7 @@ async function doLogin() {
   try {
     const ok = await verifyAccountPassword(_selectedLoginAccountId, pw);
     if (ok) {
+      _stopLockCountdown();
       _resetLoginFailures(_selectedLoginAccountId);
       _activeAccountId = _selectedLoginAccountId;
       setSessionPassphrase(pw);
@@ -3084,15 +3207,20 @@ async function doLogin() {
       const remaining = BF_MAX_ATTEMPTS - failures;
       if (remaining > 0) {
         errorEl.textContent = t('login.error') + ' (' + tf('login.attemptsLeft', { n: remaining }) + ')';
+        input.value = ''; input.focus();
       } else {
         const secs = Math.ceil(_loginLockRemaining(_selectedLoginAccountId) / 1000);
-        errorEl.textContent = '\ud83d\udd12 ' + tf('login.lockedFor', { s: secs });
+        errorEl.textContent = '🔒 ' + tf('login.lockedFor', { s: secs });
+        input.value = '';
+        _startLockCountdown(_selectedLoginAccountId, errorEl, btn, input);
       }
-      input.value = ''; input.focus();
     }
   } finally {
-    if (btn) btn.disabled = false;
-    input.disabled = false;
+    // Nur entsperren wenn kein Countdown läuft
+    if (!_lockCountdownTimer) {
+      if (btn) btn.disabled = false;
+      input.disabled = false;
+    }
   }
 }
 
@@ -3177,18 +3305,24 @@ async function doSetupPassword() {
 
 function forgotPassword() {
   if (!_selectedLoginAccountId) {
-    if (!confirm(t('login.resetConfirm'))) return;
-    try { sessionStorage.clear(); } catch {}
-    localStorage.clear();
-    toast(t('login.resetDone')); setTimeout(() => location.reload(), 1200);
+    // Kein Account ausgewaehlt — einfach zur Account-Auswahl zurueck
+    showView('accountSelectView');
+    renderAccountGrid();
     return;
   }
   const acc = getAccount(_selectedLoginAccountId);
   if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
   deleteAccount(_selectedLoginAccountId);
   _selectedLoginAccountId = null;
-  showView('accountSelectView');
-  renderAccountGrid();
+  _stopLockCountdown();
+  if (_accounts.length === 0) {
+    renderNewAccountColorRow();
+    showView('newAccountView');
+    setTimeout(() => document.getElementById('newAccountName')?.focus(), 80);
+  } else {
+    showView('accountSelectView');
+    renderAccountGrid();
+  }
 }
 
 async function deleteAccount(accountId) {
@@ -3697,6 +3831,7 @@ async function bootApp() {
   syncSettingsPanel();
   loadSessionSettings();
   if (config.chatMaxWidth) applyChatWidth(config.chatMaxWidth);
+  applyTheme(localStorage.getItem('kic_theme') || 'dark');
   if (config.thinkingEnabled) {
     document.getElementById('thinkingToggle')?.classList.add('active');
     document.getElementById('thinkingIntensity')?.classList.add('visible');

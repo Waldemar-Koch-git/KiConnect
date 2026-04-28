@@ -13,21 +13,13 @@ if errorlevel 1 (
 )
 
 REM -- Update ausfuehren ---------------------------------------
-echo Pruefe auf Updates...
-call update.bat
-if errorlevel 1 (
-    echo Warnung: Update konnte nicht durchgefuehrt werden.
-    echo.
-)
-
-
-REM -- Update ausfuehren ---------------------------------------
 echo.
 echo Fuehre Update durch...
 call update.bat
 if errorlevel 1 (
     echo Warnung: Update konnte nicht durchgefuehrt werden.
 )
+
 :skip_update
 echo.
 
