@@ -1,48 +1,48 @@
 # KI-Connect
 
-Ein lokaler, sicherer Chat-Client für verschiedene KI-Provider (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, KI Connect NRW und eigene OpenAI-kompatible Server). Primär für **persönliche Einzelnutzung** konzipiert – nicht für Enterprise-Deployments.
+A local, secure chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, KI Connect NRW, and custom OpenAI-compatible servers). Primarily designed for **personal single-user use** — not for enterprise deployments.
 
-<img width="1502" height="1018" alt="grafik" src="https://github.com/user-attachments/assets/1efe644c-de04-4f55-88aa-41440575c20e" />
+<img width="1502" height="1018" alt="screenshot" src="https://github.com/user-attachments/assets/1efe644c-de04-4f55-88aa-41440575c20e" />
 
 ---
 
 ## Features
 
-- 🔒 **Client-seitige Verschlüsselung** – Alle Daten (Chats, Profile, Provider, Einstellungen) werden mit AES-GCM-256 im Browser verschlüsselt gespeichert
-- 🔐 **Passwort-geschützte Multi-Account-Sitzungen** mit PBKDF2 (600k Iterationen, zufälliger Salt pro Account)
-- 🛡️ **Brute-Force-Schutz** – Ab dem 5. Fehlversuch exponentielles Lockout (30s → 60s → 120s → …), kein Bypass via Cache-Löschen möglich
-- 🌐 **Browser-unabhängige Persistenz** – Daten liegen in `./datas/` auf dem lokalen Server; jeder Browser (Chrome, Firefox, Edge, …) greift auf dieselben Accounts zu
-- 🧠 **Extended Thinking / Reasoning** für unterstützte Modelle (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.)
-  - Anthropic: Kontinuierliches Token-Budget (1k–32k) + Prompt Caching (~90% weniger token-verbrauch)
-  - OpenAI: Reasoning-Effort (low/medium/high)
-- 📁 **Chat-Organisation** mit Ordnern, Drag & Drop und Branches
-- 🖼️ **Bild- & PDF-Unterstützung** (Vision-Modelle, Ctrl+V Paste, PDF-Text-Extraktion)
-- 🖨️ **Druckfunktion** – Vollständigen Chat oder einzelne Nachrichten drucken (inkl. LaTeX-Rendering)
-- 🌍 **Mehrsprachig** – weitere Sprachen können in `kiconnect-languages-i18n.js` ergänzt werden
-  - Bereits enthalten: EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
-- ⚡ **Streaming-Antworten** in Echtzeit mit Thinking-Block-Anzeige
-- 📊 **Token-Statistik** pro Nachricht und Gesamtanzahl pro Chat
-- 🧮 **LaTeX/MathJax** für mathematische Formeln
-- 📝 **Markdown-Rendering** via marked.js (GFM-kompatibel)
-- 📱 **Responsives Design** mit anpassbarer Chat-Breite
-- 🎨 **Agentenprofile** mit individuellen System-Prompts, Temperaturen und Modell-Limits
-- 🔄 **Ordner-Drag & Drop** für Umstrukturierung der Sidebar
+- 🔒 **Client-side encryption** – All data (chats, profiles, providers, settings) is encrypted with AES-GCM-256 in the browser
+- 🔐 **Password-protected multi-account sessions** using PBKDF2 (600k iterations, random salt per account)
+- 🛡️ **Brute-force protection** – Exponential lockout starting at the 5th failed attempt (30s → 60s → 120s → …), not bypassable via cache clearing
+- 🌐 **Browser-independent persistence** – Data is stored in `./datas/` on the local server; any browser (Chrome, Firefox, Edge, …) accesses the same accounts
+- 🧠 **Extended Thinking / Reasoning** for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.)
+  - Anthropic: Continuous token budget (1k–32k) + Prompt Caching (~90% fewer tokens)
+  - OpenAI: Reasoning effort (low/medium/high)
+- 📁 **Chat organisation** with folders, drag & drop, and branches
+- 🖼️ **Image & PDF support** (vision models, Ctrl+V paste, PDF text extraction)
+- 🖨️ **Print function** – Print the full chat or individual messages (including LaTeX rendering)
+- 🌍 **Multilingual** – additional languages can be added in `kiconnect-languages-i18n.js`
+  - Already included: EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
+- ⚡ **Streaming responses** in real time with thinking block display
+- 📊 **Token statistics** per message and total per chat
+- 🧮 **LaTeX/MathJax** for mathematical formulas
+- 📝 **Markdown rendering** via marked.js (GFM-compatible)
+- 📱 **Responsive design** with adjustable chat width
+- 🎨 **Agent profiles** with individual system prompts, temperatures, and model limits
+- 🔄 **Folder drag & drop** for sidebar reorganisation
 
 ---
 
-## Abhängigkeiten (JS-Bibliotheken)
+## Dependencies (JS Libraries)
 
-KI Connect lädt drei Bibliotheken per CDN von `cdn.jsdelivr.net` und eine Bibliothek lokal. Eine Internetverbindung ist beim ersten Start erforderlich; danach können die CDN-Dateien optional auch lokal abgelegt werden (siehe unten).
+KI Connect loads three libraries via CDN from `cdn.jsdelivr.net` and one library locally. An internet connection is required on first launch; afterwards the CDN files can optionally be hosted locally (see below).
 
-| Bibliothek | Bezug | Zweck |
+| Library | Source | Purpose |
 |---|---|---|
-| MathJax 3.2.2 | CDN (`cdn.jsdelivr.net`) | LaTeX-Rendering (Fonts werden automatisch mitgeladen) |
-| marked.js 12.0.0 | CDN (`cdn.jsdelivr.net`) | Markdown-Rendering |
-| DOMPurify 3.2.4 | CDN (`cdn.jsdelivr.net`) | XSS-Schutz |
-| PDF.js 3.11.174 |  CDN (`cdn.jsdelivr.net`) | PDF-Verarbeitung |
+| MathJax 3.2.2 | CDN (`cdn.jsdelivr.net`) | LaTeX rendering (fonts are loaded automatically) |
+| marked.js 12.0.0 | CDN (`cdn.jsdelivr.net`) | Markdown rendering |
+| DOMPurify 3.2.4 | CDN (`cdn.jsdelivr.net`) | XSS protection |
+| PDF.js 3.11.174 | CDN (`cdn.jsdelivr.net`) | PDF processing |
 
 
-## Dateistruktur
+## File Structure
 
 ```
 kiconnect/
@@ -54,7 +54,7 @@ kiconnect/
     ├── kiconnect-proxy.py
     ├── kiconnect-languages-i18n.js
 
-	<Optional: lokalisieren wenn gewünscht, sonst internet verbindung nötig!>
+	<Optional: host locally if desired, otherwise an internet connection is required!>
     ├── pdf.min.js
     └── pdf.worker.min.js
 
@@ -62,155 +62,154 @@ kiconnect/
 
 ---
 
-## Druckfunktion
+## Print Function
 
-KI Connect unterstützt zwei Druckmodi:
+KI Connect supports two print modes:
 
-### Vollständigen Chat drucken
-Über den 🖨️-Button in der Sidebar-Leiste wird der gesamte aktive Chat als druckoptimierte Seite ausgegeben. Der Chat-Titel erscheint als Überschrift. Enthaltene LaTeX-Formeln werden vor dem Drucken vollständig gerendert (MathJax muss dafür geladen sein).
+### Print Full Chat
+The 🖨️ button in the sidebar toolbar outputs the entire active chat as a print-optimised page. The chat title appears as a heading. Any LaTeX formulas are fully rendered before printing (MathJax must be loaded).
 
-### Einzelne Nachricht drucken
-Über das 🖨️-Symbol in den Aktions-Buttons einer Nachricht öffnet sich ein Vorschau-Dialog. Nach Bestätigung wird nur diese eine Nachricht – inklusive Codeblöcken und Formeln – in einem separaten Druckfenster ausgegeben.
+### Print Single Message
+The 🖨️ icon in a message's action buttons opens a preview dialog. After confirmation, only that single message — including code blocks and formulas — is output in a separate print window.
 
-> **Hinweis:** Manche Browser blockieren standardmäßig Popup-Fenster. Sollte der Druck-Dialog nicht erscheinen, bitte Popups für `localhost` in den Browser-Einstellungen erlauben.
-
----
-
-## Schnellstart (Windows)
-
-Doppelklick auf `START_kiconnect_mit_installierten_python.bat` oder (embedded) `START_kiconnect_nutzung_python_aus_unterordner.bat`
-
-
-> **Tipp:** Wenn Windows die `.bat`-Datei blockiert, einfach eine neue Textdatei erstellen, den Inhalt einfügen und die Dateiendung zu `.bat` umbenennen.
-
-Öffne dann: **http://localhost:5000**
+> **Note:** Some browsers block pop-up windows by default. If the print dialog does not appear, please allow pop-ups for `localhost` in your browser settings.
 
 ---
 
-## Manuelle Installation
+## Quick Start (Windows)
 
-### Voraussetzungen
+Double-click `START_kiconnect_mit_installierten_python.bat` or (embedded) `START_kiconnect_nutzung_python_aus_unterordner.bat`
+
+> **Tip:** If Windows blocks the `.bat` file, simply create a new text file, paste the content in, and rename the file extension to `.bat`.
+
+Then open: **http://localhost:5000**
+
+---
+
+## Manual Installation
+
+### Prerequisites
 
 - Python 3.9+
-- Moderner Browser (Chrome, Firefox, Edge, Safari)
+- Modern browser (Chrome, Firefox, Edge, Safari)
 
-### Schritte
+### Steps
 
 ```bash
-# 1. Repository klonen
+# 1. Clone the repository
 git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect
 
-# 2. Abhängigkeiten installieren
+# 2. Install dependencies
 pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0
 
-# 3. Proxy starten
+# 3. Start the proxy
 python kiconnect-proxy.py
 
-# 4. Browser öffnen: http://localhost:5000
+# 4. Open browser: http://localhost:5000
 ```
 
 ---
 
-## Konfiguration
+## Configuration
 
-1. **Erststart**: Account anlegen und Passwort setzen (schützt alle lokalen Daten)
-2. **Provider hinzufügen** (🔌-Button):
-   - **KI Connect NRW**: OpenAI-kompatibel, Server-URL: `https://chat.kiconnect.nrw/api/v1`
-   - **OpenAI**: API-Key von [platform.openai.com](https://platform.openai.com)
-   - **Anthropic/Claude**: API-Key von [console.anthropic.com](https://console.anthropic.com)
-   - **OpenRouter**: API-Key von [openrouter.ai](https://openrouter.ai) – 200+ Modelle
-   - **Mistral AI**: API-Key von [console.mistral.ai](https://console.mistral.ai)
-   - **Google Gemini**: API-Key von [aistudio.google.com](https://aistudio.google.com)
-   - **xAI Grok**: API-Key von [console.x.ai](https://console.x.ai)
-   - **Groq**: API-Key von [console.groq.com](https://console.groq.com) – Ultra-schnelle Inferenz
-   - **Eigener Server**: Beliebige OpenAI-kompatible API
+1. **First launch**: Create an account and set a password (protects all local data)
+2. **Add a provider** (🔌 button):
+   - **KI Connect NRW**: OpenAI-compatible, server URL: `https://chat.kiconnect.nrw/api/v1`
+   - **OpenAI**: API key from [platform.openai.com](https://platform.openai.com)
+   - **Anthropic/Claude**: API key from [console.anthropic.com](https://console.anthropic.com)
+   - **OpenRouter**: API key from [openrouter.ai](https://openrouter.ai) – 200+ models
+   - **Mistral AI**: API key from [console.mistral.ai](https://console.mistral.ai)
+   - **Google Gemini**: API key from [aistudio.google.com](https://aistudio.google.com)
+   - **xAI Grok**: API key from [console.x.ai](https://console.x.ai)
+   - **Groq**: API key from [console.groq.com](https://console.groq.com) – Ultra-fast inference
+   - **Custom server**: Any OpenAI-compatible API
 
-3. **Modell auswählen** – Live-Modell-Listen von den Providern (🧠 = Thinking-fähig)
-4. **Optional**: Benutzerprofil anlegen für verschiedene Personas/Rollen
+3. **Select a model** – Live model lists from providers (🧠 = thinking-capable)
+4. **Optional**: Create a user profile for different personas/roles
 
 ---
 
-## Multi-Account & Browser-Sync
+## Multi-Account & Browser Sync
 
-KI Connect unterstützt mehrere lokale Accounts auf demselben Rechner. Alle Daten werden im Unterordner `./datas/` neben der `kiconnect-proxy.py` gespeichert:
+KI Connect supports multiple local accounts on the same machine. All data is stored in the `./datas/` subfolder next to `kiconnect-proxy.py`:
 
 ```
 ./datas/
-├── _registry.json              ← Account-Liste (Klartext: ID, Name, pwHash, encSalt)
+├── _registry.json              ← Account list (plaintext: ID, name, pwHash, encSalt)
 └── <accountId>/
-    ├── config.json             ← Einstellungen       (AES-256-GCM verschlüsselt)
-    ├── providers.json          ← API-Keys            (AES-256-GCM verschlüsselt)
-    ├── profiles.json           ← Agentenprofile      (AES-256-GCM verschlüsselt)
-    ├── folders.json            ← Ordnerstruktur      (AES-256-GCM verschlüsselt)
-    └── chats.json              ← Chat-Verlauf        (AES-256-GCM verschlüsselt)
+    ├── config.json             ← Settings         (AES-256-GCM encrypted)
+    ├── providers.json          ← API keys          (AES-256-GCM encrypted)
+    ├── profiles.json           ← Agent profiles    (AES-256-GCM encrypted)
+    ├── folders.json            ← Folder structure  (AES-256-GCM encrypted)
+    └── chats.json              ← Chat history      (AES-256-GCM encrypted)
 ```
 
-> **Hinweis:** `_registry.json` enthält keine sensiblen Daten – nur Account-Namen, den PBKDF2-Passwort-Hash sowie den Verschlüsselungs-Salt. Chats, API-Keys und alle Inhalte liegen ausschließlich verschlüsselt in den Account-Unterordnern.
+> **Note:** `_registry.json` contains no sensitive data — only account names, the PBKDF2 password hash, and the encryption salt. Chats, API keys, and all content are stored exclusively encrypted in the account subfolders.
 
-Chrome, Firefox und Edge auf demselben PC greifen auf **dieselben Accounts und Chats** zu – ohne manuelle Synchronisation.
-
----
-
-## Thinking / Reasoning-Modus
-
-Für unterstützte Modelle (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.):
-
-- **Anthropic**: Kontinuierliches Budget (1024–32000 Tokens) für Extended Thinking
-- **OpenAI**: Diskrete Stufen (low/medium/high) für Reasoning-Effort
-- **Anzeige**: Einklappbarer „Denkprozess"-Block über der Antwort
+Chrome, Firefox, and Edge on the same PC access the **same accounts and chats** — without manual synchronisation.
 
 ---
 
-## Mehrsprachigkeit
+## Thinking / Reasoning Mode
 
-Die Übersetzungen liegen in `kiconnect-languages-i18n.js`. Eine neue Sprache hinzufügen:
+For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.):
 
-1. Einen bestehenden Sprachblock kopieren (z. B. `en`)
-2. Den neuen Sprachcode als Key setzen (z. B. `fr`)
-3. Alle Werte übersetzen (Keys identisch lassen)
-4. Den Code zum `LANGUAGES`-Objekt am Dateianfang hinzufügen
+- **Anthropic**: Continuous budget (1024–32000 tokens) for Extended Thinking
+- **OpenAI**: Discrete levels (low/medium/high) for Reasoning Effort
+- **Display**: Collapsible "thinking process" block above the response
 
 ---
 
-## Sicherheitsübersicht
+## Multilingual Support
 
-> **Wichtig**: Dies ist ein **persönliches Tool für vertrauenswürdige Umgebungen**, keine Enterprise-Lösung.
+Translations are located in `kiconnect-languages-i18n.js`. To add a new language:
 
-### Was geschützt ist ✅
+1. Copy an existing language block (e.g. `en`)
+2. Set the new language code as the key (e.g. `fr`)
+3. Translate all values (keep keys identical)
+4. Add the code to the `LANGUAGES` object at the top of the file
 
-| Feature | Implementierung | Schutz vor |
+---
+
+## Security Overview
+
+> **Important**: This is a **personal tool for trusted environments**, not an enterprise solution.
+
+### What is protected ✅
+
+| Feature | Implementation | Protects against |
 |---|---|---|
-| Datenspeicherung | AES-GCM-256 im Browser, Ablage in `./datas/` | Datenzugriff ohne Passwort |
-| Login / Passwort | PBKDF2-HMAC-SHA256, 600k Iterationen, zufälliger Salt pro Account | Brute-Force, Rainbow Tables |
-| Brute-Force (Login) | Exponentielles Lockout ab dem 5. Fehlversuch, nur im RAM | Offline- und Online-Passwort-Raten |
-| Session | Verschlüsselter Token in sessionStorage (kein Klartext-Passwort) | Passwort-Diebstahl aus Browser-Speicher |
-| XSS | DOMPurify (CDN mit CSP-Absicherung), strikte CSP | Reflected & Stored XSS |
-| SSRF | Domain-Allowlist + private-IP-Filter im Proxy | Server-Side Request Forgery |
-| CORS | Strict Origin/Host-Check, localhost-only | Ungewollte Cross-Origin-Zugriffe |
-| Rate-Limiting | Thread-sicher (Lock), 120 Requests/60s pro IP | DoS, Brute-Force |
-| Datei-Schreiben | Atomares Schreiben via `.tmp` + `os.replace()` | Datenverlust bei Proxy-Absturz |
-| Response-Handling | Kein `accept-encoding`-Forwarding, `location`-Header-Filter | Response-Injection, Redirect-Exploits |
+| Data storage | AES-GCM-256 in browser, stored in `./datas/` | Data access without password |
+| Login / password | PBKDF2-HMAC-SHA256, 600k iterations, random salt per account | Brute-force, rainbow tables |
+| Brute-force (login) | Exponential lockout from 5th failed attempt, RAM-only | Offline and online password guessing |
+| Session | Encrypted token in sessionStorage (no plaintext password) | Password theft from browser storage |
+| XSS | DOMPurify (CDN with CSP hardening), strict CSP | Reflected & stored XSS |
+| SSRF | Domain allowlist + private IP filter in proxy | Server-side request forgery |
+| CORS | Strict origin/host check, localhost-only | Unwanted cross-origin requests |
+| Rate limiting | Thread-safe (lock), 120 requests/60s per IP | DoS, brute-force |
+| File writing | Atomic write via `.tmp` + `os.replace()` | Data loss on proxy crash |
+| Response handling | No `accept-encoding` forwarding, `location` header filter | Response injection, redirect exploits |
 
-### Bekannte Limitationen ⚠️
+### Known Limitations ⚠️
 
-| Risiko | Einschätzung | Empfehlung |
+| Risk | Assessment | Recommendation |
 |---|---|---|
-| **CDN-Abhängigkeiten** | MathJax, marked.js, DOMPurify werden von `cdn.jsdelivr.net` geladen | Für vollständigen Offline-Betrieb lokal ablegen (s. oben) |
-| **Kompromittierte Systeme** (Malware) | Begrenzter Schutz – Malware mit User-Rechten kann auf Browser/Proxy zugreifen | Nur auf sauberen Systemen; API-Keys bei Verdacht rotieren |
-| **Man-in-the-Middle** | TLS-Validierung aktiv (`verify=True`), Proxy leitet HTTPS direkt weiter | Nur in vertrauenswürdigen Netzwerken |
-| **XSS via KI-Ausgaben** | DOMPurify filtert, aber komplexe Payloads theoretisch möglich | Bei verdächtigen Outputs Vorsicht |
-| **Browser-Neustart** | Nach Tab-Schließen: kurzer Re-Login erforderlich (RAM-Key weg) | Erwartetes sicheres Verhalten |
-| **Denial-of-Service** | 50 MB Body-Limit, Rate-Limiting vorhanden | Für Multi-User-Betrieb nicht ausreichend |
+| **CDN dependencies** | MathJax, marked.js, DOMPurify are loaded from `cdn.jsdelivr.net` | Host locally for full offline operation (see above) |
+| **Compromised systems** (malware) | Limited protection – malware with user rights can access browser/proxy | Use on clean systems only; rotate API keys if suspicious |
+| **Man-in-the-middle** | TLS validation active (`verify=True`), proxy forwards HTTPS directly | Use on trusted networks only |
+| **XSS via AI output** | DOMPurify filters, but complex payloads are theoretically possible | Exercise caution with suspicious outputs |
+| **Browser restart** | After closing the tab: brief re-login required (RAM key gone) | Expected secure behaviour |
+| **Denial-of-service** | 50 MB body limit, rate limiting in place | Not sufficient for multi-user operation |
 
-### Architektur
+### Architecture
 
 ```
 ┌─────────────────────┐     ┌───────────────────────────┐     ┌──────────────────┐
-│   Browser           │ ←→  │  kiconnect-proxy.py       │ ←→  │  API-Provider    │
+│   Browser           │ ←→  │  kiconnect-proxy.py       │ ←→  │  API Provider    │
 │  AES-GCM-256        │     │  127.0.0.1:5000           │     │  OpenAI etc.     │
-│  (Verschlüsselung   │     │  CORS-Proxy + Storage-API │     │  (HTTPS, kein    │
-│   im Browser)       │     │  ./datas/ (verschlüsselt) │     │   TLS-Terminier.)│
+│  (encryption        │     │  CORS-Proxy + Storage-API │     │  (HTTPS, no      │
+│   in browser)       │     │  ./datas/ (encrypted)     │     │   TLS terminat.) │
 │  PBKDF2 (600k)      │     │  Thread-safe, atomic I/O  │     │                  │
 │  DOMPurify (CDN)    │     │                           │     │                  │
 │  marked.js (CDN)    │     │                           │     │                  │
@@ -219,48 +218,17 @@ Die Übersetzungen liegen in `kiconnect-languages-i18n.js`. Eine neue Sprache hi
 │  Brute-Force-Lock   │     │                           │     │                  │
 └─────────────────────┘     └───────────────────────────┘     └──────────────────┘
          ↑
-  [Passwort-geschützt]
-  PBKDF2 + Session-Token
-  Kein Klartext im Storage
+  [Password-protected]
+  PBKDF2 + Session Token
+  No plaintext in storage
 ```
 
 ---
 
-## Changelog
+## License
 
-### v5.1
-- ✅ **marked.js** – Markdown-Rendering über marked.js 12.0.0 (ersetzt den integrierten Parser)
-
-- ✅ **CDN für MathJax, marked.js und DOMPurify** – Fonts und Bibliotheken werden von `cdn.jsdelivr.net` geladen;
-- ✅ **Vollständige i18n** – alle UI-Texte über `kiconnect-languages-i18n.js`; keine hardcodierten Strings mehr
-- ✅ **Druckfunktion** – vollständigen Chat oder einzelne Nachrichten drucken, inkl. LaTeX-Rendering
-
-### v5.0
-- ✅ **Browser-unabhängige Persistenz** – Storage-API im Proxy, Daten in `./datas/`
-- ✅ **Atomares Schreiben** via `.tmp` + `os.replace()` (kein Datenverlust)
-- ✅ **Thread-Lock** für alle Datei-I/O-Operationen
-
-### v4.5 (Security Hardening)
-- ✅ **Seed aus localStorage entfernt** – CryptoKey wird ausschließlich aus Passwort + Account-Salt abgeleitet
-- ✅ **Kein Klartext-Passwort in sessionStorage** – verschlüsselter Session-Token (AES-GCM)
-- ✅ **Brute-Force-Lockout** – exponentielles Backoff im RAM, kein Bypass durch Cache-Löschen
-- ✅ **Vollständige AES-256-GCM-Verschlüsselung** aller gespeicherten Daten
-- ✅ **Multi-Account-System** mit separaten Crypto-Keys pro Account
-
-### v4.4
-- ✅ Kein `accept-encoding`-Forwarding (gzip/br-Bugfix)
-- ✅ `http-referer` und `x-title` für OpenRouter
-
-### v4.2
-- ✅ Thread-sicheres Rate-Limiting (Lock)
-- ✅ `location`-Header-Filterung
+MIT License – See [LICENSE](LICENSE)
 
 ---
 
-## Lizenz
-
-MIT License – Siehe [LICENSE](LICENSE)
-
----
-
-**Haftungsausschluss**: Diese Software wird „as-is" bereitgestellt. Keine Haftung für API-Kosten, Datenverlust oder Sicherheitsvorfälle. Nutzung auf eigenes Risiko.
+**Disclaimer**: This software is provided "as-is". No liability for API costs, data loss, or security incidents. Use at your own risk.
