@@ -12,12 +12,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM -- Update ausfuehren ---------------------------------------
+REM -- Run update -----------------------------------------------
 echo.
-echo Fuehre Update durch...
+echo Running update...
 call update.bat
 if errorlevel 1 (
-    echo Warnung: Update konnte nicht durchgefuehrt werden.
+    echo Warning: Update could not be completed.
 )
 
 :skip_update
@@ -25,7 +25,7 @@ echo.
 
 echo.
 echo  ==========================================
-echo       KI Connect - Python Bibs checken..
+echo       KI Connect - Checking Python Libs..
 echo  ==========================================
 echo.
 echo Installing / updating dependencies...

@@ -6,32 +6,32 @@ set BASE_URL=https://raw.githubusercontent.com/Waldemar-Koch-git/KiConnect/main/
 
 echo.
 echo  ==========================================
-echo       KI Connect - Update wird geprueft
+echo       KI Connect - Checking for Updates
 echo  ==========================================
 echo.
 
-REM -- Pruefen ob curl vorhanden (ab Windows 10 eingebaut) ----
+REM -- Check if curl is available (built-in from Windows 10) ----
 curl --version >nul 2>&1
 if errorlevel 1 (
-    echo  [FEHLER] curl nicht gefunden.
-    echo  Bitte Windows 10 oder neuer verwenden.
+    echo  [ERROR] curl not found.
+    echo  Please use Windows 10 or newer.
     echo.
     pause
     exit /b 1
 )
 
-REM -- Pruefen ob Internetverbindung besteht ------------------
+REM -- Check if internet connection exists ----------------------
 curl --silent --head --fail "https://raw.githubusercontent.com" >nul 2>&1
 if errorlevel 1 (
-    echo  [INFO] Kein Internet - Update wird uebersprungen.
+    echo  [INFO] No internet connection - Update skipped.
     echo.
     goto :end
 )
 
-echo  Lade aktuellste Dateien von GitHub...
+echo  Downloading latest files from GitHub...
 echo.
 
-REM -- Liste aller Dateien die aktualisiert werden sollen -----
+REM -- List of all files to be updated --------------------------
 call :download "comm\kiconnect.css"
 call :download "comm\kiconnect.html"
 call :download "comm\kiconnect.js"
@@ -42,29 +42,29 @@ call :download "update.bat"
 
 
 echo.
-echo  [OK] Update abgeschlossen.
+echo  [OK] Update completed.
 echo.
 goto :end
 
 
 REM ============================================================
-REM  Hilfsfunktion: Eine Datei herunterladen
-REM  Parameter: %1 = relativer Pfad zur Datei (z.B. "comm\datei.py")
+REM  Helper function: Download a single file
+REM  Parameter: %1 = relative path to file (e.g. "comm\file.py")
 REM ============================================================
 :download
     set REMOTE_FILE=%~1
     set LOCAL_FILE=%~dp0%REMOTE_FILE%
     set REMOTE_URL=%BASE_URL%/%REMOTE_FILE:\=/%
 
-    REM -- Zielordner anlegen falls nicht vorhanden
+    REM -- Create target folder if it doesn't exist
     for %%F in ("%LOCAL_FILE%") do (
         if not exist "%%~dpF" mkdir "%%~dpF"
     )
 
-    REM -- Datei herunterladen (--fail: bei 404 kein leere Datei)
+    REM -- Download file (--fail: don't create empty file on 404)
     curl --silent --fail --location --output "%LOCAL_FILE%" "%REMOTE_URL%"
     if errorlevel 1 (
-        echo  [ !! ] Konnte nicht laden: %REMOTE_FILE%
+        echo  [ !! ] Could not download: %REMOTE_FILE%
     ) else (
         echo  [ OK ] %REMOTE_FILE%
     )

@@ -6,12 +6,12 @@ CHANGELOG v5.1 (Browser-unabhaengige Persistenz):
   unabhaengig vom Browser. Alle Browser teilen sich dieselben Accounts.
 
   Endpunkte (nur von localhost erreichbar):
-    GET  /store/                     Account-Registry lesen
-    PUT  /store/                     Account-Registry schreiben
+    GET  /store/                     Account registry lesen
+    PUT  /store/                     Account registry write
     GET  /store/<accountId>          Keys eines Accounts auflisten
-    GET  /store/<accountId>/<key>    Eintrag lesen
-    PUT  /store/<accountId>/<key>    Eintrag schreiben
-    DEL  /store/<accountId>/<key>    Eintrag loeschen
+    GET  /store/<accountId>/<key>    entry lesen
+    PUT  /store/<accountId>/<key>    entry write
+    DEL  /store/<accountId>/<key>    entry loeschen
 
   Sicherheit:
     - Nur localhost (Origin + Host Check)
@@ -52,7 +52,7 @@ ALLOWED_ORIGINS = {
 
 # ── Maximale Groessen (DoS-Schutz) ───────────────────────────────
 MAX_BODY_SIZE  = 50  * 1024 * 1024   # 50 MB fuer Proxy-Requests
-MAX_STORE_SIZE = 100 * 1024 * 1024   # 100 MB pro Storage-Eintrag
+MAX_STORE_SIZE = 100 * 1024 * 1024   # 100 MB pro Storage-entry
 app.config['MAX_CONTENT_LENGTH'] = MAX_STORE_SIZE
 
 # ── Storage-Lock (thread-safe Datei-I/O) ─────────────────────────
@@ -84,8 +84,9 @@ def _key_path(account_id, key):
 def _registry_path():
     return os.path.join(DATA_DIR, '_registry.json')
 
-# ── Origin-Pruefung (wiederverwendbar) ───────────────────────────
+# ── Origin-Pruefung ───────────────────────────────────────────────
 def _check_local():
+    """Return a 403 Response if request origin/host is not localhost, else None."""
     origin = request.headers.get('Origin', '')
     host   = request.headers.get('Host', '')
     if origin and origin not in ALLOWED_ORIGINS:
@@ -96,15 +97,39 @@ def _check_local():
                         content_type='application/json')
     return None
 
-# ── /store/ — Account-Registry ───────────────────────────────────
+# ── Atomarer Schreibvorgang ───────────────────────────────────────
+def _atomic_write(target_path, data_bytes):
+    """Write data_bytes to target_path atomically via a temp file + os.replace().
+
+    Falls back to a direct write on Windows if os.replace() keeps failing due to
+    file locking (e.g. AV scanners, Nextcloud).  Must be called inside _store_lock.
+    Returns None on success or raises on unrecoverable error.
+    """
+    tmp = target_path + '.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(data_bytes)
+    for attempt in range(8):
+        try:
+            os.replace(tmp, target_path)
+            return
+        except PermissionError:
+            time.sleep(0.15 * (attempt + 1))
+    # Last-resort fallback: direct write
+    with open(target_path, 'wb') as fw:
+        fw.write(data_bytes)
+    try:
+        os.remove(tmp)
+    except Exception:
+        pass
+
+
+# ── /store/ — Account registry ───────────────────────────────────
 @app.route('/store/', methods=['GET', 'PUT', 'OPTIONS'])
 @app.route('/store',  methods=['GET', 'PUT', 'OPTIONS'])
 def store_registry():
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    err = _check_local(); 
-    if err: return err
-
+    #  _check_local() removed — before_request already guards /store paths
     rpath = _registry_path()
 
     if request.method == 'GET':
@@ -114,7 +139,8 @@ def store_registry():
             with open(rpath, 'rb') as f:
                 return Response(f.read(), 200, content_type='application/json')
 
-    # PUT
+
+    # PUT — uses shared _atomic_write helper
     body = request.get_data()
     if len(body) > MAX_STORE_SIZE:
         return Response('{"error":"Body too large."}', 413, content_type='application/json')
@@ -122,22 +148,9 @@ def store_registry():
     except Exception:
         return Response('{"error":"Invalid JSON."}', 400, content_type='application/json')
     with _store_lock:
-        tmp = rpath + '.tmp'
-        with open(tmp, 'wb') as f: f.write(body)
-        # Retry os.replace() — on Windows, Nextcloud/AV can briefly lock files
-        _replaced = False
-        for _attempt in range(8):
-            try:
-                os.replace(tmp, rpath)
-                _replaced = True
-                break
-            except PermissionError:
-                time.sleep(0.15 * (_attempt + 1))
-        if not _replaced:
-            with open(rpath, 'wb') as fw: fw.write(body)
-            try: os.remove(tmp)
-            except Exception: pass
+        _atomic_write(rpath, body)
     return Response('{"ok":true}', 200, content_type='application/json')
+    
 
 
 # ── /store/<accountId> — Keys auflisten ──────────────────────────
@@ -145,8 +158,7 @@ def store_registry():
 def store_list(account_id):
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    err = _check_local()
-    if err: return err
+    # _check_local() removed — before_request already guards /store paths
     adir = _account_dir(account_id)
     if not adir:
         return Response('{"error":"Invalid account ID."}', 400, content_type='application/json')
@@ -163,9 +175,7 @@ def store_list(account_id):
 def store_key(account_id, key):
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    err = _check_local()
-    if err: return err
-
+    #  _check_local() removed — before_request already guards /store paths
     fpath = _key_path(account_id, key)
     if not fpath:
         return Response('{"error":"Invalid ID or key."}', 400, content_type='application/json')
@@ -178,6 +188,7 @@ def store_key(account_id, key):
                 return Response(f.read(), 200, content_type='application/json')
 
     if request.method == 'PUT':
+        #  — uses shared _atomic_write helper
         body = request.get_data()
         if len(body) > MAX_STORE_SIZE:
             return Response('{"error":"Body too large."}', 413, content_type='application/json')
@@ -187,26 +198,12 @@ def store_key(account_id, key):
         adir = _account_dir(account_id)
         with _store_lock:
             os.makedirs(adir, exist_ok=True)
-            tmp = fpath + '.tmp'
-            with open(tmp, 'wb') as f: f.write(body)
-            # Retry os.replace() — on Windows, Nextcloud/AV can briefly lock files
-            _replaced = False
-            for _attempt in range(8):
-                try:
-                    os.replace(tmp, fpath)
-                    _replaced = True
-                    break
-                except PermissionError:
-                    time.sleep(0.15 * (_attempt + 1))
-            if not _replaced:
-                # Last-resort fallback: direct write without atomic replace
-                try:
-                    with open(fpath, 'wb') as fw: fw.write(body)
-                    try: os.remove(tmp)
-                    except Exception: pass
-                except Exception as e:
-                    return Response(f'{{"error":"Write failed: {e}"}}', 500, content_type='application/json')
+            try:
+                _atomic_write(fpath, body)
+            except Exception as e:
+                return Response(f'{{"error":"Write failed: {e}"}}', 500, content_type='application/json')
         return Response('{"ok":true}', 200, content_type='application/json')
+        
 
     if request.method == 'DELETE':
         with _store_lock:
@@ -443,9 +440,9 @@ if __name__ == '__main__':
     print('║  Data dir:    ./datas/   (browser-unabhaengige Persistenz)       ║')
     print('║                                                                  ║')
     print('║  Storage-API  (nur localhost):                                   ║')
-    print('║    GET/PUT  /store/                Account-Registry              ║')
+    print('║    GET/PUT  /store/                Account registry              ║')
     print('║    GET      /store/<id>            Keys auflisten                ║')
-    print('║    GET/PUT/DELETE /store/<id>/<k>  Datei lesen/schreiben         ║')
+    print('║    GET/PUT/DELETE /store/<id>/<k>  Datei lesen/write         ║')
     print('║                                                                  ║')
     print('║  Proxy-Allowlist:                                                ║')
     print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com       ║')
@@ -458,3 +455,4 @@ if __name__ == '__main__':
 
     serve(app, host='127.0.0.1', port=5000, threads=8,
           channel_timeout=120, cleanup_interval=10)
+

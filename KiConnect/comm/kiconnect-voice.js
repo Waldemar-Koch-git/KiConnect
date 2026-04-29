@@ -1,12 +1,12 @@
 // ================================================================
-// kiconnect-voice.js  –  Spracheingabe & Sprachausgabe (Web Speech API)
-// Version 2.0 – vollständig überarbeitet
+// kiconnect-voice.js  –  Speech input & speech output (Web Speech API)
+// Version 2.0 – fully revised
 // ================================================================
 
 (function () {
   'use strict';
 
-  // ── Einstellungen ─────────────────────────────────────────────────
+  // ── Settings ─────────────────────────────────────────────────
   const STORAGE_KEY = 'kic_voice_settings';
 
   function loadSettings() {
@@ -23,21 +23,21 @@
     ttsPitch:    1.0,
     ttsVoice:    '',
     sttAutoSend: false,
-    dialogMode:  false,   // Dialog: KI-Antwort vorlesen → dann wieder zuhören
+    dialogMode:  false,   // Dialog: read AI response aloud → then listen again
     ...loadSettings(),
   };
 
-  // ── Zustand ──────────────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────
   let sttActive     = false;
   let ttsActive     = false;
   let dialogPending = false;
   let webSpeechRec  = null;
   let btnMic, btnTts, btnVoiceSettings;
 
-  // ── i18n-Hilfsfunktion ──────────────────────────────────────────
-  // TRANSLATIONS (const) und currentLang (let) sind in anderen Scripts als
-  // globale Lexical-Bindings definiert – sie erscheinen NICHT auf window,
-  // sind aber als einfache Bezeichner aus diesem IIFE erreichbar.
+  // ── i18n helper function ──────────────────────────────────────
+  // TRANSLATIONS (const) and currentLang (let) are defined as
+  // global lexical bindings in other scripts – they do NOT appear on window,
+  // but are accessible as plain identifiers from within this IIFE.
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
@@ -50,7 +50,7 @@
     return fallback || key;
   }
 
-  // ── DOM-Hilfsfunktionen ─────────────────────────────────────────
+  // ── DOM helper functions ─────────────────────────────────────
   function waitForElement(id, cb, tries) {
     tries = tries || 0;
     const el = document.getElementById(id);
@@ -70,7 +70,7 @@
     setTimeout(function () { el.classList.remove('show'); }, 3000);
   }
 
-  // ── SVG-Icons ────────────────────────────────────────────────────
+  // ── SVG icons ────────────────────────────────────────────────
   var SVG_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg>';
 
   var SVG_MIC_STOP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/><line x1="4" y1="4" x2="20" y2="20" stroke="#e74c3c" stroke-width="2.5"/></svg>';
@@ -81,7 +81,7 @@
 
   var SVG_GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
-  // ── CSS injizieren ────────────────────────────────────────────────
+  // ── Inject CSS ────────────────────────────────────────────────
   function injectStyles() {
     var s = document.createElement('style');
     s.id = 'kiconnect-voice-styles';
@@ -127,12 +127,12 @@
     document.head.appendChild(s);
   }
 
-  // ── Button-Status ────────────────────────────────────────────────
+  // ── Button status ────────────────────────────────────────────
   function setMicState(active) {
     sttActive = active;
     if (!btnMic) return;
     btnMic.classList.toggle('voice-active', active);
-    btnMic.title    = active ? t('voice.micStop',  'Aufnahme stoppen')     : t('voice.micStart',  'Spracheingabe starten');
+    btnMic.title    = active ? t('voice.micStop',  'Stop recording')     : t('voice.micStart',  'Start voice input');
     btnMic.innerHTML = active ? SVG_MIC_STOP : SVG_MIC;
   }
 
@@ -140,11 +140,11 @@
     ttsActive = active;
     if (!btnTts) return;
     btnTts.classList.toggle('voice-active', active);
-    btnTts.title    = active ? t('voice.ttsStop',  'Sprachausgabe stoppen') : t('voice.ttsStart', 'Letzte Antwort vorlesen');
+    btnTts.title    = active ? t('voice.ttsStop',  'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
     btnTts.innerHTML = active ? SVG_SPEAKER_STOP : SVG_SPEAKER;
   }
 
-  // ── Buttons einfügen (LINKS vom Senden-Button) ───────────────────
+  // ── Insert buttons (LEFT of send button) ───────────────────
   function injectButtons() {
     var actions = document.querySelector('.input-actions');
     if (!actions) return;
@@ -158,7 +158,7 @@
     btnMic.type      = 'button';
     btnMic.id        = 'voiceMicBtn';
     btnMic.className = 'voice-btn';
-    btnMic.title     = t('voice.micStart', 'Spracheingabe starten');
+    btnMic.title     = t('voice.micStart', 'Start voice input');
     btnMic.innerHTML = SVG_MIC;
     btnMic.addEventListener('click', toggleStt);
 
@@ -166,7 +166,7 @@
     btnTts.type      = 'button';
     btnTts.id        = 'voiceTtsBtn';
     btnTts.className = 'voice-btn';
-    btnTts.title     = t('voice.ttsStart', 'Letzte Antwort vorlesen');
+    btnTts.title     = t('voice.ttsStart', 'Read last reply aloud');
     btnTts.innerHTML = SVG_SPEAKER;
     btnTts.addEventListener('click', toggleTts);
 
@@ -174,20 +174,20 @@
     btnVoiceSettings.type      = 'button';
     btnVoiceSettings.id        = 'voiceSettingsBtn';
     btnVoiceSettings.className = 'voice-gear-btn';
-    btnVoiceSettings.title     = t('voice.settingsTitle', 'Spracheinstellungen');
+    btnVoiceSettings.title     = t('voice.settingsTitle', 'Voice Settings');
     btnVoiceSettings.innerHTML = SVG_GEAR;
     btnVoiceSettings.addEventListener('click', toggleVoiceSettingsPanel);
 
-    // Reihenfolge: sep | 🎤 | 🔊 | ⚙ | [Senden]
+    // Order: sep | 🎤 | 🔊 | ⚙ | [Send]
     actions.insertBefore(sep,              sendBtn);
     actions.insertBefore(btnMic,           sendBtn);
     actions.insertBefore(btnTts,           sendBtn);
     actions.insertBefore(btnVoiceSettings, sendBtn);
 
-    // Dialog-Badge im Header
+    // Dialog badge in header
     var dialogBadge = document.createElement('span');
     dialogBadge.id        = 'voiceDialogBadge';
-    dialogBadge.title     = t('voice.dialogStop', 'Dialog-Modus beenden – klicken zum Stoppen');
+    dialogBadge.title     = t('voice.dialogStop', 'Stop dialog mode – click to stop');
     dialogBadge.textContent = '🎙️ Dialog';
     dialogBadge.addEventListener('click', function () {
       vs.dialogMode = false;
@@ -195,7 +195,7 @@
       updateDialogBadge();
       stopStt();
       stopTts();
-      showToast(t('voice.dialogStopped', 'Dialog-Modus beendet'));
+      showToast(t('voice.dialogStopped', 'Dialog mode stopped'));
     });
     var headerRight = document.querySelector('.header-right');
     if (headerRight) {
@@ -210,19 +210,28 @@
     badge.classList.toggle('visible', !!vs.dialogMode);
   }
 
-  // ── Einstellungs-Panel ────────────────────────────────────────────
+  // Avoids a full panel rebuild on language change; unifies the translation mechanism with the main app.
+  function _retranslatePanelDom(root) {
+    (root || document).querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'), el.textContent);
+    });
+  }
+  
+
+  // ── Settings panel ────────────────────────────────────────────
+  // Voice panel with data-i18n attributes (no full panel rebuild on language change)
   function buildVoiceSettingsPanel() {
     var panel = document.createElement('div');
     panel.id = 'voiceSettingsPanel';
     panel.innerHTML = [
       '<div class="vs-header">',
-        '<div class="vs-header-title">🎙️ <span>' + t('voice.settingsTitle','Spracheinstellungen') + '</span></div>',
-        '<button class="vs-close" id="vsClose" title="Schließen">✕</button>',
+        '<div class="vs-header-title">🎙️ <span data-i18n="voice.settingsTitle">Voice Settings</span></div>',
+        '<button class="vs-close" id="vsClose" title="Close">✕</button>',
       '</div>',
       '<div class="vs-body">',
 
         '<div class="vs-group">',
-          '<div class="vs-label">' + t('voice.sttLang','Erkennungssprache') + '</div>',
+          '<div class="vs-label" data-i18n="voice.sttLang">Erkennungssprache</div>',
           '<select class="vs-select" id="vsSttLang">',
             '<option value="de-DE">Deutsch (DE)</option>',
             '<option value="de-AT">Deutsch (AT)</option>',
@@ -249,12 +258,12 @@
         '<hr class="vs-sep">',
 
         '<div class="vs-group">',
-          '<div class="vs-label">' + t('voice.ttsVoice','Stimme (Text → Sprache)') + '</div>',
-          '<select class="vs-select" id="vsTtsVoice"><option value="">— ' + t('voice.defaultVoice','Standard') + ' —</option></select>',
+          '<div class="vs-label" data-i18n="voice.ttsVoice">Stimme (Text → Sprache)</div>',
+          '<select class="vs-select" id="vsTtsVoice"><option value="">— <span data-i18n="voice.defaultVoice">Standard</span> —</option></select>',
         '</div>',
 
         '<div class="vs-group">',
-          '<div class="vs-label">' + t('voice.ttsRate','Sprechgeschwindigkeit') + '</div>',
+          '<div class="vs-label" data-i18n="voice.ttsRate">Sprechgeschwindigkeit</div>',
           '<div class="vs-slider-row">',
             '<input type="range" id="vsTtsRate" min="0.5" max="2.0" step="0.1" value="' + vs.ttsRate + '">',
             '<span class="vs-slider-val" id="vsTtsRateVal">' + vs.ttsRate.toFixed(1) + '×</span>',
@@ -262,7 +271,7 @@
         '</div>',
 
         '<div class="vs-group">',
-          '<div class="vs-label">' + t('voice.ttsPitch','Tonhöhe') + '</div>',
+          '<div class="vs-label" data-i18n="voice.ttsPitch">Pitch</div>',
           '<div class="vs-slider-row">',
             '<input type="range" id="vsTtsPitch" min="0.5" max="2.0" step="0.1" value="' + vs.ttsPitch + '">',
             '<span class="vs-slider-val" id="vsTtsPitchVal">' + vs.ttsPitch.toFixed(1) + '</span>',
@@ -272,20 +281,20 @@
         '<hr class="vs-sep">',
 
         '<div class="vs-group">',
-          '<div class="vs-label">' + t('voice.options','Optionen') + '</div>',
+          '<div class="vs-label" data-i18n="voice.options">Optionen</div>',
           '<div class="vs-toggle-row">',
             '<div class="vs-chip ' + (vs.sttAutoSend ? 'active' : '') + '" id="vsAutoSendChip">',
               '<span class="vs-chip-icon">⚡</span>',
               '<div class="vs-chip-desc">',
-                '<span class="vs-chip-name">' + t('voice.autoSend','Auto-Senden') + '</span>',
-                '<span class="vs-chip-sub">' + t('voice.autoSendSub','Nachricht nach STT sofort senden') + '</span>',
+                '<span class="vs-chip-name" data-i18n="voice.autoSend">Auto-Senden</span>',
+                '<span class="vs-chip-sub" data-i18n="voice.autoSendSub">Nachricht nach STT sofort senden</span>',
               '</div>',
             '</div>',
             '<div class="vs-chip ' + (vs.dialogMode ? 'active' : '') + '" id="vsDialogChip">',
               '<span class="vs-chip-icon">💬</span>',
               '<div class="vs-chip-desc">',
-                '<span class="vs-chip-name">' + t('voice.dialog','Dialog-Modus') + '</span>',
-                '<span class="vs-chip-sub">' + t('voice.dialogSub','KI-Antwort vorlesen → dann wieder zuhören') + '</span>',
+                '<span class="vs-chip-name" data-i18n="voice.dialog">Dialog-Modus</span>',
+                '<span class="vs-chip-sub" data-i18n="voice.dialogSub">Read AI response aloud → then listen again</span>',
               '</div>',
             '</div>',
           '</div>',
@@ -295,8 +304,10 @@
     ].join('');
 
     document.body.appendChild(panel);
+    _retranslatePanelDom(panel);
+  
 
-    // Sprache
+    // Language
     var langSel = panel.querySelector('#vsSttLang');
     langSel.value = vs.sttLang;
     langSel.addEventListener('change', function () {
@@ -304,7 +315,7 @@
       saveSettings({ sttLang: vs.sttLang });
     });
 
-    // Geschwindigkeit
+    // Speed
     var rateSlider = panel.querySelector('#vsTtsRate');
     var rateVal    = panel.querySelector('#vsTtsRateVal');
     rateSlider.addEventListener('input', function () {
@@ -313,7 +324,7 @@
       saveSettings({ ttsRate: vs.ttsRate });
     });
 
-    // Tonhöhe
+    // Pitch
     var pitchSlider = panel.querySelector('#vsTtsPitch');
     var pitchVal    = panel.querySelector('#vsTtsPitchVal');
     pitchSlider.addEventListener('input', function () {
@@ -322,7 +333,7 @@
       saveSettings({ ttsPitch: vs.ttsPitch });
     });
 
-    // Auto-Senden
+    // Auto-send
     var autoSendChip = panel.querySelector('#vsAutoSendChip');
     autoSendChip.addEventListener('click', function () {
       vs.sttAutoSend = !vs.sttAutoSend;
@@ -330,7 +341,7 @@
       saveSettings({ sttAutoSend: vs.sttAutoSend });
     });
 
-    // Dialog-Modus
+    // Dialog mode
     var dialogChip = panel.querySelector('#vsDialogChip');
     dialogChip.addEventListener('click', function () {
       vs.dialogMode = !vs.dialogMode;
@@ -338,15 +349,15 @@
       saveSettings({ dialogMode: vs.dialogMode });
       updateDialogBadge();
       if (vs.dialogMode) {
-        showToast(t('voice.dialogStarted', '💬 Dialog-Modus aktiv – Mikrofon starten zum Beginnen'));
+        showToast(t('voice.dialogStarted', '💬 Dialog mode active – start microphone to begin'));
       } else {
         stopStt();
         stopTts();
-        showToast(t('voice.dialogStopped', 'Dialog-Modus beendet'));
+        showToast(t('voice.dialogStopped', 'Dialog mode stopped'));
       }
     });
 
-    // Schließen
+    // Close
     panel.querySelector('#vsClose').addEventListener('click', closeVoiceSettingsPanel);
     document.addEventListener('click', function (e) {
       if (!panel.contains(e.target) && e.target !== btnVoiceSettings && !btnVoiceSettings.contains(e.target)) {
@@ -365,7 +376,7 @@
     if (!sel || !window.speechSynthesis) return;
     var voices = speechSynthesis.getVoices();
     var prev   = sel.value;
-    sel.innerHTML = '<option value="">— ' + t('voice.defaultVoice','Standard') + ' —</option>';
+    sel.innerHTML = '<option value="">— ' + t('voice.defaultVoice','Default') + ' —</option>';
     voices.forEach(function (v) {
       var opt = document.createElement('option');
       opt.value       = v.voiceURI;
@@ -374,7 +385,7 @@
       sel.appendChild(opt);
     });
     if (!sel.value && prev) sel.value = prev;
-    // Listener nur einmal setzen
+    // Set listeners only once
     if (!sel._voiceListenerAdded) {
       sel._voiceListenerAdded = true;
       sel.addEventListener('change', function () {
@@ -389,7 +400,7 @@
     if (!panel) return;
     panel.classList.toggle('open');
     if (panel.classList.contains('open')) {
-      // Positionierung relativ zum Senden-Button
+      // Positioning relative to send button
       var sendBtn = document.getElementById('sendBtn');
       if (sendBtn) {
         var rect = sendBtn.getBoundingClientRect();
@@ -413,7 +424,7 @@
   function startStt() {
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) {
-      showToast('⚠️ ' + t('voice.sttUnavailable', 'Web Speech API nicht verfügbar.'));
+      showToast('⚠️ ' + t('voice.sttUnavailable', 'Web Speech API not available.'));
       return;
     }
     webSpeechRec = new SR();
@@ -467,15 +478,15 @@
       setMicState(false);
       var ta = getTextarea();
       if (ta) delete ta.dataset.voiceBase;
-      if      (e.error === 'not-allowed') showToast('🎤 ' + t('voice.micDenied', 'Mikrofonzugriff verweigert.'));
-      else if (e.error === 'no-speech')   showToast('🔇 ' + t('voice.noSpeech',  'Kein Ton erkannt.'));
+      if      (e.error === 'not-allowed') showToast('🎤 ' + t('voice.micDenied', 'Microphone access denied.'));
+      else if (e.error === 'no-speech')   showToast('🔇 ' + t('voice.noSpeech',  'No speech detected.'));
       else                                showToast('STT: ' + e.error);
       webSpeechRec = null;
     };
 
     try { webSpeechRec.start(); }
     catch (err) {
-      showToast(t('voice.micFailed', 'Mikrofon konnte nicht gestartet werden.'));
+      showToast(t('voice.micFailed', 'Microphone could not be started.'));
       setMicState(false);
     }
   }
@@ -508,14 +519,14 @@
 
   function speakLastAssistantMessage(onEnd) {
     if (!window.speechSynthesis) {
-      showToast('🔇 ' + t('voice.ttsUnavailable', 'TTS nicht verfügbar.'));
+      showToast('🔇 ' + t('voice.ttsUnavailable', 'TTS not available.'));
       return;
     }
     speechSynthesis.cancel();
 
     var text = getLastAssistantText();
     if (!text) {
-      showToast(t('voice.noReply', 'Keine Antwort zum Vorlesen gefunden.'));
+      showToast(t('voice.noReply', 'No reply found to read aloud.'));
       return;
     }
 
@@ -542,9 +553,9 @@
     speechSynthesis.speak(utter);
   }
 
-  // ── Dialog-Modus ─────────────────────────────────────────────────
-  // Beobachtet den Chat: Sobald eine neue AI-Bubble fertig erscheint,
-  // wird sie vorgelesen und danach das Mikrofon wieder gestartet.
+  // ── Dialog mode ─────────────────────────────────────────────────
+  // Watches the chat: as soon as a new AI bubble is complete,
+  // it will be read aloud and the microphone restarted afterwards.
   function hookDialogMode() {
     var messagesEl = document.getElementById('messages');
     if (!messagesEl) return;
@@ -552,26 +563,26 @@
     var observer = new MutationObserver(function () {
       if (!vs.dialogMode || dialogPending) return;
 
-      // Prüfe: Kein Typing-Indikator vorhanden
+      // Check: no typing indicator present
       if (messagesEl.querySelector('.message-row.typing')) return;
 
       var rows = messagesEl.querySelectorAll('.message-row.ai');
       if (!rows.length) return;
 
       var lastRow = rows[rows.length - 1];
-      if (lastRow.dataset.voiceRead) return;  // bereits behandelt
+      if (lastRow.dataset.voiceRead) return;  // already handled
 
       var bubble = lastRow.querySelector('.bubble');
       if (!bubble || !bubble.textContent.trim()) return;
 
-      // Markieren
+      // Mark as read
       lastRow.dataset.voiceRead = '1';
       dialogPending = true;
 
       setTimeout(function () {
         speakLastAssistantMessage(function () {
           dialogPending = false;
-          // Wenn Dialog noch aktiv: neu zuhören
+          // If dialog still active: listen again
           if (vs.dialogMode) {
             setTimeout(startStt, 500);
           }
@@ -607,26 +618,22 @@
     setTimeout(init, 300);
   }
 
-  // ── Sprachänderungs-Hook (wird von setLang() in kiconnect.js aufgerufen) ──
+  // Language change hook — no panel rebuild, DOM update only via data-i18n
   window._kicVoiceRetranslate = function () {
-    // Panel neu bauen (Texte wurden mit t() zur Build-Zeit eingebettet)
-    var old = document.getElementById('voiceSettingsPanel');
-    if (old) {
-      old.remove();
-      buildVoiceSettingsPanel();
-    }
-    // Button-Titles aktualisieren
+    var panel = document.getElementById('voiceSettingsPanel');
+    if (panel) _retranslatePanelDom(panel);
+    // Update button titles
     if (btnMic) {
-      btnMic.title = sttActive ? t('voice.micStop', 'Aufnahme stoppen') : t('voice.micStart', 'Spracheingabe starten');
+      btnMic.title = sttActive ? t('voice.micStop', 'Stop recording') : t('voice.micStart', 'Start voice input');
     }
     if (btnTts) {
-      btnTts.title = ttsActive ? t('voice.ttsStop', 'Sprachausgabe stoppen') : t('voice.ttsStart', 'Letzte Antwort vorlesen');
+      btnTts.title = ttsActive ? t('voice.ttsStop', 'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
     }
     if (btnVoiceSettings) {
-      btnVoiceSettings.title = t('voice.settingsTitle', 'Spracheinstellungen');
+      btnVoiceSettings.title = t('voice.settingsTitle', 'Voice Settings');
     }
     var badge = document.getElementById('voiceDialogBadge');
-    if (badge) badge.title = t('voice.dialogStop', 'Dialog-Modus beenden – klicken zum Stoppen');
+    if (badge) badge.title = t('voice.dialogStop', 'Stop dialog mode – click to stop');
   };
-
+  
 })();

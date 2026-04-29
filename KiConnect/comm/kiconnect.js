@@ -3,17 +3,6 @@
 // Requires: kiconnect-languages-i18n.js (loaded before this file)
 // ================================================================
 
-// ═══════════════════════════════════════════════════════════════
-// SECURITY / IMPROVEMENTS v4.5
-// ═══════════════════════════════════════════════════════════════
-// NEW: Full AES-256-GCM encryption of ALL localStorage data
-//      (config, chats, profiles, folders — not just API keys)
-// NEW: Ctrl+V paste image from clipboard
-// NEW: Configurable max image storage size (user-adjustable)
-// NEW: Attached files shown as chips only, never as text in bubble
-// NEW: Folder drag & drop reordering (same level only)
-// ═══════════════════════════════════════════════════════════════
-
 // ── Theme ─────────────────────────────────────────────────────────
 const THEMES = ['dark', 'oled', 'white', 'gold'];
 
@@ -157,16 +146,16 @@ const PROVIDER_TYPES = {
   'deepseek':      { label:'DeepSeek',           needsUrl:false },
 };
 const PROVIDER_HINTS = {
-  'openai-compat':  '💡 Server-URL + opt. API Key · für LM Studio, Ollama, eigene Instanzen …',
-  'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-kompatibel',
+  'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances …',
+  'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-compatible',
   'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3.7+/4',
   'openai-direct': '💡 API Key : platform.openai.com · 🧠 Reasoning  o1/o3/o4',
-  'openrouter':    '💡 API Key : openrouter.ai · 200+ Modelle live geladen · 🧠 Thinking für Reasoning-Modelle',
-  'mistral':       '💡 API Key : console.mistral.ai · Modelle werden live geladen',
-  'gemini':        '💡 API Key : aistudio.google.com (AI Studio) · Modelle werden live geladen',
-  'xai':           '💡 API Key : console.x.ai · Grok 3 mit optionalem 🧠 Thinking',
-  'groq':          '💡 API Key : console.groq.com · Ultra-schnelle Inferenz · Modelle live',
-  'deepseek':      '💡 API Key : platform.deepseek.com · Modelle live geladen, Reasoning für R1',
+  'openrouter':    '💡 API Key : openrouter.ai · 200+ models loaded live · 🧠 Thinking for reasoning models',
+  'mistral':       '💡 API Key : console.mistral.ai · Models are loaded live',
+  'gemini':        '💡 API Key : aistudio.google.com (AI Studio) · Models are loaded live',
+  'xai':           '💡 API Key : console.x.ai · Grok 3 with optional 🧠 Thinking',
+  'groq':          '💡 API Key : console.groq.com · Ultra-fast inference · Models live',
+  'deepseek':      '💡 API Key : platform.deepseek.com · Models loaded live, reasoning for R1',
 };
 // Static entries only needed for providers that don't expose live model metadata
 // (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
@@ -307,9 +296,9 @@ let _multiSelectMode = false;
 let _cryptoKey = null;
 let _sessionPassphrase = null;
 
-// == Brute-Force Lockout (UI-seitig, RAM only) ========================
-// Zaehlt fehlgeschlagene Logins pro Account im Arbeitsspeicher.
-// KEIN localStorage/sessionStorage -> kein Bypass durch Cache-Loeschen.
+// == Brute-force lockout (UI-side, RAM only) ========================
+// Counts failed login attempts per account in memory.
+// NO localStorage/sessionStorage -> no bypass by clearing cache.
 const _loginFailures = {}; // { accountId: { count, lockedUntil } }
 const BF_MAX_ATTEMPTS = 5;
 const BF_BASE_DELAY_MS = 30000; // 30 s nach 5 Fehlversuchen, dann exponentiell
@@ -319,7 +308,7 @@ function _recordLoginFailure(accountId) {
   _loginFailures[accountId].count++;
   const n = _loginFailures[accountId].count;
   if (n >= BF_MAX_ATTEMPTS) {
-    // Exponentielles Backoff: 30s, 60s, 120s ...
+    // Exponential backoff: 30s, 60s, 120s ...
     const delay = BF_BASE_DELAY_MS * Math.pow(2, n - BF_MAX_ATTEMPTS);
     _loginFailures[accountId].lockedUntil = Date.now() + Math.min(delay, 3600000);
   }
@@ -372,16 +361,16 @@ async function deriveKeyPBKDF2(passphrase, saltBytes) {
   );
 }
 
-// == CryptoKey NUR aus Passwort + Account-Salt ========================
-// Kein Seed mehr in localStorage. Der PBKDF2-Salt (16 Byte, zufaellig,
-// pro Account) liegt im Account-Registry - er ist kein Geheimnis,
-// sondern verhindert Rainbow-Table-Angriffe.
-// Das Passwort selbst bleibt ausschliesslich im RAM (_sessionPassphrase).
+// == CryptoKey derived only from password + account salt ========================
+// No seed anymore in localStorage. Der PBKDF2-Salt (16 Byte, randomly,
+// per account) liegt im Account registry - er ist kein secret,
+// but prevents rainbow table attacks.
+// The password itself remains exclusively in RAM (_sessionPassphrase).
 async function getCryptoKey() {
   if (_cryptoKey) return _cryptoKey;
   const acc = getAccount(_activeAccountId);
   if (!acc) throw new Error('No active account');
-  // Salt aus Account-Registry (wird beim ersten Passwort-Setzen angelegt)
+  // Salt from account registry (created on first password set)
   let encSalt = acc.encSalt;
   if (!encSalt) {
     const saltBuf = crypto.getRandomValues(new Uint8Array(16));
@@ -398,8 +387,8 @@ async function getCryptoKey() {
   return _cryptoKey;
 }
 
-// == Session-Token: F5-Reload ohne Passwort-Speicherung ==============
-// Das Passwort wird NICHT in sessionStorage gespeichert.
+// == Session token: F5 reload without password storage ==============
+// The password is NOT stored in sessionStorage.
 // Stattdessen: nach erfolgreichem Login wird ein mit dem CryptoKey
 // verschluesselter Token in sessionStorage abgelegt.
 // Bei F5/Reload: Token entschluesseln -> wenn OK -> weiter eingeloggt.
@@ -438,7 +427,7 @@ function setSessionPassphrase(pw) {
   _sessionPassphrase = pw || null;
   _cryptoKey = null; // Key-Cache invalidieren
   if (!pw) { try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch {} }
-  // Kein Passwort mehr in sessionStorage!
+  // No password in sessionStorage anymore!
   // _writeSessionToken() wird nach getCryptoKey() aufgerufen.
 }
 function restoreSessionPassphrase() {
@@ -526,7 +515,6 @@ async function verifyAccountPassword(accountId, pw) {
 let _accounts = [];
 let _activeAccountId = null;
 function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
-function accountKey(key) { return `kic_${_activeAccountId}_${key}`; }
 
 // ═══════════════════════════════════════════════════════════════
 // ======================================================================
@@ -615,7 +603,7 @@ function _lsSetRaw(accountId, key, rawStr) {
   try { localStorage.setItem(`kic_${accountId}_${key}`, rawStr); } catch {}
 }
 
-// Account-Registry Helfer
+// Account registry Helfer
 function loadAccountRegistry() {
   try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
 }
@@ -677,7 +665,7 @@ async function load() {
   async function loadKey(key, fallback) {
     let raw = await _storeGet(_activeAccountId, key);
     if (raw === null || raw === undefined) {
-      // Migration: alter localStorage-Eintrag
+      // Migration: old localStorage entry
       const ls = localStorage.getItem(`kic_${_activeAccountId}_${key}`);
       if (!ls) return fallback;
       raw = ls;
@@ -1830,21 +1818,73 @@ function buildChatItem(c) {
 }
 
 // ── Message Rendering ─────────────────────────────────────────────
-function renderMessages(messages) {
+// BEGIN MODIFIED — Tree-branch helpers ─────────────────────────────
+
+/**
+ * getActivePath: Returns the flat message list for the currently active branch.
+ * Walks chat.messages and at each sibling-node appends the active tail recursively.
+ */
+function getActivePath(chat) {
+  const result = [];
+  const walk = (msgs) => {
+    for (const m of msgs) {
+      result.push(m);
+      if (m._siblings && m._siblingIdx != null) {
+        const tail = m._siblings[m._siblingIdx]?.tail;
+        if (tail && tail.length) { walk(tail); return; }
+      }
+    }
+  };
+  walk(chat.messages);
+  return result;
+}
+
+/**
+ * getActiveContainer: Returns the array that new messages should be pushed into.
+ * If we're inside a sibling's tail, returns that tail; otherwise chat.messages.
+ */
+function getActiveContainer(chat) {
+  let container = chat.messages;
+  const walk = (msgs) => {
+    for (const m of msgs) {
+      if (m._siblings && m._siblingIdx != null) {
+        const tail = m._siblings[m._siblingIdx]?.tail;
+        if (tail) { container = tail; if (tail.length) walk(tail); return; }
+      }
+    }
+  };
+  walk(chat.messages);
+  return container;
+}
+
+/**
+ * getSiblingNodeAt: Finds the sibling-node message at a given index in the active path.
+ */
+function getSiblingNodeAt(chat, pathIdx) {
+  return getActivePath(chat)[pathIdx] || null;
+}
+
+// END MODIFIED — Tree-branch helpers ───────────────────────────────
+
+// BEGIN MODIFIED — renderMessages uses active branch path (tree-aware)
+function renderMessages(messages, _unused) {
+  const chat = currentChat();
   const container = document.getElementById('messages');
   const empty     = document.getElementById('emptyState');
-  if (!messages.length) {
+  const path = chat ? getActivePath(chat) : (Array.isArray(messages) ? messages : []);
+  if (!path.length) {
     Array.from(container.children).forEach(el => { if(el!==empty) el.remove(); });
     if (empty) empty.style.display = '';
     return;
   }
   if (empty) empty.style.display = 'none';
   Array.from(container.children).forEach(el => { if(el!==empty) el.remove(); });
-  messages.forEach((msg,idx) => container.appendChild(buildMsgEl(msg,idx)));
+  path.forEach((msg, i) => container.appendChild(buildMsgEl(msg, i)));
   container.scrollTop = container.scrollHeight;
   typesetMath();
   updateChatTokenTotal();
 }
+// END MODIFIED
 
 function buildMsgEl(msg, idx) {
   const isUser = msg.role === 'user';
@@ -1873,6 +1913,37 @@ function buildMsgEl(msg, idx) {
 
   const wrap = document.createElement('div');
   wrap.className = 'bubble-wrap';
+
+  // BEGIN MODIFIED — sibling navigator (< 1/3 >) for AI messages with variants
+  if (!isUser && msg._siblings && msg._siblings.length > 1) {
+    const nav = document.createElement('div');
+    nav.className = 'sibling-nav';
+    const total = msg._siblings.length;
+    const current = (msg._siblingIdx ?? 0) + 1;
+
+    const btnPrev = document.createElement('button');
+    btnPrev.className = 'sibling-btn';
+    btnPrev.textContent = '<';
+    btnPrev.disabled = current === 1;
+    btnPrev.addEventListener('click', () => navigateSibling(idx, -1));
+
+    const counter = document.createElement('span');
+    counter.className = 'sibling-counter';
+    counter.textContent = `${current} / ${total}`;
+
+    const btnNext = document.createElement('button');
+    btnNext.className = 'sibling-btn';
+    btnNext.textContent = '>';
+    btnNext.disabled = current === total;
+    btnNext.addEventListener('click', () => navigateSibling(idx, +1));
+
+    nav.appendChild(btnPrev);
+    nav.appendChild(counter);
+    nav.appendChild(btnNext);
+    wrap.appendChild(nav);
+  }
+  // END MODIFIED
+
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
 
@@ -2025,7 +2096,15 @@ function safeIdx(idx) {
 function deleteBubble(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
-  chat.messages.splice(idx,1); save(); renderMessages(chat.messages);
+  const path=getActivePath(chat);
+  const msg=path[idx]; if(!msg) return;
+  const pruneMsg = (arr) => {
+    const i=arr.indexOf(msg); if(i>=0){arr.splice(i,1);return true;}
+    for(const m of arr){if(m._siblings)for(const s of m._siblings)if(s.tail&&pruneMsg(s.tail))return true;}
+    return false;
+  };
+  pruneMsg(chat.messages);
+  save(); renderMessages(chat.messages);
 }
 
 // Edit-state for bubble editing with file chips
@@ -2035,7 +2114,7 @@ let _editMsgIdx = null;
 function startEditBubble(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
-  const msg = chat.messages[idx]; if (!msg) return;
+  const msg = getActivePath(chat)[idx]; if (!msg) return;
   _editMsgIdx = idx;
 
   // Plain text only — skip file-content blocks
@@ -2044,11 +2123,20 @@ function startEditBubble(idx) {
   else if (Array.isArray(msg.content))
     text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
 
-  // Name-only references to already-attached files
-  _editAttachments = (msg._files || []).map(name => ({
-    type: /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name) ? 'image' : (/\.pdf$/i.test(name) ? 'pdf-b64' : 'text-file'),
-    name, _storedOnly: true
-  }));
+  // BEGIN MODIFIED — Bug 3 fix: derive pdfMode from structured storage types (pdf_base64 /
+  // pdf_text) instead of fragile i18n-string matching. Language-independent.
+  _editAttachments = (msg._files || []).map(name => {
+    const isImg = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+    const isPdf = /\.pdf$/i.test(name);
+    if (!isPdf) return { type: isImg ? 'image' : 'text-file', name, _storedOnly: true };
+    let pdfMode = 'b64';
+    if (Array.isArray(msg.content)) {
+      if (msg.content.some(p => p.type === 'pdf_text' && p.name === name)) pdfMode = 'text';
+      else if (msg.content.some(p => p.type === 'pdf_base64' && p.name === name)) pdfMode = 'b64';
+    }
+    return { type: 'pdf-b64', name, _storedOnly: true, pdfMode };
+  });
+  // END MODIFIED
 
   const row = getBubbleRow(idx); if (!row) return;
   const wrap = row.querySelector('.bubble-wrap');
@@ -2120,35 +2208,48 @@ function confirmEditBubble() {
   const row = getBubbleRow(idx); if (!row) return;
   const ta = row.querySelector('.edit-box'); if (!ta) return;
   const newText = ta.value.trim();
-  const msg = chat.messages[idx];
+  const msg = getActivePath(chat)[idx];
 
   const newContent = [];
   if (newText) newContent.push({ type: 'text', text: newText });
   const newFileNames = [];
 
+  // BEGIN MODIFIED — Bug 2+3 fix: restore _storedOnly file content by typed lookup on
+  // msg.content (pdf_base64, pdf_text) — language-independent, no fragile regex needed.
   _editAttachments.forEach(a => {
     newFileNames.push(a.name);
-    if (a._storedOnly) return;
+    if (a._storedOnly) {
+      if (Array.isArray(msg.content)) {
+        if (a.type === 'pdf-b64' && a.pdfMode === 'b64') {
+          const block = msg.content.find(p => p.type === 'pdf_base64' && p.name === a.name);
+          if (block) newContent.push(block);
+        } else if (a.type === 'pdf-b64' && a.pdfMode === 'text') {
+          const block = msg.content.find(p => p.type === 'pdf_text' && p.name === a.name);
+          if (block) newContent.push(block);
+        } else {
+          // text-file: still stored as labelled text block (startsWith '--- ')
+          msg.content.forEach(p => {
+            if (p.type === 'text' && p.text?.startsWith('--- ')) {
+              const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
+              if (fname === a.name) newContent.push(p);
+            }
+          });
+        }
+      }
+      return;
+    }
     if (a.type === 'image') {
       newContent.push({ type: 'image_url', image_url: { url: a.data } });
     } else if (a.type === 'pdf-b64' && a.pdfMode === 'text' && a.extractedText) {
-      newContent.push({ type: 'text', text: tf('js.fileContent',{name:a.name}) + '\n' + a.extractedText + '\n' + t('js.fileEnd') });
+      newContent.push({ type: 'pdf_text', name: a.name, text: a.extractedText });
+    } else if (a.type === 'pdf-b64' && a.pdfMode === 'b64' && a.data) {
+      const b64 = (a.data || '').split(',')[1] || a.data;
+      newContent.push({ type: 'pdf_base64', name: a.name, data: b64 });
     } else if (a.type === 'text-file' && a.content) {
       newContent.push({ type: 'text', text: tf('js.fileContent',{name:a.name}) + '\n' + a.content + '\n' + t('js.fileEnd') });
     }
   });
-
-  // Preserve stored-only file content blocks from original message
-  if (Array.isArray(msg.content)) {
-    msg.content.forEach(p => {
-      if (p.type === 'text' && p.text?.startsWith('--- ')) {
-        const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
-        if (fname && _editAttachments.some(a => a._storedOnly && a.name === fname)) {
-          newContent.push(p);
-        }
-      }
-    });
-  }
+  // END MODIFIED
 
   msg.content = newContent.length === 1 && newContent[0].type === 'text' ? newContent[0].text : newContent;
   if (newFileNames.length) msg._files = newFileNames; else delete msg._files;
@@ -2185,37 +2286,320 @@ function handleEditImageAttach(e) {
   reader.readAsDataURL(file);
 }
 
+// BEGIN MODIFIED — Navigate between sibling variants; each has its own tail (sub-tree)
+function navigateSibling(idx, delta) {
+  const chat = currentChat(); if (!chat) return;
+  const path = getActivePath(chat);
+  const msg  = path[idx];
+  if (!msg || !msg._siblings) return;
+
+  const newIdx = (msg._siblingIdx ?? 0) + delta;
+  if (newIdx < 0 || newIdx >= msg._siblings.length) return;
+
+  msg._siblingIdx = newIdx;
+  const variant   = msg._siblings[newIdx];
+  // Sync live fields (used by rerunFromUserMsg context-building)
+  msg.content = variant.content;
+  msg._model  = variant._model;
+  msg._usage  = variant._usage;
+
+  save();
+  renderMessages(chat.messages); // getActivePath will now follow new _siblingIdx
+}
+// END MODIFIED
+
 function branchFromHere(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
-  const branchedMsgs=JSON.parse(JSON.stringify(chat.messages.slice(0,idx+1)));
+  // Clone the active path up to idx (tree-aware: follows siblings correctly)
+  const activePath=getActivePath(chat);
+  const branchedMsgs=JSON.parse(JSON.stringify(activePath.slice(0,idx+1).map(m=>{
+    // Flatten sibling nodes: keep only the currently active variant, no siblings meta
+    const {_siblings, _siblingIdx, ...rest}=m;
+    return rest;
+  })));
   const branchId=Date.now().toString();
   chats.unshift({id:branchId,title:`↩ ${chat.title.slice(0,32)} (ab #${idx+1})`,folderId:chat.folderId,branchOf:chat.id,messages:branchedMsgs});
   currentChatId=branchId; save(); renderSidebar(); renderMessages(branchedMsgs);
   toast(tf('js.branchFrom', {n: idx+1}));
 }
 
+// ── BEGIN MODIFIED: Shared AI-Streaming-Helpers ───────────────────
+// _toAnthropicContent: Converts internal content array to Anthropic wire format.
+// BEGIN MODIFIED — handles pdf_text (text-mode PDF, language-independent storage type)
+function _toAnthropicContent(content) {
+  if (!Array.isArray(content)) return content;
+  return content.map(p => {
+    if (p.type === 'image_url') {
+      const url = p.image_url?.url || '';
+      if (url.startsWith('data:')) {
+        const [meta, b64] = url.split(',');
+        return { type: 'image', source: { type: 'base64', media_type: meta.replace('data:', '').replace(';base64', ''), data: b64 } };
+      }
+      return { type: 'image', source: { type: 'url', url } };
+    }
+    if (p.type === 'pdf_base64') return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.data } };
+    // pdf_text: text-mode PDF stored structurally — expand to labelled text block for the API
+    if (p.type === 'pdf_text') return { type: 'text', text: `${tf('js.fileContent',{name:p.name})}\n${p.text}\n${t('js.fileEnd')}` };
+    return p;
+  });
+}
+// END MODIFIED
+
+// _toOpenAIContent: Expands internal storage types (pdf_text, pdf_base64) to plain text/
+// image_url for OpenAI-compat APIs that don't understand these internal block types.
+// BEGIN MODIFIED
+function _toOpenAIContent(content) {
+  if (!Array.isArray(content)) return content;
+  return content.map(p => {
+    if (p.type === 'pdf_text')
+      return { type: 'text', text: `${tf('js.fileContent',{name:p.name})}\n${p.text}\n${t('js.fileEnd')}` };
+    if (p.type === 'pdf_base64')
+      return { type: 'text', text: `[PDF: ${p.name}]` }; // b64 not supported in OpenAI text mode
+    return p;
+  });
+}
+// END MODIFIED
+
+// _applyPromptCache: Marks the second-to-last message for Anthropic prompt caching.
+function _applyPromptCache(msgs) {
+  if (msgs.length < 2) return;
+  const prev = msgs[msgs.length - 2];
+  if (!prev) return;
+  const c = prev.content;
+  if (typeof c === 'string') {
+    prev.content = [{ type: 'text', text: c, cache_control: { type: 'ephemeral' } }];
+  } else if (Array.isArray(c) && c.length) {
+    const lp = c[c.length - 1];
+    if (lp && !lp.cache_control) lp.cache_control = { type: 'ephemeral' };
+  }
+}
+
+// _renderThinkingBubble: Returns combined thinking+text HTML for the live bubble.
+function _renderThinkingBubble(thinkingText, assistantText) {
+  const th = thinkingText
+    ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock', { n: thinkingText.length })}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`
+    : '';
+  return th + formatText(assistantText);
+}
+
+/**
+ * _streamAIResponse: Core streaming function used by sendMessageCore and rerunFromUserMsg.
+ * Sends `messages` to the provider, streams the response into a new AI bubble,
+ * and returns { text, usage }.
+ * @param {Array}  messages    — final wire-format message array
+ * @param {object} provider    — provider object with .type, .apiKey, etc.
+ * @param {string} typingId    — ID of the typing indicator element to remove on first chunk
+ * @param {Array}  [documentIds] — optional KiConnect document IDs (OpenAI-compat only)
+ * @returns {Promise<{text: string, usage: object|null}>}
+ */
+async function _streamAIResponse(messages, provider, typingId, documentIds) {
+  let assistantText = '', usageData = null;
+
+  if (provider.type === 'anthropic') {
+    const { modelId } = splitModelId(config.model);
+    const body = {
+      model: modelId,
+      max_tokens: effectiveMaxTokens(),
+      temperature: config.temperature,
+      stream: true,
+      messages,
+    };
+    if (config.systemPrompt) body.system = [{ type: 'text', text: config.systemPrompt, cache_control: { type: 'ephemeral' } }];
+    if (config.thinkingEnabled && isThinkingCapable(modelId)) {
+      const budget = usesTokenBudget(modelId) ? (config.thinkingBudget || 8000) : CLAUDE_BUDGET[config.thinkingIntensity || 2];
+      body.thinking = { type: 'enabled', budget_tokens: budget };
+      body.temperature = 1;
+      body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+    }
+    const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': provider.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'prompt-caching-2024-07-31',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify(body),
+      signal: abortController.signal,
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+    removeTyping(typingId);
+    const aiEl = appendEmptyAI();
+    const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
+    let thinkingText = '', inThinkingBlock = false;
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const ev = JSON.parse(line.slice(6).trim());
+          if (ev.type === 'message_start' && ev.message?.usage) { usageData = { ...(usageData || {}), ...ev.message.usage }; }
+          else if (ev.type === 'message_delta' && ev.usage) { usageData = { ...(usageData || {}), ...ev.usage }; }
+          else if (ev.type === 'content_block_start') { inThinkingBlock = ev.content_block?.type === 'thinking'; }
+          else if (ev.type === 'content_block_stop') { inThinkingBlock = false; }
+          else if (ev.type === 'content_block_delta') {
+            if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
+              thinkingText += ev.delta.thinking || '';
+              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+            } else if (ev.delta?.type === 'text_delta') {
+              assistantText += ev.delta.text;
+              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              scrollToBottom();
+            }
+          }
+        } catch {}
+      }
+    }
+    if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
+    typesetMath();
+
+  } else {
+    const endpoint = getProviderEndpoint(provider);
+    const { modelId } = splitModelId(config.model);
+    const apiMsgs = [];
+    if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
+    // BEGIN MODIFIED: messages are already expanded by caller (_toOpenAIContent) — pass through
+    messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
+    // END MODIFIED
+    const reqBody = { model: modelId, messages: apiMsgs, stream: true };
+    const isOSeries = /^o\d/.test(modelId);
+    if (isOSeries) {
+      reqBody.max_completion_tokens = effectiveMaxTokens();
+      if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+    } else {
+      reqBody.temperature = config.temperature;
+      reqBody.max_tokens = effectiveMaxTokens();
+      if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+    }
+    if (documentIds?.length) reqBody.documents = documentIds;
+    reqBody.stream_options = { include_usage: true };
+    const extraHeaders = {};
+    if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+    const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
+      body: JSON.stringify(reqBody),
+      signal: abortController.signal,
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    removeTyping(typingId);
+    const aiEl = appendEmptyAI();
+    const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content || '';
+          assistantText += delta;
+          if (delta) { aiEl.querySelector('.bubble').innerHTML = formatText(assistantText); scrollToBottom(); }
+          if (chunk.usage) {
+            const u = chunk.usage;
+            usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens || 0 };
+          }
+        } catch {}
+      }
+    }
+    typesetMath();
+  }
+
+  return { text: assistantText, usage: usageData };
+}
+
+/**
+ * _attachAIActions: Appends action buttons and token badge to the last AI bubble.
+ * Shared post-stream logic for both sendMessageCore and rerunFromUserMsg.
+ */
+// BEGIN MODIFIED — _attachAIActions: tree-aware, writes into active sibling tail
+function _attachAIActions(chat, assistantText, usageData) {
+  if (chat._pendingRegenMsg) {
+    // Regeneration: push new sibling with empty tail onto the branch node
+    const msg = chat._pendingRegenMsg;
+    const newSibling = { content: assistantText, _model: config.model, _usage: usageData || undefined, tail: [] };
+    msg._siblings.push(newSibling);
+    msg._siblingIdx = msg._siblings.length - 1;
+    // Sync live fields to the new active variant
+    msg.content = newSibling.content;
+    msg._model  = newSibling._model;
+    msg._usage  = newSibling._usage;
+    delete chat._pendingRegenMsg;
+  } else {
+    // Normal send: append to the active container (chat.messages or deepest active tail)
+    const container = getActiveContainer(chat);
+    const msgObj = { role: 'assistant', content: assistantText, _model: config.model };
+    if (usageData) msgObj._usage = usageData;
+    container.push(msgObj);
+  }
+
+  renderMessages(chat.messages);
+  updateChatTokenTotal();
+  save();
+}
+// END MODIFIED
+// ── END MODIFIED: Shared AI-Streaming-Helpers ─────────────────────
+
+// BEGIN MODIFIED — Tree-branch regenerate: old tail is preserved in the current sibling
 async function regenerate(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
-  const msg=chat.messages[idx];
+  // idx is a path index — resolve to the actual message object
+  const path=getActivePath(chat);
+  const msg=path[idx];
   if(!msg||msg.role!=='assistant') return;
   if(isStreaming){toast(t('js.pleaseWait'));return;}
 
-  // Remove only the AI reply — keep the user message intact in chat.messages
-  chat.messages.splice(idx, 1);
-  const userMsg=chat.messages[idx-1];
+  const userMsg=path[idx-1];
   if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
 
-  // Re-render the existing messages (user bubble renders correctly from stored state)
-  save(); renderMessages(chat.messages);
+  // Initialise siblings: wrap current content as siblings[0] with its existing tail
+  if(!msg._siblings) {
+    // Collect everything after this node in the active path as the original tail
+    const originalTail = path.slice(idx+1).map(m => JSON.parse(JSON.stringify(m)));
+    msg._siblings=[{content:msg.content,_model:msg._model,_usage:msg._usage,tail:originalTail}];
+    msg._siblingIdx=0;
+    // Remove those messages from whichever container they live in — now owned by tail
+    _pruneAfter(chat, msg);
+  }
 
-  // Now fire the AI call using the existing chat history (which includes the user msg)
+  // New sibling starts with an empty tail; _attachAIActions will write into it
+  const newSibIdx = msg._siblings.length; // will be pushed by _attachAIActions
+  chat._pendingRegenMsg = msg;
+
+  save(); renderMessages(chat.messages);
   await rerunFromUserMsg(userMsg);
 }
 
+/**
+ * _pruneAfter: Remove messages that come after `targetMsg` in the active container.
+ * Used when first creating siblings to move the existing tail into the sibling object.
+ */
+function _pruneAfter(chat, targetMsg) {
+  const pruneFrom = (arr) => {
+    const i = arr.indexOf(targetMsg);
+    if (i >= 0) { arr.splice(i+1); return true; }
+    for (const m of arr) {
+      if (m._siblings) {
+        for (const s of m._siblings) {
+          if (s.tail && pruneFrom(s.tail)) return true;
+        }
+      }
+    }
+    return false;
+  };
+  pruneFrom(chat.messages);
+}
+// END MODIFIED
+
 // Fires a new AI completion using the current chat.messages state (no user-msg rebuild).
-// Used by regenerate() so images/PDFs stored in the user message are sent correctly.
+// BEGIN MODIFIED: Uses _streamAIResponse + _attachAIActions (removed ~80 lines of duplicated stream code)
 async function rerunFromUserMsg(userMsg) {
   if(!currentChatId) newChat();
   const chat=currentChat(); if(!chat) return;
@@ -2227,113 +2611,33 @@ async function rerunFromUserMsg(userMsg) {
   let assistantText='', usageData=null;
 
   try {
+    // BEGIN MODIFIED: build history from active path up to (including) userMsg
+    const activePath = getActivePath(chat);
+    const userMsgIdx = activePath.indexOf(userMsg);
+    const histSlice  = userMsgIdx >= 0 ? activePath.slice(0, userMsgIdx + 1) : activePath;
+
+    let messages;
     if(provider.type==='anthropic'){
-      function toAnthropicContent(content){
-        if(!Array.isArray(content)) return content;
-        return content.map(p=>{
-          if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')){const[meta,b64]=url.split(',');return{type:'image',source:{type:'base64',media_type:meta.replace('data:','').replace(';base64',''),data:b64}};}return{type:'image',source:{type:'url',url}};}
-          if(p.type==='pdf_base64') return{type:'document',source:{type:'base64',media_type:'application/pdf',data:p.data}};
-          return p;
-        });
-      }
-      const anthropicMsgs=[];
-      // Send all current messages (including the user msg we kept)
-      chat.messages.forEach(m=>{if(m.role==='user'||m.role==='assistant')anthropicMsgs.push({role:m.role,content:toAnthropicContent(m.content)});});
-      // Prompt caching on second-to-last message
-      if(anthropicMsgs.length>1){
-        const prev=anthropicMsgs[anthropicMsgs.length-2];
-        if(prev){const c=prev.content;if(typeof c==='string'){prev.content=[{type:'text',text:c,cache_control:{type:'ephemeral'}}];}else if(Array.isArray(c)&&c.length){const lp=c[c.length-1];if(lp&&!lp.cache_control)lp.cache_control={type:'ephemeral'};}}
-      }
-      const{modelId:_aModelId}=splitModelId(config.model);
-      const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
-      if(config.systemPrompt)body.system=[{type:'text',text:config.systemPrompt,cache_control:{type:'ephemeral'}}];
-      if(config.thinkingEnabled&&isThinkingCapable(_aModelId)){
-        const budget=usesTokenBudget(_aModelId)?(config.thinkingBudget||8000):CLAUDE_BUDGET[config.thinkingIntensity||2];
-        body.thinking={type:'enabled',budget_tokens:budget};body.temperature=1;
-        body.max_tokens=Math.max(body.max_tokens,budget+2000);
-      }
-      const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-beta':'prompt-caching-2024-07-31','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
-      if(!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-      removeTyping(typingId);
-      const aiEl=appendEmptyAI();
-      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      let thinkingText='',inThinkingBlock=false;
-      while(true){
-        const{done,value}=await reader.read();if(done)break;
-        buf+=decoder.decode(value,{stream:true});
-        const lines=buf.split('\n');buf=lines.pop();
-        for(const line of lines){
-          if(!line.startsWith('data: '))continue;
-          try{
-            const ev=JSON.parse(line.slice(6).trim());
-            if(ev.type==='message_start'&&ev.message?.usage){usageData={...(usageData||{}),...ev.message.usage};}
-            else if(ev.type==='message_delta'&&ev.usage){usageData={...(usageData||{}),...ev.usage};}
-            else if(ev.type==='content_block_start'){inThinkingBlock=ev.content_block?.type==='thinking';}
-            else if(ev.type==='content_block_stop'){inThinkingBlock=false;}
-            else if(ev.type==='content_block_delta'){
-              if(ev.delta?.type==='thinking_delta'&&inThinkingBlock){thinkingText+=ev.delta.thinking||'';const bubble=aiEl.querySelector('.bubble');const th=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';bubble.innerHTML=th+formatText(assistantText);}
-              else if(ev.delta?.type==='text_delta'){assistantText+=ev.delta.text;const bubble=aiEl.querySelector('.bubble');const th=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';bubble.innerHTML=th+formatText(assistantText);scrollToBottom();}
-            }
-          }catch{}
-        }
-      }
-      if(thinkingText) assistantText=`<thinking>\n${thinkingText}\n</thinking>\n\n`+assistantText;
-      typesetMath();
+      messages=[];
+      histSlice.forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
+      _applyPromptCache(messages);
     } else {
-      const endpoint=getProviderEndpoint(provider);
-      const apiMsgs=[];
-      if(config.systemPrompt)apiMsgs.push({role:'system',content:config.systemPrompt});
-      chat.messages.forEach(m=>{if(m.role==='user'||m.role==='assistant')apiMsgs.push({role:m.role,content:m.content});});
-      const{modelId:_oModelId}=splitModelId(config.model);
-      const reqBody={model:_oModelId,messages:apiMsgs,stream:true};
-      const isOSeries=/^o\d/.test(_oModelId);
-      if(isOSeries){reqBody.max_completion_tokens=effectiveMaxTokens();if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];}
-      else{reqBody.temperature=config.temperature;reqBody.max_tokens=effectiveMaxTokens();if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];}
-      reqBody.stream_options={include_usage:true};
-      const extraHeaders={};
-      if(provider.type==='openrouter'){extraHeaders['HTTP-Referer']=window.location.origin;extraHeaders['X-Title']='KI Connect NRW';}
-      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},body:JSON.stringify(reqBody),signal:abortController.signal});
-      if(!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      removeTyping(typingId);
-      const aiEl=appendEmptyAI();
-      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const payload=line.slice(6).trim();if(payload==='[DONE]')continue;try{const chunk=JSON.parse(payload);const delta=chunk.choices?.[0]?.delta?.content||'';assistantText+=delta;if(delta){aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}if(chunk.usage){const u=chunk.usage;usageData={input_tokens:u.prompt_tokens,output_tokens:u.completion_tokens,cache_read_input_tokens:u.prompt_tokens_details?.cached_tokens||0};}}catch{}}}
-      typesetMath();
+      messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
+        .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
     }
+    // END MODIFIED
+    const result = await _streamAIResponse(messages, provider, typingId, []);
+    assistantText = result.text; usageData = result.usage;
   } catch(e) {
     removeTyping(typingId);
     if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
-  if(assistantText){
-    const msgObj={role:'assistant',content:assistantText,_model:config.model};
-    if(usageData) msgObj._usage=usageData;
-    chat.messages.push(msgObj);
-    const aiIdx=chat.messages.length-1;
-    const c=document.getElementById('messages');
-    const _aiEls=c.querySelectorAll('.message-row.ai');const lastAiEl=_aiEls.length?_aiEls[_aiEls.length-1]:null;
-    if(lastAiEl&&!lastAiEl.dataset.idx){
-      lastAiEl.dataset.idx=aiIdx;
-      const wrap=lastAiEl.querySelector('.bubble-wrap');
-      if(wrap&&!wrap.querySelector('.bubble-actions')){
-        const actDiv=document.createElement('div');actDiv.className='bubble-actions';
-        const makeBtn=(lbl,cls2,handler,action)=>{const b=document.createElement('button');b.className='bubble-act-btn'+(cls2?' '+cls2:'');b.textContent=lbl;if(action)b.setAttribute('data-action',action);b.dataset.idx=aiIdx;b.addEventListener('click',()=>handler(parseInt(b.dataset.idx)));return b;};
-        actDiv.appendChild(makeBtn(t('js.copy'),'',i=>{const firstBtn=actDiv.querySelector('.bubble-act-btn');copyBubble(firstBtn,i);},'copy'));
-        actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble,'edit'));
-        actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere,'branch'));
-        actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
-        actDiv.appendChild(makeBtn('🖨️','',openPrintSingleOverlay,'print'));
-        actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
-        wrap.appendChild(actDiv);
-        if(usageData) wrap.appendChild(buildTokenBadge(usageData));
-      }
-    }
-    updateChatTokenTotal();
-    save();
-  }
+  if(assistantText) _attachAIActions(chat, assistantText, usageData);
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
+// END MODIFIED
 
 // ── Send / Stop ───────────────────────────────────────────────────
 function handleSendStop() { isStreaming ? stopStreaming() : sendMessage(); }
@@ -2395,7 +2699,7 @@ async function sendMessageCore(text, att) {
       else if(a.type==='pdf-b64'){
         fileNames.push(a.name);
         if(a._uploadedId){}
-        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${txt}\n${t('js.fileEnd')}`});}
+        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'pdf_text',name:a.name,text:txt});} // BEGIN MODIFIED Bug 2: structured pdf_text block instead of i18n-string
         else{const b64=(a.data||'').split(',')[1]||a.data;userContent.push({type:'pdf_base64',name:a.name,data:b64});}
       } else if(a.type==='text-file'){
         fileNames.push(a.name);
@@ -2413,27 +2717,39 @@ async function sendMessageCore(text, att) {
   } else { userContent=text; }
 
   const maxBytes=getMaxImageStorageBytes();
+  // BEGIN MODIFIED — Bug 1 fix: preserve pdf_base64 blocks and store text-mode PDFs
+  // as {type:'pdf_text'} with name+text, so rerun/edit can restore them language-independently.
   const userMsgForStorage={
     role:'user',
     content:Array.isArray(userContent)
       ?userContent.map(p=>{
-        if(p.type==='pdf_base64') return{type:'text',text:`[PDF: ${p.name}]`};
+        // pdf_base64: keep — _toAnthropicContent converts to {type:'document'} on send
+        if(p.type==='pdf_base64') return p;
+        // text-mode PDF content block: convert to structured {type:'pdf_text'} for storage
+        if(p.type==='pdf_text') return p;
         if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')&&url.length>maxBytes)return{type:'text',text:'['+t('js.imageNotSaved')+']'};}
         return p;
       })
       :userContent,
     _files:fileNames.length?fileNames:undefined
   };
+  // END MODIFIED
   const chat=currentChat();
-  chat.messages.push(userMsgForStorage);
+  // BEGIN MODIFIED: push into active tail (tree-aware), not always top-level chat.messages
+  const activeContainer = getActiveContainer(chat);
+  activeContainer.push(userMsgForStorage);
   if(chat.messages.length===1){chat.title='…';renderSidebar();autoGenerateChatTitle(chat,text);}
+  // END MODIFIED
 
   // Build display message: only text + images visible, files as chips
   // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
+  // BEGIN MODIFIED: also filter out pdf_text blocks (file content, shown as chips)
   const displayContent = Array.isArray(userContent)
-    ? userContent.filter(p => (p.type==='text' && !p.text.startsWith('---')) || p.type==='image_url')
+    ? userContent.filter(p => (p.type==='text' && !p.text?.startsWith('---')) || p.type==='image_url')
     : userContent;
-  const idx=chat.messages.length-1;
+  // END MODIFIED
+  // Use active-path index so data-idx matches getActivePath(chat) — needed for edit/delete/copy
+  const idx=getActivePath(chat).length-1;
   const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames},idx);
   appendToMessages(msgEl);
   scrollToBottom();
@@ -2443,140 +2759,32 @@ async function sendMessageCore(text, att) {
   let assistantText='';
   let usageData=null;
 
+  // BEGIN MODIFIED: build wire-format message list, then delegate to shared _streamAIResponse
   try {
+    let messages;
     if(provider.type==='anthropic'){
-      function toAnthropicContent(content){
-        if(!Array.isArray(content)) return content;
-        return content.map(p=>{
-          if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')){const[meta,b64]=url.split(',');return{type:'image',source:{type:'base64',media_type:meta.replace('data:','').replace(';base64',''),data:b64}};}return{type:'image',source:{type:'url',url}};}
-          if(p.type==='pdf_base64') return{type:'document',source:{type:'base64',media_type:'application/pdf',data:p.data}};
-          return p;
-        });
-      }
-      const anthropicMsgs=[];
-      chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')anthropicMsgs.push({role:m.role,content:toAnthropicContent(m.content)});});
-      anthropicMsgs.push({role:'user',content:toAnthropicContent(userContent)});
-      // Prompt Caching: mark the last assistant turn (or last history message) with cache_control
-      // so the KV cache is reused for all messages up to that point on the next turn.
-      if(anthropicMsgs.length>1){
-        const lastHistMsg=anthropicMsgs[anthropicMsgs.length-2];
-        if(lastHistMsg){
-          const c=lastHistMsg.content;
-          if(typeof c==='string'){
-            lastHistMsg.content=[{type:'text',text:c,cache_control:{type:'ephemeral'}}];
-          } else if(Array.isArray(c)&&c.length){
-            const lastPart=c[c.length-1];
-            if(lastPart&&!lastPart.cache_control)lastPart.cache_control={type:'ephemeral'};
-          }
-        }
-      }
-      const{modelId:_aModelId}=splitModelId(config.model);
-      const body={model:_aModelId,max_tokens:effectiveMaxTokens(),temperature:config.temperature,stream:true,messages:anthropicMsgs};
-      // Prompt Caching: cache system prompt if present (saves tokens on every turn)
-      if(config.systemPrompt)body.system=[{type:'text',text:config.systemPrompt,cache_control:{type:'ephemeral'}}];
-      if(config.thinkingEnabled&&isThinkingCapable(_aModelId)){
-        const budget=usesTokenBudget(_aModelId)?(config.thinkingBudget||8000):CLAUDE_BUDGET[config.thinkingIntensity||2];
-        body.thinking={type:'enabled',budget_tokens:budget};
-        body.temperature=1;
-        body.max_tokens=Math.max(body.max_tokens,budget+2000);
-      }
-      const res=await fetch(proxyUrl('https://api.anthropic.com/v1/messages'),{method:'POST',headers:{'Content-Type':'application/json','x-api-key':provider.apiKey,'anthropic-version':'2023-06-01','anthropic-beta':'prompt-caching-2024-07-31','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body),signal:abortController.signal});
-      if(!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-      removeTyping(typingId);
-      const aiEl=appendEmptyAI();
-      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      let thinkingText='';let inThinkingBlock=false;
-      while(true){
-        const{done,value}=await reader.read();if(done)break;
-        buf+=decoder.decode(value,{stream:true});
-        const lines=buf.split('\n');buf=lines.pop();
-        for(const line of lines){
-          if(!line.startsWith('data: '))continue;
-          try{
-            const ev=JSON.parse(line.slice(6).trim());
-            if(ev.type==='message_start'&&ev.message?.usage){usageData={...(usageData||{}),...ev.message.usage};}
-            else if(ev.type==='message_delta'&&ev.usage){usageData={...(usageData||{}),...ev.usage};}
-            else if(ev.type==='content_block_start'){inThinkingBlock=ev.content_block?.type==='thinking';}
-            else if(ev.type==='content_block_stop'){inThinkingBlock=false;}
-            else if(ev.type==='content_block_delta'){
-              if(ev.delta?.type==='thinking_delta'&&inThinkingBlock){
-                thinkingText+=ev.delta.thinking||'';
-                const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';
-                bubble.innerHTML=thinkHtml+formatText(assistantText);
-              } else if(ev.delta?.type==='text_delta'){
-                assistantText+=ev.delta.text;
-                const bubble=aiEl.querySelector('.bubble');
-                const thinkHtml=thinkingText?`<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock',{n:thinkingText.length})}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`:'';
-                bubble.innerHTML=thinkHtml+formatText(assistantText);
-                scrollToBottom();
-              }
-            }
-          }catch{}
-        }
-      }
-      if(thinkingText) assistantText=`<thinking>\n${thinkingText}\n</thinking>\n\n`+assistantText;
-      typesetMath();
+      messages=[];
+      chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
+      messages.push({role:'user',content:_toAnthropicContent(userContent)});
+      _applyPromptCache(messages);
     } else {
-      const endpoint=getProviderEndpoint(provider);
-      const apiMsgs=[];
-      if(config.systemPrompt)apiMsgs.push({role:'system',content:config.systemPrompt});
-      chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')apiMsgs.push({role:m.role,content:m.content});});
-      apiMsgs.push({role:'user',content:userContent});
-      const{modelId:_oModelId}=splitModelId(config.model);
-      const reqBody={model:_oModelId,messages:apiMsgs,stream:true};
-      const isOSeries=/^o\d/.test(_oModelId);
-      if(isOSeries){
-        reqBody.max_completion_tokens=effectiveMaxTokens();
-        if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];
-      } else {
-        reqBody.temperature=config.temperature;reqBody.max_tokens=effectiveMaxTokens();
-        if(config.thinkingEnabled&&isThinkingCapable(_oModelId))reqBody.reasoning_effort=OAI_EFFORT[config.thinkingIntensity||2];
-      }
-      if(documentIds.length>0)reqBody.documents=documentIds;
-      reqBody.stream_options={include_usage:true};
-      const extraHeaders={};
-      if(provider.type==='openrouter'){extraHeaders['HTTP-Referer']=window.location.origin;extraHeaders['X-Title']='KI Connect NRW';}
-      const res=await fetch(proxyUrl(`${endpoint}/chat/completions`),{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${provider.apiKey}`,...extraHeaders},body:JSON.stringify(reqBody),signal:abortController.signal});
-      if(!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      removeTyping(typingId);
-      const aiEl=appendEmptyAI();
-      const reader=res.body.getReader(),decoder=new TextDecoder();let buf='';
-      while(true){const{done,value}=await reader.read();if(done)break;buf+=decoder.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();for(const line of lines){if(!line.startsWith('data: '))continue;const payload=line.slice(6).trim();if(payload==='[DONE]')continue;try{const chunk=JSON.parse(payload);const delta=chunk.choices?.[0]?.delta?.content||'';assistantText+=delta;if(delta){aiEl.querySelector('.bubble').innerHTML=formatText(assistantText);scrollToBottom();}if(chunk.usage){const u=chunk.usage;usageData={input_tokens:u.prompt_tokens,output_tokens:u.completion_tokens,cache_read_input_tokens:u.prompt_tokens_details?.cached_tokens||0};}}catch{}}}
-      typesetMath();
+      // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
+      // BEGIN MODIFIED: expand pdf_text/pdf_base64 for OpenAI-compat too
+      const hist=chat.messages.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
+        .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
+      messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
+      // END MODIFIED
     }
+    const result=await _streamAIResponse(messages, provider, typingId, documentIds);
+    assistantText=result.text; usageData=result.usage;
   } catch(e) {
     removeTyping(typingId);
     if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
+  // END MODIFIED
 
-  if(assistantText){
-    const msgObj={role:'assistant',content:assistantText,_model:config.model};
-    if(usageData) msgObj._usage=usageData;
-    chat.messages.push(msgObj);
-    const aiIdx=chat.messages.length-1;
-    const c=document.getElementById('messages');
-    const _aiEls=c.querySelectorAll('.message-row.ai');const lastAiEl=_aiEls.length?_aiEls[_aiEls.length-1]:null;
-    if(lastAiEl&&!lastAiEl.dataset.idx){
-      lastAiEl.dataset.idx=aiIdx;
-      const wrap=lastAiEl.querySelector('.bubble-wrap');
-      if(wrap&&!wrap.querySelector('.bubble-actions')){
-        const actDiv=document.createElement('div');actDiv.className='bubble-actions';
-        const makeBtn=(lbl,cls2,handler,action)=>{const b=document.createElement('button');b.className='bubble-act-btn'+(cls2?' '+cls2:'');b.textContent=lbl;if(action)b.setAttribute('data-action',action);b.dataset.idx=aiIdx;b.addEventListener('click',()=>handler(parseInt(b.dataset.idx)));return b;};
-        actDiv.appendChild(makeBtn(t('js.copy'),'',i=>{const firstBtn=actDiv.querySelector('.bubble-act-btn');copyBubble(firstBtn,i);},'copy'));
-        actDiv.appendChild(makeBtn(t('js.edit'),'',startEditBubble,'edit'));
-        actDiv.appendChild(makeBtn(t('js.branch'),'',branchFromHere,'branch'));
-        actDiv.appendChild(makeBtn(t('js.regenerate'),'',regenerate,'regenerate'));
-        actDiv.appendChild(makeBtn('🖨️','',openPrintSingleOverlay,'print'));
-        actDiv.appendChild(makeBtn(t('js.delete'),'danger',deleteBubble,'delete'));
-        wrap.appendChild(actDiv);
-        if(usageData) wrap.appendChild(buildTokenBadge(usageData));
-      }
-    }
-    updateChatTokenTotal();
-    save();
-  }
+  if(assistantText) _attachAIActions(chat, assistantText, usageData);
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
 
@@ -2701,7 +2909,7 @@ function copyCode(btn, b64){btn.dataset.b64=b64;copyCodeFromBtn(btn);}
 function copyBubble(btn, idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
-  const msg=chat.messages[idx]; if(!msg) return;
+  const msg=getActivePath(chat)[idx]; if(!msg) return;
   let text='';
   if(typeof msg.content==='string') text=msg.content;
   else if(Array.isArray(msg.content)) text=msg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
@@ -2756,12 +2964,12 @@ function inlineMarkdown(escapedText) {
 function formatText(raw) {
   if (!raw) return '';
   const blocks = [];
-  // Platzhalter: HTML-Kommentare die marked unverändert durchlässt
+  // Placeholder: HTML comments that marked passes through unchanged
   const PH = (i) => `<!--KICBLK${i}-->`;
   const PH_RE = /<!--KICBLK(\d+)-->/g;
   let s = raw;
 
-  // ── Schritt 1: Code- und LaTeX-Blöcke VOR marked schützen ────────
+  // ── Step 1: Code and LaTeX blocks VOR protect from marked ────────
 
   // 4+-Backtick-Fences
   s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => {
@@ -2832,9 +3040,9 @@ function formatText(raw) {
     return PH(i);
   });
 
-  // ── Schritt 2: marked.js rendern ─────────────────────────────────
+  // ── Step 2: marked.js rendern ─────────────────────────────────
   if (typeof marked !== 'undefined') {
-    // Eigenen Renderer für Code-Blöcke (falls marked doch einen trifft)
+    // Custom renderer for code blocks (in case marked does encounter one)
     const renderer = new marked.Renderer();
     renderer.code = function(token) {
       const text = (token && typeof token === 'object') ? (token.text || '') : String(token || '');
@@ -2848,7 +3056,7 @@ function formatText(raw) {
     try {
       s = marked.parse(s, { renderer, gfm: true, breaks: false });
     } catch(e) {
-      // Fallback falls marked fehlschlägt
+      // Fallback falls marked fails
       s = escHtml(s).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
       s = '<p>' + s + '</p>';
     }
@@ -2862,10 +3070,10 @@ function formatText(raw) {
     }).filter(Boolean).join('');
   }
 
-  // ── Schritt 3: Platzhalter wiederherstellen ───────────────────────
+  // ── Step 3: Platzhalter wiederherstellen ───────────────────────
   s = s.replace(PH_RE, (_, i) => blocks[+i] || '');
 
-  // ── Schritt 4: DOMPurify ─────────────────────────────────────────
+  // ── Step 4: DOMPurify ─────────────────────────────────────────
   if (typeof DOMPurify !== 'undefined') {
     s = DOMPurify.sanitize(s, {
       ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','h4','h5','h6',
@@ -3084,11 +3292,7 @@ function resetModelMax(modelId){
 function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMaxList();updateModelMaxInfo();toast(t('js.allLimitsReset'));}
 
 // ═══════════════════════════════════════════════════════════════
-// LOGIN / PASSWORD / SESSION
-// ═══════════════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════════════
-// MULTI-ACCOUNT LOGIN SYSTEM
+// LOGIN / MULTI-ACCOUNT / SESSION
 // ═══════════════════════════════════════════════════════════════
 
 const ACCOUNT_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35','#00bcd4','#9c27b0'];
@@ -3174,7 +3378,7 @@ async function doLogin() {
   const pw = input.value;
   if (!pw || !_selectedLoginAccountId) return;
 
-  // Brute-Force-Sperre pruefen
+  // Check brute-force lockout
   const lockRemCheck = _loginLockRemaining(_selectedLoginAccountId);
   if (lockRemCheck > 0) {
     const secs = Math.ceil(lockRemCheck / 1000);
@@ -3194,7 +3398,7 @@ async function doLogin() {
       _resetLoginFailures(_selectedLoginAccountId);
       _activeAccountId = _selectedLoginAccountId;
       setSessionPassphrase(pw);
-      // CryptoKey aufbauen + Session-Token schreiben (kein Passwort in sessionStorage)
+      // CryptoKey build + Session token write (kein password in sessionStorage)
       await getCryptoKey();
       await _writeSessionToken();
       localStorage.setItem('kic_active_account', _activeAccountId);
@@ -3219,7 +3423,7 @@ async function doLogin() {
       }
     }
   } finally {
-    // Nur entsperren wenn kein Countdown läuft
+    // Only unlock if no countdown is running
     if (!_lockCountdownTimer) {
       if (btn) btn.disabled = false;
       input.disabled = false;
@@ -3277,7 +3481,7 @@ async function doSetupPassword() {
   const pw   = pwdEl?.value || '';
   const conf = confEl?.value || '';
   if (!name) { if (errorEl) errorEl.textContent = t('js.nameRequired'); return; }
-  // Passwortlaenge: kein Minimum erzwungen - Staerkeanzeige informiert den Benutzer
+  // password length: kein Minimum enforced - strength indicator informiert den Benutzer
   if (pw !== conf) { if (errorEl) errorEl.textContent = t('js.pwdMismatch'); return; }
   // Pick selected color
   const colorRow = document.getElementById('accountColorRow');
@@ -3291,7 +3495,7 @@ async function doSetupPassword() {
   // Activate
   _activeAccountId = accountId;
   setSessionPassphrase(pw);
-  // CryptoKey aufbauen und Session-Token schreiben
+  // CryptoKey build und Session token write
   await getCryptoKey();
   await _writeSessionToken();
   localStorage.setItem('kic_active_account', _activeAccountId);
@@ -3374,11 +3578,11 @@ async function changeLoginPassword() {
     const ok = await verifyAccountPassword(_activeAccountId, currentPw);
     if (!ok) { toast(t('js.pwdCurrentWrong')); return; }
   }
-  // Passwortlaenge: kein Minimum erzwungen - Staerkeanzeige informiert den Benutzer
+  // password length: kein Minimum enforced - strength indicator informiert den Benutzer
   if (newPw !== confirmPw) { toast(t('js.pwdMismatch')); return; }
   await storeAccountPasswordHash(_activeAccountId, newPw);
   setSessionPassphrase(newPw);
-  // Neuen CryptoKey aufbauen + Session-Token neu schreiben
+  // Neuen CryptoKey build + Session token neu write
   await getCryptoKey();
   await _writeSessionToken();
   await save();
@@ -3468,17 +3672,17 @@ async function checkLogin() {
     showLoginScreen();
     return;
   }
-  // F5/Reload: Session-Token pruefen (kein Passwort in sessionStorage)
-  // Der Token wurde mit dem CryptoKey verschluesselt - ohne Passwort kein Entschluesseln.
-  // Vorgehen: Account-ID aus localStorage lesen, Salt laden, Passphrase aus RAM pruefen.
+  // F5/Reload: Session token check (kein password in sessionStorage)
+  // Der Token wurde mit dem CryptoKey verschluesselt - ohne password kein Entschluesseln.
+  // Vorgehen: Account-ID aus localStorage lesen, Salt laden, Passphrase aus RAM check.
   // Da nach F5 der RAM leer ist, muss der User sich kurz erneut authentifizieren -
   // AUSSER der Token ist noch gueltig UND der CryptoKey ist noch im RAM (selbe Tab-Session).
   const lastAccountId = localStorage.getItem('kic_active_account');
   if (lastAccountId && getAccount(lastAccountId)) {
-    // Pruefen ob Session-Token im sessionStorage liegt (nur dann lohnt Versuch)
+    // Pruefen ob Session token im sessionStorage liegt (nur dann lohnt Versuch)
     if (restoreSessionPassphrase()) {
       // Token validieren erfordert CryptoKey -> bei F5 ist _cryptoKey = null.
-      // Wir koennen keinen neuen Key ableiten ohne Passwort.
+      // Wir koennen keinen neuen Key ableiten ohne password.
       // Daher: nur weiter eingeloggt bleiben wenn _cryptoKey noch im RAM ist
       // (d.h. kein echter Reload, nur interne Navigation / Hot-Reload).
       if (_cryptoKey) {
@@ -3670,7 +3874,7 @@ function setupEventListeners(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PRINT — Vollständiger Chat & Einzelne Bubble
+// PRINT — Full chat & single bubble
 // ═══════════════════════════════════════════════════════════════
 
 function printFullChat() {
@@ -3682,7 +3886,7 @@ function printFullChat() {
     const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
     titleEl.textContent = `${chat.title}  —  ${date}`;
   }
-  // MathJax neu typesetten falls nötig, dann drucken
+  // Re-typeset MathJax if needed, then print
   if (window.MathJax && MathJax.typesetPromise) {
     MathJax.typesetPromise().then(() => { window.print(); }).catch(() => { window.print(); });
   } else {
@@ -3696,7 +3900,7 @@ let _printSingleIdx = null;
 function openPrintSingleOverlay(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
-  const msg = chat.messages[idx]; if (!msg) return;
+  const msg = getActivePath(chat)[idx]; if (!msg) return;
 
   let text = '';
   if (typeof msg.content === 'string') text = msg.content;
@@ -3724,7 +3928,7 @@ function closePrintSingleOverlay() {
 function printSingleBubble() {
   if (_printSingleIdx === null) return;
   const chat = currentChat(); if (!chat) return;
-  const msg = chat.messages[_printSingleIdx]; if (!msg) return;
+  const msg = getActivePath(chat)[_printSingleIdx]; if (!msg) return;
 
   let text = '';
   if (typeof msg.content === 'string') text = msg.content;

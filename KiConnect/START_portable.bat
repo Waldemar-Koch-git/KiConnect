@@ -13,74 +13,74 @@ echo       KI Connect - Starting...
 echo  ==========================================
 echo.
 
-REM -- Update ausfuehren ---------------------------------------
-echo Pruefe auf Updates...
+REM -- Run update -----------------------------------------------
+echo Checking for updates...
 call update.bat
 if errorlevel 1 (
-    echo Warnung: Update konnte nicht durchgefuehrt werden.
+    echo Warning: Update could not be completed.
     echo.
 )
 
-REM -- Pruefen ob portable Python vorhanden -------------------
+REM -- Check if portable Python is present ----------------------
 echo.
 echo  ==========================================
-echo       KI Connect - Python Bibs checken..
+echo       KI Connect - Checking Python Libs..
 echo  ==========================================
 echo.
 if not exist "%PYTHON%" (
-    echo  [FEHLER] Portable Python nicht gefunden!
+    echo  [ERROR] Portable Python not found!
     echo.
-    echo  Erwartet unter:
+    echo  Expected at:
     echo    %PYTHON%
     echo.
-    echo  Bitte portable Python herunterladen:
+    echo  Please download portable Python:
     echo    https://www.python.org/downloads/windows/
-    echo    ^(Embeddable Package, z.B. python-3.12.x-embed-amd64.zip^)
+    echo    ^(Embeddable Package, e.g. python-3.12.x-embed-amd64.zip^)
     echo.
-    echo  Entpacken in den Ordner "python\" neben dieser Datei.
-    echo  Danach diese BAT erneut starten.
+    echo  Extract to the "python\" folder next to this file.
+    echo  Then run this BAT file again.
     echo.
     pause
     exit /b 1
 )
 
-REM -- Python-Version anzeigen --------------------------------
+REM -- Show Python version --------------------------------------
 for /f "tokens=*" %%v in ('"%PYTHON%" --version 2^>^&1') do set PYVER=%%v
 echo  Python:  %PYVER%
-echo  Pfad:    %PYTHON%
+echo  Path:    %PYTHON%
 echo.
 
-REM -- pip verfuegbar machen falls fehlend (embeddable package)
+REM -- Make pip available if missing (embeddable package)
 "%PYTHON%" -m pip --version >nul 2>&1
 if errorlevel 1 (
-    echo  [INFO] pip nicht gefunden - wird eingerichtet...
+    echo  [INFO] pip not found - setting up...
     echo.
     for %%f in ("%~dp0python\python*._pth") do (
         powershell -Command "(Get-Content '%%f') -replace '#import site','import site' | Set-Content '%%f'"
     )
     if not exist "%~dp0python\get-pip.py" (
-        echo  [INFO] Lade get-pip.py herunter...
+        echo  [INFO] Downloading get-pip.py...
         powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%~dp0python\get-pip.py'"
         if errorlevel 1 (
-            echo  [FEHLER] get-pip.py konnte nicht geladen werden.
-            echo  Bitte manuell herunterladen: https://pip.pypa.io
+            echo  [ERROR] get-pip.py could not be downloaded.
+            echo  Please download manually: https://pip.pypa.io
             pause
             exit /b 1
         )
     )
     "%PYTHON%" "%~dp0python\get-pip.py" --quiet
-    echo  [OK] pip eingerichtet.
+    echo  [OK] pip set up successfully.
     echo.
 )
 
-REM -- Abhaengigkeiten pruefen --------------------------------
-echo  Pruefe Abhaengigkeiten...
+REM -- Check dependencies ---------------------------------------
+echo  Checking dependencies...
 set MISSING=0
 
 for %%p in (%PACKAGES%) do (
     "%PYTHON%" -c "import %%p" >nul 2>&1
     if errorlevel 1 (
-        echo  [ .. ] %%p fehlt - wird installiert...
+        echo  [ .. ] %%p missing - installing...
         set MISSING=1
     ) else (
         echo  [ OK ] %%p
@@ -89,29 +89,29 @@ for %%p in (%PACKAGES%) do (
 
 if "%MISSING%"=="1" (
     echo.
-    echo  Installiere fehlende Pakete...
+    echo  Installing missing packages...
     %PIP% install %MIN_VERSIONS% --quiet
     if errorlevel 1 (
         echo.
-        echo  [FEHLER] Installation fehlgeschlagen!
-        echo  Bitte Internetverbindung pruefen.
+        echo  [ERROR] Installation failed!
+        echo  Please check your internet connection.
         pause
         exit /b 1
     )
-    echo  [OK] Alle Pakete installiert.
+    echo  [OK] All packages installed.
 )
 
 echo.
 echo  ------------------------------------------
-echo   Proxy startet  ^(Waitress WSGI^)
+echo   Proxy starting  ^(Waitress WSGI^)
 echo   Browser:  http://localhost:5000
-echo   Stoppen:  Strg+C oder Fenster schliessen
+echo   Stop:     Ctrl+C or close window
 echo  ------------------------------------------
 echo.
 
-REM -- Proxy starten ------------------------------------------
+REM -- Start proxy -----------------------------------------------
 "%PYTHON%" "%~dp0comm\kiconnect-proxy.py"
 
 echo.
-echo  Proxy wurde beendet.
+echo  Proxy has been terminated.
 pause
