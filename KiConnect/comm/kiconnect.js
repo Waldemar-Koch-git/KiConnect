@@ -86,6 +86,7 @@ function setLang(code) {
     configureThinkingSlider(modelId);
   }
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
+  if (typeof window._kicVoiceRetranslate === 'function') window._kicVoiceRetranslate();
   renderLangDropdown();
   closeLangDropdown();
 }

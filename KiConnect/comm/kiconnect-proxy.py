@@ -335,7 +335,7 @@ SECURITY_HEADERS = {
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
     ),
     'Permissions-Policy': (
-        'geolocation=(), microphone=(), camera=(), '
+        'geolocation=(), camera=(), '
         'payment=(), usb=(), magnetometer=(), gyroscope=()'
     ),
 }
