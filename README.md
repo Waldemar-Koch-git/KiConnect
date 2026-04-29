@@ -1,6 +1,6 @@
 # KI-Connect
 
-A local, secure chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, KI Connect NRW, and custom OpenAI-compatible servers). Primarily designed for **personal single-user use** — not for enterprise deployments.
+A local, secure chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, DeepSeek, KI Connect NRW, and custom OpenAI-compatible servers). Primarily designed for **personal single-user use** — not for enterprise deployments.
 
 <img width="1502" height="1018" alt="screenshot" src="https://github.com/user-attachments/assets/1efe644c-de04-4f55-88aa-41440575c20e" />
 
@@ -12,12 +12,13 @@ A local, secure chat client for various AI providers (OpenAI, Anthropic/Claude, 
 - 🔐 **Password-protected multi-account sessions** using PBKDF2 (600k iterations, random salt per account)
 - 🛡️ **Brute-force protection** – Exponential lockout starting at the 5th failed attempt (30s → 60s → 120s → …), not bypassable via cache clearing
 - 🌐 **Browser-independent persistence** – Data is stored in `./datas/` on the local server; any browser (Chrome, Firefox, Edge, …) accesses the same accounts
-- 🧠 **Extended Thinking / Reasoning** for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.)
+- 🧠 **Extended Thinking / Reasoning** for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.)
   - Anthropic: Continuous token budget (1k–32k) + Prompt Caching (~90% fewer tokens)
   - OpenAI: Reasoning effort (low/medium/high)
 - 📁 **Chat organisation** with folders, drag & drop, and branches
 - 🖼️ **Image & PDF support** (vision models, Ctrl+V paste, PDF text extraction)
 - 🖨️ **Print function** – Print the full chat or individual messages (including LaTeX rendering)
+- 🎙️ **Voice input & output** – Speech-to-text input and text-to-speech playback via the Web Speech API (`kiconnect-voice.js`)
 - 🌍 **Multilingual** – additional languages can be added in `kiconnect-languages-i18n.js`
   - Already included: EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
 - ⚡ **Streaming responses** in real time with thinking block display
@@ -53,8 +54,9 @@ kiconnect/
     ├── kiconnect.js
     ├── kiconnect-proxy.py
     ├── kiconnect-languages-i18n.js
+    ├── kiconnect-voice.js
 
-	<Optional: host locally if desired, otherwise an internet connection is required!>
+    <Optional: host locally if desired, otherwise an internet connection is required!>
     ├── pdf.min.js
     └── pdf.worker.min.js
 
@@ -123,7 +125,8 @@ python kiconnect-proxy.py
    - **Google Gemini**: API key from [aistudio.google.com](https://aistudio.google.com)
    - **xAI Grok**: API key from [console.x.ai](https://console.x.ai)
    - **Groq**: API key from [console.groq.com](https://console.groq.com) – Ultra-fast inference
-   - **Custom server**: Any OpenAI-compatible API
+   - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) – including DeepSeek R1 reasoning
+   - **Custom server**: Any OpenAI-compatible API (server URL + optional API key)
 
 3. **Select a model** – Live model lists from providers (🧠 = thinking-capable)
 4. **Optional**: Create a user profile for different personas/roles
@@ -153,7 +156,7 @@ Chrome, Firefox, and Edge on the same PC access the **same accounts and chats** 
 
 ## Thinking / Reasoning Mode
 
-For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, etc.):
+For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.):
 
 - **Anthropic**: Continuous budget (1024–32000 tokens) for Extended Thinking
 - **OpenAI**: Discrete levels (low/medium/high) for Reasoning Effort
@@ -200,7 +203,7 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 | **Man-in-the-middle** | TLS validation active (`verify=True`), proxy forwards HTTPS directly | Use on trusted networks only |
 | **XSS via AI output** | DOMPurify filters, but complex payloads are theoretically possible | Exercise caution with suspicious outputs |
 | **Browser restart** | After closing the tab: brief re-login required (RAM key gone) | Expected secure behaviour |
-| **Denial-of-service** | 50 MB body limit, rate limiting in place | Not sufficient for multi-user operation |
+| **Denial-of-service** | 50 MB body limit (proxy), 100 MB per storage entry, rate limiting in place | Not sufficient for multi-user operation |
 
 ### Architecture
 
