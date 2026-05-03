@@ -241,6 +241,49 @@ function _saveOrCache() {
   try { localStorage.setItem('kic_or_model_meta', JSON.stringify(_orModelMeta)); } catch(e) {}
 }
 
+// ── Anthropic model-capabilities cache ────────────────────────────
+// Populated dynamically in fetchModels() from the live /v1/models API.
+// Stores per-model flags so the API call logic never needs hard-coded model-name checks.
+// Schema: { [modelId]: { adaptiveThinking: bool, noTemperature: bool } }
+let _anthropicModelCaps = {};
+(function _loadAnthropicCaps() {
+  try {
+    const raw = localStorage.getItem('kic_anthropic_model_caps');
+    if (raw) _anthropicModelCaps = JSON.parse(raw);
+  } catch(e) { _anthropicModelCaps = {}; }
+})();
+function _saveAnthropicCaps() {
+  try { localStorage.setItem('kic_anthropic_model_caps', JSON.stringify(_anthropicModelCaps)); } catch(e) {}
+}
+
+/**
+ * Returns true when a Claude model uses the new adaptive thinking API
+ * (type:"adaptive" + output_config.effort) instead of the legacy
+ * type:"enabled" + budget_tokens format.
+ * Falls back to a regex for models not yet seen in the live API.
+ */
+function isAdaptiveThinkingModel(modelId) {
+  if (!modelId) return false;
+  const bare = modelId.split('/').pop();
+  if (_anthropicModelCaps[bare]?.adaptiveThinking != null) return _anthropicModelCaps[bare].adaptiveThinking;
+  // Regex fallback: claude-opus-4.x / claude-sonnet-4.x and later use adaptive
+  // claude-3-7-sonnet and earlier use the legacy budget_tokens format.
+  return /^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(bare);
+}
+
+/**
+ * Returns true when a Claude model accepts the temperature parameter.
+ * Extended-thinking models (both legacy and adaptive) reject temperature.
+ * Falls back to regex if the model hasn't been fetched from the live API yet.
+ */
+function isTemperatureSupported(modelId) {
+  if (!modelId) return true;
+  const bare = modelId.split('/').pop();
+  if (_anthropicModelCaps[bare]?.noTemperature != null) return !_anthropicModelCaps[bare].noTemperature;
+  // All current Claude 4+ models drop temperature support
+  return !/^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(bare);
+}
+
 function getModelDefaultMax(modelId) {
   if (!modelId) return 8096;
   const known = KNOWN_MODELS[modelId];
@@ -652,11 +695,17 @@ async function save() {
       _storePut(_activeAccountId, 'chats',     encChats),
     ]);
     if (currentChatId) await _storePut(_activeAccountId, 'current_chat', currentChatId);
-    await _storePut(_activeAccountId, 'sidebar_w', document.getElementById('sidebar').style.width || '');
+    await _storePut(_activeAccountId, 'sidebar_w', document.getElementById('sidebar')?.style.width || '');
     await _storePut(_activeAccountId, 'sidebar_collapsed', sidebarCollapsed ? '1' : '');
   } catch (e) {
     console.error('[save] error:', e);
-    toast(t('js.storageFull'));
+    // Only show storageFull toast for genuine quota errors — not for network/server errors.
+    if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+      toast(t('js.storageFull'));
+    } else if (e?.message && /quota/i.test(e.message)) {
+      toast(t('js.storageFull'));
+    }
+    // Other errors (fetch failures, missing DOM elements, etc.) are silent — already logged above.
   }
 }
 
@@ -1174,7 +1223,28 @@ async function fetchModels() {
         });
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
-        const liveIds = new Set((data.data || []).map(m => m.id));
+        const liveModels = data.data || [];
+        const liveIds = new Set(liveModels.map(m => m.id));
+
+        // ── Populate capabilities cache from live API metadata ────────
+        let capsUpdated = false;
+        liveModels.forEach(m => {
+          if (!m.id) return;
+          const caps = m.capabilities || {};
+          const adaptiveThinking = caps.adaptive_thinking != null
+            ? !!caps.adaptive_thinking
+            : /^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(m.id);
+          const noTemperature = caps.temperature === false
+            || (caps.temperature == null && adaptiveThinking);
+          const prev = _anthropicModelCaps[m.id];
+          if (!prev || prev.adaptiveThinking !== adaptiveThinking || prev.noTemperature !== noTemperature) {
+            _anthropicModelCaps[m.id] = { adaptiveThinking, noTemperature };
+            capsUpdated = true;
+          }
+        });
+        if (capsUpdated) _saveAnthropicCaps();
+        // ─────────────────────────────────────────────────────────────
+
         const modelsToShow = liveIds.size > 0
           ? [...liveIds].sort().reverse().map(id => ({ id, label: KNOWN_MODELS[id]?.label || id }))
           : CLAUDE_MODELS;
@@ -1350,11 +1420,13 @@ function configureThinkingSlider(modelId) {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityLabel');
   if (!slider) return;
-  if (usesTokenBudget(modelId)) {
+  if (usesTokenBudget(modelId) && !isAdaptiveThinkingModel(modelId)) {
+    // Legacy Claude 3.7: budget slider in tokens
     slider.min='1024'; slider.max='32000'; slider.step='256';
     slider.value = String(config.thinkingBudget || 8000);
     if (label) label.textContent = t('thinking.budget');
   } else {
+    // Claude 4+ (adaptive) or non-Anthropic thinking models: 3-level effort slider
     slider.min='1'; slider.max='3'; slider.step='1';
     slider.value = String(config.thinkingIntensity || 2);
     if (label) label.textContent = t('thinking.intensity');
@@ -1365,10 +1437,12 @@ function updateThinkingIntensityUI() {
   const label  = document.getElementById('thinkingIntensityVal');
   if (!slider || !label) return;
   const { modelId } = splitModelId(config.model);
-  if (usesTokenBudget(modelId)) {
+  // Legacy Claude 3.7: show token budget (e.g. "8k tok")
+  if (usesTokenBudget(modelId) && !isAdaptiveThinkingModel(modelId)) {
     const budget = config.thinkingBudget || 8000;
     label.textContent = budget >= 1000 ? (budget/1000).toFixed(1).replace('.0','')+'k tok' : budget+' tok';
   } else {
+    // Claude 4+ adaptive and all other thinking models: show translated effort label
     const val = config.thinkingIntensity || 2;
     const ikeys = { 1:'thinking.low', 2:'thinking.medium', 3:'thinking.high' };
     label.textContent = t(ikeys[val]);
@@ -2098,6 +2172,24 @@ function deleteBubble(idx) {
   const chat=currentChat(); if(!chat) return;
   const path=getActivePath(chat);
   const msg=path[idx]; if(!msg) return;
+
+  // If this node has siblings, only remove the currently active sibling variant —
+  // leaving all other variants (and their tails) intact.
+  if (msg._siblings && msg._siblings.length > 1) {
+    const activeIdx = msg._siblingIdx ?? 0;
+    msg._siblings.splice(activeIdx, 1);
+    // Clamp _siblingIdx so it stays in range
+    msg._siblingIdx = Math.min(activeIdx, msg._siblings.length - 1);
+    // Sync live fields from the newly active variant
+    const active = msg._siblings[msg._siblingIdx];
+    msg.content = active.content;
+    msg._model  = active._model;
+    msg._usage  = active._usage;
+    save(); renderMessages(chat.messages);
+    return;
+  }
+
+  // Single variant (no siblings, or last remaining sibling): remove the whole node.
   const pruneMsg = (arr) => {
     const i=arr.indexOf(msg); if(i>=0){arr.splice(i,1);return true;}
     for(const m of arr){if(m._siblings)for(const s of m._siblings)if(s.tail&&pruneMsg(s.tail))return true;}
@@ -2401,16 +2493,29 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     const body = {
       model: modelId,
       max_tokens: effectiveMaxTokens(),
-      temperature: config.temperature,
       stream: true,
       messages,
     };
+    // temperature is deprecated / unsupported on Claude 4+ models — omit entirely for those.
+    if (isTemperatureSupported(modelId)) {
+      body.temperature = config.temperature;
+    }
     if (config.systemPrompt) body.system = [{ type: 'text', text: config.systemPrompt, cache_control: { type: 'ephemeral' } }];
     if (config.thinkingEnabled && isThinkingCapable(modelId)) {
-      const budget = usesTokenBudget(modelId) ? (config.thinkingBudget || 8000) : CLAUDE_BUDGET[config.thinkingIntensity || 2];
-      body.thinking = { type: 'enabled', budget_tokens: budget };
-      body.temperature = 1;
-      body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+      if (isAdaptiveThinkingModel(modelId)) {
+        // New API (Claude 4+): adaptive thinking via output_config.effort
+        const effortMap = { 1: 'low', 2: 'medium', 3: 'high' };
+        body.thinking = { type: 'adaptive' };
+        body.output_config = { effort: effortMap[config.thinkingIntensity || 2] };
+        // temperature must NOT be sent for adaptive thinking models
+        delete body.temperature;
+      } else {
+        // Legacy API (Claude 3.7 / 3.5): enabled + budget_tokens
+        const budget = usesTokenBudget(modelId) ? (config.thinkingBudget || 8000) : CLAUDE_BUDGET[config.thinkingIntensity || 2];
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        body.temperature = 1; // required to be exactly 1 for legacy thinking
+        body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+      }
     }
     const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
       method: 'POST',
@@ -3751,8 +3856,13 @@ function setupEventListeners(){
   document.getElementById('thinkingToggle').addEventListener('click', toggleThinking);
   document.getElementById('thinkingIntensitySlider').addEventListener('input', e=>{
     const{modelId}=splitModelId(config.model);
-    if(usesTokenBudget(modelId)){config.thinkingBudget=parseInt(e.target.value);}
-    else{config.thinkingIntensity=parseInt(e.target.value);}
+    // Legacy Claude 3.7 uses a token-budget slider; adaptive Claude 4+ and all other
+    // thinking models use a 3-step effort slider writing to thinkingIntensity.
+    if(usesTokenBudget(modelId) && !isAdaptiveThinkingModel(modelId)){
+      config.thinkingBudget=parseInt(e.target.value);
+    } else {
+      config.thinkingIntensity=parseInt(e.target.value);
+    }
     updateThinkingIntensityUI(); save();
   });
 
