@@ -2149,9 +2149,21 @@ function updateChatTokenTotal() {
   const chat=currentChat();
   let total=document.getElementById('chatTokenTotal');
   if (!chat) { if(total) total.remove(); return; }
-  const sum=chat.messages.reduce((acc,m)=>{
+  // Sum tokens along the currently active path only — getActivePath() follows
+  // the active sibling branch at every fork, so the total matches exactly what
+  // the user sees on screen. Iterating chat.messages directly would miss tail
+  // messages inside non-root sibling branches.
+  const activePath = getActivePath(chat);
+  const sum=activePath.reduce((acc,m)=>{
     if(!m._usage) return acc;
-    return acc+(m._usage.input_tokens||0)+(m._usage.output_tokens||0);
+    // For sibling nodes, _usage is kept in sync with the active sibling variant
+    // (updated in _attachAIActions, navigateSibling, deleteBubble).
+    // For regular nodes, _usage is set directly on the message object.
+    const u = m._siblings
+      ? (m._siblings[m._siblingIdx ?? 0]?._usage || m._usage)
+      : m._usage;
+    if (!u) return acc;
+    return acc+(u.input_tokens||0)+(u.output_tokens||0);
   },0);
   if (sum===0) { if(total) total.remove(); return; }
   if (!total) {
