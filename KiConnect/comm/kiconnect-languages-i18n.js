@@ -471,7 +471,7 @@ const TRANSLATIONS = {
     'js.stop': 'Stop',
     'js.send': 'Senden',
     'js.aiAvatar': 'KI',
-    'js.userAvatar': 'Benutzer',
+    'js.userAvatar': 'Ich',
     'js.empty': '(leer)',
     'js.imageNotSaved': 'Bild nicht gespeichert – zu groß',
     'js.imageAlt': 'Bild',
