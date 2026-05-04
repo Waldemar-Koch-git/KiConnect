@@ -1982,6 +1982,15 @@ function getSiblingNodeAt(chat, pathIdx) {
 
 // END MODIFIED — Tree-branch helpers ───────────────────────────────
 
+// ── Public API for external modules (e.g. kiconnect-voice.js) ────────
+// The voice module (and any other add-on) must NEVER access chat.messages[idx]
+// directly — that is the raw sibling-tree, not the rendered flat path.
+// It must call window.kicGetMsgByIdx(idx) instead, which honours the active branch.
+window.kicGetActivePath  = () => { const c = currentChat(); return c ? getActivePath(c) : []; };
+window.kicGetMsgByIdx    = (idx) => { const path = window.kicGetActivePath(); const n = parseInt(idx, 10); return (Number.isFinite(n) && n >= 0) ? (path[n] || null) : null; };
+window.kicCurrentChat    = () => currentChat();
+// END public API ──────────────────────────────────────────────────────
+
 // BEGIN MODIFIED — renderMessages uses active branch path (tree-aware)
 function renderMessages(messages, _unused) {
   const chat = currentChat();
@@ -2924,15 +2933,19 @@ async function sendMessageCore(text, att) {
   // BEGIN MODIFIED: build wire-format message list, then delegate to shared _streamAIResponse
   try {
     let messages;
+    // Use getActivePath so the API receives the correct branch history, not the raw tree array.
+    // chat.messages is a tree (sibling nodes with tails); only getActivePath() flattens it
+    // along the currently selected branch — essential for regenerate / sibling navigation.
+    const activePath = getActivePath(chat);
     if(provider.type==='anthropic'){
       messages=[];
-      chat.messages.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
+      activePath.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
       messages.push({role:'user',content:_toAnthropicContent(userContent)});
       _applyPromptCache(messages);
     } else {
       // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
       // BEGIN MODIFIED: expand pdf_text/pdf_base64 for OpenAI-compat too
-      const hist=chat.messages.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
+      const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
         .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
       messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
       // END MODIFIED
@@ -3081,7 +3094,8 @@ function copyBubble(btn, idx) {
 }
 function copyFullChat() {
   const chat=currentChat(); if(!chat||!chat.messages.length){toast(t('js.noChatToCopy'));return;}
-  const text=chat.messages.map(m=>{
+  // Use getActivePath so only the currently visible branch is copied, not the raw sibling tree.
+  const text=getActivePath(chat).map(m=>{
     const role=m.role==='user'?t('js.userAvatar'):(m._model?m._model.split('/').pop():t('js.aiAvatar'));
     let content='';
     if(typeof m.content==='string')content=m.content;
