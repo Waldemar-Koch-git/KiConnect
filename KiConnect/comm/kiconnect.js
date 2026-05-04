@@ -486,7 +486,14 @@ async function encryptStr(plaintext) {
   const combined = new Uint8Array(iv.byteLength + enc.byteLength);
   combined.set(iv, 0);
   combined.set(new Uint8Array(enc), iv.byteLength);
-  return btoa(String.fromCharCode(...combined));
+  // Use chunked btoa to avoid "Maximum call stack size exceeded"
+  // when spread-applying large Uint8Arrays (>~500 KB).
+  let bin = '';
+  const CHUNK = 8192;
+  for (let i = 0; i < combined.length; i += CHUNK) {
+    bin += String.fromCharCode(...combined.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
 }
 
 async function decryptStr(b64) {
@@ -660,16 +667,51 @@ function saveAccountRegistry() {
 function sanitizeMsgForStorage(msg) {
   if (!Array.isArray(msg.content)) return msg;
   const maxBytes = getMaxImageStorageBytes();
+
+  // Collect names of file content blocks that are stripped, so _files stays intact
+  // and the chips are still shown after reload (as _storedOnly stubs).
+  const strippedFileNames = new Set();
+
   const safeContent = msg.content.map(p => {
+    // ── Images ────────────────────────────────────────────────────
     if (p.type === 'image_url') {
       const url = p.image_url?.url || '';
       if (url.startsWith('data:') && url.length > maxBytes) {
         return { type: 'text', text: '[' + t('js.imageNotSaved') + ']' };
       }
+      return p;
+    }
+    // ── PDF (base64) ──────────────────────────────────────────────
+    // Binary PDFs can be very large; strip the data, keep a sentinel so
+    // the message is re-sendable after a "re-attach" by the user.
+    if (p.type === 'pdf_base64') {
+      if (p.name) strippedFileNames.add(p.name);
+      // Keep the block but without the binary payload to avoid RangeError.
+      return { type: 'pdf_base64_ref', name: p.name };
+    }
+    // ── PDF (extracted text) ──────────────────────────────────────
+    if (p.type === 'pdf_text') {
+      if (p.name) strippedFileNames.add(p.name);
+      return { type: 'pdf_text_ref', name: p.name };
+    }
+    // ── Plain text-file content ───────────────────────────────────
+    // These are stored as a text block starting with '--- Content of "…" ---'
+    if (p.type === 'text' && typeof p.text === 'string' && p.text.startsWith('--- ')) {
+      const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
+      if (fname) strippedFileNames.add(fname);
+      return { type: 'text_file_ref', name: fname || '?' };
     }
     return p;
   });
-  return { ...msg, content: safeContent };
+
+  // Ensure every stripped file is listed in _files so the chip renders on reload.
+  const existingFiles = new Set(msg._files || []);
+  strippedFileNames.forEach(n => existingFiles.add(n));
+  const newFiles = existingFiles.size > 0 ? [...existingFiles] : undefined;
+
+  const result = { ...msg, content: safeContent };
+  if (newFiles) result._files = newFiles;
+  return result;
 }
 
 async function save() {
@@ -2235,8 +2277,8 @@ function startEditBubble(idx) {
     if (!isPdf) return { type: isImg ? 'image' : 'text-file', name, _storedOnly: true };
     let pdfMode = 'b64';
     if (Array.isArray(msg.content)) {
-      if (msg.content.some(p => p.type === 'pdf_text' && p.name === name)) pdfMode = 'text';
-      else if (msg.content.some(p => p.type === 'pdf_base64' && p.name === name)) pdfMode = 'b64';
+      if (msg.content.some(p => (p.type === 'pdf_text' || p.type === 'pdf_text_ref') && p.name === name)) pdfMode = 'text';
+      else if (msg.content.some(p => (p.type === 'pdf_base64' || p.type === 'pdf_base64_ref') && p.name === name)) pdfMode = 'b64';
     }
     return { type: 'pdf-b64', name, _storedOnly: true, pdfMode };
   });
@@ -2325,15 +2367,18 @@ function confirmEditBubble() {
     if (a._storedOnly) {
       if (Array.isArray(msg.content)) {
         if (a.type === 'pdf-b64' && a.pdfMode === 'b64') {
-          const block = msg.content.find(p => p.type === 'pdf_base64' && p.name === a.name);
+          // Accept both full block and stripped _ref sentinel
+          const block = msg.content.find(p => (p.type === 'pdf_base64' || p.type === 'pdf_base64_ref') && p.name === a.name);
           if (block) newContent.push(block);
         } else if (a.type === 'pdf-b64' && a.pdfMode === 'text') {
-          const block = msg.content.find(p => p.type === 'pdf_text' && p.name === a.name);
+          const block = msg.content.find(p => (p.type === 'pdf_text' || p.type === 'pdf_text_ref') && p.name === a.name);
           if (block) newContent.push(block);
         } else {
-          // text-file: still stored as labelled text block (startsWith '--- ')
+          // text-file: stored as labelled text block OR as text_file_ref sentinel
+          let found = false;
           msg.content.forEach(p => {
-            if (p.type === 'text' && p.text?.startsWith('--- ')) {
+            if (p.type === 'text_file_ref' && p.name === a.name) { newContent.push(p); found = true; }
+            else if (!found && p.type === 'text' && p.text?.startsWith('--- ')) {
               const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
               if (fname === a.name) newContent.push(p);
             }
