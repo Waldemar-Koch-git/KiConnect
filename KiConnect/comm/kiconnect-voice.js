@@ -553,6 +553,133 @@
     speechSynthesis.speak(utter);
   }
 
+  // ── Bubble TTS (per-bubble voice controls) ───────────────────────
+
+  var _currentBubbleCtrl = null;
+
+  function getBubbleText(voiceCtrlEl) {
+    var bubble = voiceCtrlEl.closest('.bubble-wrap') && voiceCtrlEl.closest('.bubble-wrap').querySelector('.bubble');
+    if (!bubble) return '';
+    var clone = bubble.cloneNode(true);
+    clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .bubble-voice-controls').forEach(function (el) { el.remove(); });
+    return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function ensureSubmenu(voiceCtrlEl) {
+    var existing = voiceCtrlEl.querySelector('.voice-submenu');
+    if (existing) return existing;
+    var menu = document.createElement('div');
+    menu.className = 'voice-submenu';
+    menu.innerHTML = [
+      '<button class="voice-submenu-btn" data-va="play">▶ Play</button>',
+      '<button class="voice-submenu-btn" data-va="pause">⏸ Pause</button>',
+      '<button class="voice-submenu-btn" data-va="resume" style="display:none">▶ Resume</button>',
+      '<button class="voice-submenu-btn" data-va="stop">⏹ Stop</button>',
+    ].join('');
+    voiceCtrlEl.appendChild(menu);
+    return menu;
+  }
+
+  function updateBubbleSubmenuState(voiceCtrlEl, state) {
+    var menu = voiceCtrlEl.querySelector('.voice-submenu');
+    if (!menu) return;
+    var pause  = menu.querySelector('[data-va="pause"]');
+    var resume = menu.querySelector('[data-va="resume"]');
+    if (state === 'playing') {
+      if (pause)  pause.style.display  = '';
+      if (resume) resume.style.display = 'none';
+    } else if (state === 'paused') {
+      if (pause)  pause.style.display  = 'none';
+      if (resume) resume.style.display = '';
+    } else {
+      if (pause)  pause.style.display  = '';
+      if (resume) resume.style.display = 'none';
+    }
+  }
+
+  function speakBubble(voiceCtrlEl) {
+    if (!window.speechSynthesis) { showToast('🔇 TTS not available.'); return; }
+    speechSynthesis.cancel();
+    var text = getBubbleText(voiceCtrlEl);
+    if (!text) { showToast('No text to read.'); return; }
+
+    _currentBubbleCtrl = voiceCtrlEl;
+    var btn = voiceCtrlEl.querySelector('.bubble-voice-btn');
+
+    var utter = new SpeechSynthesisUtterance(text);
+    utter.lang  = vs.sttLang;
+    utter.rate  = vs.ttsRate;
+    utter.pitch = vs.ttsPitch;
+    if (vs.ttsVoice) {
+      var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === vs.ttsVoice; });
+      if (match.length) utter.voice = match[0];
+    }
+    utter.onstart = function () {
+      if (btn) btn.classList.add('playing');
+      updateBubbleSubmenuState(voiceCtrlEl, 'playing');
+    };
+    utter.onend = function () {
+      if (btn) btn.classList.remove('playing');
+      voiceCtrlEl.querySelector('.voice-submenu').classList.remove('open');
+      updateBubbleSubmenuState(voiceCtrlEl, 'idle');
+      _currentBubbleCtrl = null;
+    };
+    utter.onerror = function () {
+      if (btn) btn.classList.remove('playing');
+      updateBubbleSubmenuState(voiceCtrlEl, 'idle');
+      _currentBubbleCtrl = null;
+    };
+    speechSynthesis.speak(utter);
+  }
+
+  function hookBubbleVoiceControls() {
+    document.addEventListener('click', function (e) {
+      // Toggle submenu on 🔊 button click
+      var bubbleBtn = e.target.closest('.bubble-voice-btn');
+      if (bubbleBtn) {
+        e.stopPropagation();
+        var ctrl = bubbleBtn.closest('.bubble-voice-controls');
+        var menu = ensureSubmenu(ctrl);
+        var isOpen = menu.classList.contains('open');
+        // Close all other open submenus
+        document.querySelectorAll('.voice-submenu.open').forEach(function (m) { m.classList.remove('open'); });
+        if (!isOpen) menu.classList.add('open');
+        return;
+      }
+
+      // Submenu action buttons
+      var actionBtn = e.target.closest('.voice-submenu-btn');
+      if (actionBtn) {
+        e.stopPropagation();
+        var ctrl = actionBtn.closest('.bubble-voice-controls');
+        var action = actionBtn.getAttribute('data-va');
+        if (action === 'play') {
+          speakBubble(ctrl);
+        } else if (action === 'pause') {
+          if (window.speechSynthesis) speechSynthesis.pause();
+          if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'paused');
+        } else if (action === 'resume') {
+          if (window.speechSynthesis) speechSynthesis.resume();
+          if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'playing');
+        } else if (action === 'stop') {
+          if (window.speechSynthesis) speechSynthesis.cancel();
+          if (_currentBubbleCtrl) {
+            _currentBubbleCtrl.querySelector('.bubble-voice-btn').classList.remove('playing');
+            _currentBubbleCtrl.querySelector('.voice-submenu').classList.remove('open');
+            updateBubbleSubmenuState(_currentBubbleCtrl, 'idle');
+            _currentBubbleCtrl = null;
+          }
+        }
+        return;
+      }
+
+      // Click outside → close all submenus
+      if (!e.target.closest('.bubble-voice-controls')) {
+        document.querySelectorAll('.voice-submenu.open').forEach(function (m) { m.classList.remove('open'); });
+      }
+    });
+  }
+
   // ── Dialog mode ─────────────────────────────────────────────────
   // Watches the chat: as soon as a new AI bubble is complete,
   // it will be read aloud and the microphone restarted afterwards.
@@ -609,6 +736,7 @@
       buildVoiceSettingsPanel();
       hookSendStop();
       hookDialogMode();
+      hookBubbleVoiceControls();
     });
   }
 

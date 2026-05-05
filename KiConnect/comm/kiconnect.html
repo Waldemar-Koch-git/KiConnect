@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.9.4</title>
+  <title>AI Chat 2.10</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -532,21 +532,21 @@
       <div class="input-box">
         <textarea id="messageInput" rows="1"
           data-i18n="input.placeholder" data-i18n-attr="placeholder"></textarea>
-        <div class="input-actions">
-          <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
-          <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
-          <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
-          <button class="send-btn" id="sendBtn">
-            <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="22" y1="2" x2="11" y2="13"/>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-            </svg>
-            <svg id="stopIcon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
-              <rect x="4" y="4" width="16" height="16" rx="2"/>
-            </svg>
-            <span id="sendBtnLabel" data-i18n="header.send">Send</span>
-          </button>
-        </div>
+      </div>
+      <div class="input-actions">
+        <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
+        <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
+        <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
+        <button class="send-btn" id="sendBtn">
+          <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+          <svg id="stopIcon" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+          </svg>
+          <span id="sendBtnLabel" data-i18n="header.send">Send</span>
+        </button>
       </div>
       <div class="hint" id="inputHint" data-i18n="input.hint" data-i18n-html="true">
         <kbd>Enter</kbd> send · <kbd>Shift+Enter</kbd> line break

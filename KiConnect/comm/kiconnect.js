@@ -320,9 +320,11 @@ let profiles  = [];
 let folders   = [];
 let chats     = [];
 let currentChatId   = null;
+let activeFolderId  = undefined;
 let attachments     = [];
 let isStreaming      = false;
 let abortController = null;
+let activeStreamSnapshot = null;
 let editingProfileId  = null;
 let editingProviderId = null;
 let draggedChatId   = null;
@@ -1525,6 +1527,7 @@ function newFolder() {
 function deleteFolder(id) {
   chats.forEach(c=>{if(c.folderId===id)c.folderId=null;});
   folders = folders.filter(f=>f.id!==id);
+  if (activeFolderId === id) activeFolderId = null;
   save(); renderSidebar();
 }
 function toggleFolder(id) {
@@ -1573,26 +1576,39 @@ function onFolderDrop(e, targetId) {
 
 // ── Chats ─────────────────────────────────────────────────────────
 function currentChat() { return chats.find(c=>c.id===currentChatId); }
-function newChat(folderId=null) {
-  if (folderId===null && folders.length>0) folderId = folders[0].id;
+function getSidebarTargetFolderId() {
+  if (activeFolderId === null || folders.some(f=>f.id===activeFolderId)) return activeFolderId || null;
+  const chat = currentChat();
+  if (chat && (chat.folderId === null || folders.some(f=>f.id===chat.folderId))) return chat.folderId || null;
+  return folders[0]?.id || null;
+}
+function setActiveFolder(folderId) {
+  activeFolderId = folderId || null;
+  renderSidebar();
+}
+function newChat(folderId) {
+  if (folderId === undefined) folderId = getSidebarTargetFolderId();
   const id = Date.now().toString();
   chats.unshift({id, title:'Chat::', folderId, messages:[]});
+  activeFolderId = folderId || null;
   currentChatId = id; save(); renderSidebar(); renderMessages([]);
 }
 function switchChat(id) {
   currentChatId = id;
+  const c = chats.find(x=>x.id===id);
+  activeFolderId = c?.folderId || null;
   // Persist via server store (encrypted) – not raw localStorage
   _storePut(_activeAccountId, 'current_chat', id).catch(() => {
     localStorage.setItem(accountKey('current_chat'), id);
   });
   renderSidebar();
-  const c = chats.find(x=>x.id===id);
   if (c) renderMessages(c.messages);
 }
 function deleteChat(id) {
   chats = chats.filter(c=>c.id!==id);
   if (currentChatId === id) {
     currentChatId = chats[0]?.id||null;
+    activeFolderId = currentChat()?.folderId || null;
     if (currentChatId) renderMessages(currentChat().messages);
     else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} }
   }
@@ -1610,7 +1626,11 @@ function startRenamingChat(id) {
 }
 function moveChat(chatId, folderId) {
   const c = chats.find(x=>x.id===chatId);
-  if (c) { c.folderId = folderId; save(); renderSidebar(); }
+  if (c) {
+    c.folderId = folderId;
+    if (c.id === currentChatId) activeFolderId = folderId || null;
+    save(); renderSidebar();
+  }
 }
 
 function showChatCtxMenu(e, chatId) {
@@ -1715,7 +1735,7 @@ function onDragStart(e, id) { draggedChatId=id; e.dataTransfer.effectAllowed='mo
 function onDropFolder(e, folderId) {
   e.preventDefault();
   document.querySelectorAll('.drag-target').forEach(el=>el.classList.remove('drag-target'));
-  if (draggedChatId) { moveChat(draggedChatId, folderId); draggedChatId=null; }
+  if (draggedChatId) { activeFolderId = folderId || null; moveChat(draggedChatId, folderId); draggedChatId=null; }
 }
 
 // ── Sidebar Render ────────────────────────────────────────────────
@@ -1791,6 +1811,15 @@ function renderSidebar() {
   }
 
   const unfiled = chats.filter(c=>!c.folderId||!folders.find(f=>f.id===c.folderId));
+  const targetFolderId = getSidebarTargetFolderId();
+  const newChatBtn = document.getElementById('newChatBtn');
+  if (newChatBtn) {
+    newChatBtn.classList.toggle('primary', targetFolderId !== undefined);
+    const targetName = targetFolderId === null
+      ? (t('js.noFolder') || 'No folder')
+      : (folders.find(f=>f.id===targetFolderId)?.name || '');
+    newChatBtn.title = targetName ? `New chat in ${targetName}` : '';
+  }
 
   folders.forEach(f => {
     const fc = chats.filter(c=>c.folderId===f.id);
@@ -1826,11 +1855,12 @@ function renderSidebar() {
     });
 
     const header = document.createElement('div');
-    header.className = 'folder-header';
+    header.className = 'folder-header' + (targetFolderId === f.id ? ' active-folder' : '');
     header.id = `fh_${f.id}`;
     const arrow = document.createElement('span');
     arrow.className = 'folder-arrow ' + (f.collapsed ? '' : 'open');
     arrow.textContent = '▶';
+    arrow.addEventListener('click', e => { e.stopPropagation(); toggleFolder(f.id); });
     const nameSpan = document.createElement('span');
     nameSpan.className = 'folder-name';
     nameSpan.id = `fname_${f.id}`;
@@ -1840,6 +1870,11 @@ function renderSidebar() {
     countSpan.className = 'folder-count'; countSpan.textContent = fc.length;
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'folder-actions';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'folder-btn'; addBtn.textContent = '＋';
+    addBtn.dataset.id = f.id;
+    addBtn.title = t('sidebar.newChat') || 'New chat';
+    addBtn.addEventListener('click', e => { e.stopPropagation(); newChat(addBtn.dataset.id); });
     const renameBtn = document.createElement('button');
     renameBtn.className = 'folder-btn'; renameBtn.textContent = '✏️';
     renameBtn.dataset.id = f.id;
@@ -1848,7 +1883,7 @@ function renderSidebar() {
     delBtn.className = 'folder-btn danger'; delBtn.textContent = '🗑';
     delBtn.dataset.id = f.id;
     delBtn.addEventListener('click', e => { e.stopPropagation(); deleteFolder(delBtn.dataset.id); });
-    actionsDiv.appendChild(renameBtn); actionsDiv.appendChild(delBtn);
+    actionsDiv.appendChild(addBtn); actionsDiv.appendChild(renameBtn); actionsDiv.appendChild(delBtn);
     header.appendChild(arrow); header.appendChild(nameSpan); header.appendChild(countSpan); header.appendChild(actionsDiv);
     header.addEventListener('dragover', e => {
       if (draggedChatId) { e.preventDefault(); header.classList.add('drag-target'); }
@@ -1857,7 +1892,9 @@ function renderSidebar() {
     header.addEventListener('drop', e => { if(draggedChatId) onDropFolder(e, f.id); });
     header.addEventListener('click', e => {
       if (e.target.closest('.folder-actions') || e.target.tagName==='BUTTON' || e.target.tagName==='INPUT') return;
-      toggleFolder(f.id);
+      activeFolderId = f.id;
+      if (f.collapsed) { f.collapsed=false; save(); renderSidebar(); }
+      else renderSidebar();
     });
     const chatsDiv = document.createElement('div');
     chatsDiv.className = 'folder-chats' + (f.collapsed ? ' collapsed' : '');
@@ -1873,7 +1910,7 @@ function renderSidebar() {
     const folderDiv = document.createElement('div');
     folderDiv.className = 'folder';
     const header = document.createElement('div');
-    header.className = 'folder-header';
+    header.className = 'folder-header' + (targetFolderId === null ? ' active-folder' : '');
     const arrow = document.createElement('span'); arrow.className='folder-arrow open'; arrow.textContent='▶';
     const nameSpan = document.createElement('span'); nameSpan.className='folder-name'; nameSpan.textContent=t('js.noFolder');
     const countSpan = document.createElement('span'); countSpan.className='folder-count'; countSpan.textContent=unfiled.length;
@@ -1881,6 +1918,7 @@ function renderSidebar() {
     header.addEventListener('dragover', e=>{if(draggedChatId){e.preventDefault();header.classList.add('drag-target');}});
     header.addEventListener('dragleave',()=>header.classList.remove('drag-target'));
     header.addEventListener('drop', e=>{ if(draggedChatId) onDropFolder(e,null); });
+    header.addEventListener('click', e=>{ if(e.target.tagName==='BUTTON'||e.target.tagName==='INPUT') return; setActiveFolder(null); });
     const chatsDiv = document.createElement('div');
     chatsDiv.className = 'folder-chats';
     chatsDiv.addEventListener('dragover', e=>{if(draggedChatId)e.preventDefault();});
@@ -2142,6 +2180,12 @@ function buildMsgEl(msg, idx) {
     wrap.appendChild(bubble); wrap.appendChild(actDiv); wrap.appendChild(badge);
   } else {
     wrap.appendChild(bubble); wrap.appendChild(actDiv);
+  }
+  if (!isUser) {
+    const vc = document.createElement('div');
+    vc.className = 'bubble-voice-controls';
+    vc.innerHTML = '<button class="bubble-voice-btn" title="Read aloud">🔊</button>';
+    wrap.appendChild(vc);
   }
   row.appendChild(avatarCol); row.appendChild(wrap);
 
@@ -2541,6 +2585,20 @@ function _renderThinkingBubble(thinkingText, assistantText) {
   return th + formatText(assistantText);
 }
 
+function _streamStoredText(thinkingText, assistantText) {
+  return (thinkingText ? `<thinking>\n${thinkingText}\n</thinking>\n\n` : '') + (assistantText || '');
+}
+
+function _rememberStreamSnapshot(text, usageData) {
+  if (!activeStreamSnapshot) activeStreamSnapshot = { text: '', usage: null };
+  activeStreamSnapshot.text = text || '';
+  activeStreamSnapshot.usage = usageData || null;
+}
+
+function _finishLiveStreamUI() {
+  document.querySelectorAll('.bubble.streaming').forEach(b => b.classList.remove('streaming'));
+}
+
 /**
  * _streamAIResponse: Core streaming function used by sendMessageCore and rerunFromUserMsg.
  * Sends `messages` to the provider, streams the response into a new AI bubble,
@@ -2553,6 +2611,7 @@ function _renderThinkingBubble(thinkingText, assistantText) {
  */
 async function _streamAIResponse(messages, provider, typingId, documentIds) {
   let assistantText = '', usageData = null;
+  activeStreamSnapshot = { text: '', usage: null };
 
   if (provider.type === 'anthropic') {
     const { modelId } = splitModelId(config.model);
@@ -2608,17 +2667,25 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         if (!line.startsWith('data: ')) continue;
         try {
           const ev = JSON.parse(line.slice(6).trim());
-          if (ev.type === 'message_start' && ev.message?.usage) { usageData = { ...(usageData || {}), ...ev.message.usage }; }
-          else if (ev.type === 'message_delta' && ev.usage) { usageData = { ...(usageData || {}), ...ev.usage }; }
+          if (ev.type === 'message_start' && ev.message?.usage) {
+            usageData = { ...(usageData || {}), ...ev.message.usage };
+            _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+          }
+          else if (ev.type === 'message_delta' && ev.usage) {
+            usageData = { ...(usageData || {}), ...ev.usage };
+            _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+          }
           else if (ev.type === 'content_block_start') { inThinkingBlock = ev.content_block?.type === 'thinking'; }
           else if (ev.type === 'content_block_stop') { inThinkingBlock = false; }
           else if (ev.type === 'content_block_delta') {
             if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
               thinkingText += ev.delta.thinking || '';
               aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
             } else if (ev.delta?.type === 'text_delta') {
               assistantText += ev.delta.text;
               aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
               scrollToBottom();
             }
           }
@@ -2671,10 +2738,15 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
           const chunk = JSON.parse(payload);
           const delta = chunk.choices?.[0]?.delta?.content || '';
           assistantText += delta;
-          if (delta) { aiEl.querySelector('.bubble').innerHTML = formatText(assistantText); scrollToBottom(); }
+          if (delta) {
+            aiEl.querySelector('.bubble').innerHTML = formatText(assistantText);
+            _rememberStreamSnapshot(assistantText, usageData);
+            scrollToBottom();
+          }
           if (chunk.usage) {
             const u = chunk.usage;
             usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens || 0 };
+            _rememberStreamSnapshot(assistantText, usageData);
           }
         } catch {}
       }
@@ -2682,6 +2754,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     typesetMath();
   }
 
+  _finishLiveStreamUI();
   return { text: assistantText, usage: usageData };
 }
 
@@ -2725,7 +2798,7 @@ async function regenerate(idx) {
   const path=getActivePath(chat);
   const msg=path[idx];
   if(!msg||msg.role!=='assistant') return;
-  if(isStreaming){toast(t('js.pleaseWait'));return;}
+  if(isStreaming){stopStreaming();return;}
 
   const userMsg=path[idx-1];
   if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
@@ -2801,14 +2874,20 @@ async function rerunFromUserMsg(userMsg) {
     assistantText = result.text; usageData = result.usage;
   } catch(e) {
     removeTyping(typingId);
-    if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
+    if(e.name==='AbortError'){
+      const partialText = activeStreamSnapshot?.text || assistantText;
+      assistantText = partialText || t('js.generationStopped');
+      usageData = activeStreamSnapshot?.usage || usageData;
+      _finishLiveStreamUI();
+    }
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
   if(assistantText) _attachAIActions(chat, assistantText, usageData);
+  activeStreamSnapshot=null;
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
-// END MODIFIED
+
 
 // ── Send / Stop ───────────────────────────────────────────────────
 function handleSendStop() { isStreaming ? stopStreaming() : sendMessage(); }
@@ -2954,12 +3033,18 @@ async function sendMessageCore(text, att) {
     assistantText=result.text; usageData=result.usage;
   } catch(e) {
     removeTyping(typingId);
-    if(e.name==='AbortError'){if(!assistantText)assistantText=t('js.generationStopped');}
+    if(e.name==='AbortError'){
+      const partialText = activeStreamSnapshot?.text || assistantText;
+      assistantText = partialText || t('js.generationStopped');
+      usageData = activeStreamSnapshot?.usage || usageData;
+      _finishLiveStreamUI();
+    }
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
   // END MODIFIED
 
   if(assistantText) _attachAIActions(chat, assistantText, usageData);
+  activeStreamSnapshot=null;
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
 
@@ -3049,7 +3134,7 @@ function appendEmptyAI() {
   avatarCol.appendChild(avatar);
   if(pureModelId){const ml=document.createElement('div');ml.className='model-label';ml.title=pureModelId;ml.textContent=pureModelId.split('/').pop();avatarCol.appendChild(ml);}
   const wrap=document.createElement('div');wrap.className='bubble-wrap';
-  const bubble=document.createElement('div');bubble.className='bubble';
+  const bubble=document.createElement('div');bubble.className='bubble streaming';
   wrap.appendChild(bubble);div.appendChild(avatarCol);div.appendChild(wrap);
   appendToMessages(div);scrollToBottom();return div;
 }
@@ -4229,13 +4314,14 @@ async function bootApp() {
     if (slider) slider.value = config.thinkingIntensity;
   }
   if (!folders.length) { folders.push({ id:'default', name:'Default', collapsed:false }); save(); }
-  renderSidebar();
   if (!chats.length) { newChat(); }
   else {
     // Falls der gespeicherte currentChatId nicht existiert, nutze den ersten Chat
     if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
       currentChatId = chats[0].id;
     }
+    activeFolderId = currentChat()?.folderId || null;
+    renderSidebar();
     renderMessages(currentChat()?.messages || []);
   }
   if (providers.length && providers.some(p => p.apiKey)) fetchModels();
