@@ -9,7 +9,7 @@
     default-src 'self';
     script-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
     style-src   'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com;
+    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
     img-src     'self' data: blob:;
     font-src    'self' https://cdn.jsdelivr.net;
     worker-src  blob:;
@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.10</title>
+  <title>AI Chat 2.11</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -154,16 +154,16 @@
 
 
 <!-- ════════════════════════════════════════════════════════════════
-     SETTINGS PANEL
+     TUNING PANEL  (Theme · Suche · Model)
      ════════════════════════════════════════════════════════════════ -->
-<div class="panel" id="settingsPanel">
+<div class="panel" id="tuningPanel">
   <div class="panel-title">
-    <span data-i18n="settings.title">Settings</span>
-    <button class="close-btn" id="settingsPanelClose">✕</button>
+    <span data-i18n="tuning.title">Tuning</span>
+    <button class="close-btn" id="tuningPanelClose">✕</button>
   </div>
 
-  <!-- Theme -->
-  <div class="section-header">🎨 Theme</div>
+  <!-- 1. Theme -->
+  <div class="section-header" data-i18n="tuning.theme">🎨 Theme</div>
   <div class="theme-switcher" id="themeSwitcher">
     <div>
       <div class="theme-swatch active" data-theme="dark" title="Dark" onclick="setTheme('dark')">
@@ -175,26 +175,6 @@
       <div class="theme-swatch-label">Dark</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="oled" title="OLED Black" onclick="setTheme('oled')">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">OLED</div>
-    </div>
-
-    <div>
-      <div class="theme-swatch" data-theme="gold" title="Dark Gold" onclick="setTheme('gold')">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Gold</div>
-    </div>
-	
-    <div>
       <div class="theme-swatch" data-theme="white" title="White" onclick="setTheme('white')">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
@@ -203,9 +183,203 @@
       </div>
       <div class="theme-swatch-label">White</div>
     </div>
+    <div>
+      <div class="theme-swatch" data-theme="nord" title="Nord" onclick="setTheme('nord')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Nord</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="dracula" title="Dracula" onclick="setTheme('dracula')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Dracula</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="forest" title="Forest" onclick="setTheme('forest')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Forest</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="mocha" title="Mocha" onclick="setTheme('mocha')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Mocha</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="rose" title="Rose" onclick="setTheme('rose')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Rose</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="solarized" title="Solarized" onclick="setTheme('solarized')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Solar</div>
+    </div>
   </div>
 
+  <!-- OLED section separator -->
+  <div class="theme-oled-label">
+    <span class="theme-oled-line"></span>
+    <span class="theme-oled-title" data-i18n="tuning.oledTitle">OLED-Monitors</span>
+    <span class="theme-oled-line"></span>
+  </div>
+  <div style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-bottom:8px;line-height:1.4;" data-i18n="tuning.oledDesc">
+    Pure black background — pixels off = zero light = max contrast &amp; power savings.
+  </div>
+
+  <!-- OLED themes -->
+  <div class="theme-switcher" id="themeSwitcherOled">
+    <div>
+      <div class="theme-swatch" data-theme="dark_oled" title="Dark (OLED)" onclick="setTheme('dark_oled')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Dark</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="gold_oled" title="Gold (OLED)" onclick="setTheme('gold_oled')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Gold</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="emerald_oled" title="Emerald (OLED)" onclick="setTheme('emerald_oled')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Emerald</div>
+    </div>
+    <div>
+      <div class="theme-swatch" data-theme="red_oled" title="Red (OLED)" onclick="setTheme('red_oled')">
+        <div class="theme-swatch-inner">
+          <div class="theme-swatch-top"></div>
+          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <div class="theme-swatch-label">Red</div>
+    </div>
+  </div>
+
+  <!-- 2. Suche -->
   <hr class="divider" style="margin-top:16px;">
+  <div class="section-header" data-i18n="web.title">🔍 Suche</div>
+  <div class="setting-group">
+    <div class="setting-label" data-i18n="web.engine">Search engine</div>
+    <select class="setting-input" id="webSearchEngine">
+      <option value="free" data-i18n="web.engineFree">Free fallback (no key)</option>
+      <option value="duckduckgo" data-i18n="web.engineDuck">DuckDuckGo (free, no key)</option>
+      <option value="searxng" data-i18n="web.engineSearxng">SearXNG (free, no key)</option>
+      <option value="qwant" data-i18n="web.engineQwant">Qwant (free, no key)</option>
+      <option value="yahoo" data-i18n="web.engineYahoo">Yahoo (free, no key)</option>
+      <option value="startpage" data-i18n="web.engineStartpage">Startpage (free, no key)</option>
+      <option value="brave" data-i18n="web.engineBrave">Brave Search API (key required)</option>
+      <option value="google" data-i18n="web.engineGoogle">Google Custom Search (key required)</option>
+      <option value="bing" data-i18n="web.engineBing">Bing / Microsoft (key required)</option>
+      <option value="mojeek" data-i18n="web.engineMojeek">Mojeek (key required)</option>
+      <option value="yandex" data-i18n="web.engineYandex">Yandex (key required)</option>
+    </select>
+  </div>
+  <div class="setting-group" id="webSearchApiKeyGroup">
+    <div class="setting-label" id="webSearchApiKeyLabel" data-i18n="web.braveKey">Search API key</div>
+    <input class="setting-input" type="password" id="webSearchApiKey" placeholder="BSA...">
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" id="webSearchApiKeyHint" data-i18n="web.hint">
+      Only needed when Brave is selected. Stored encrypted with your account data.
+    </div>
+  </div>
+  <div class="setting-group">
+    <div class="setting-label">
+      <span data-i18n="web.resultCount">Results per search</span>
+      <span class="range-val" id="webSearchCountVal">8</span>
+    </div>
+    <input class="setting-input" type="range" min="3" max="30" step="1" value="8" id="webSearchCount">
+  </div>
+
+  <!-- 3. Model -->
+  <hr class="divider">
+  <div class="section-header" data-i18n="settings.model">🤖 Model</div>
+  <div class="setting-group">
+    <div class="setting-label">
+      <span data-i18n="settings.temperature">Temperature</span>
+      <span class="range-val" id="tempVal">0.7</span>
+    </div>
+    <input class="setting-input" type="range" min="0" max="2" step="0.1" value="0.7" id="temperature">
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;" data-i18n="settings.temperatureDesc">
+    Controls creativity and randomness. Low values (0–0.3) give precise, focused answers. Mid-range (0.5–0.9) balances accuracy and variety. High values (1.0–2.0) produce more creative, surprising, and experimental output.
+  </div>
+
+  <!-- 4. Limits -->
+  <hr class="divider">
+  <div class="section-header" data-i18n="tuning.limits">📐 Limits</div>
+  <div class="tuning-limits-card">
+    <div class="tlc-row">
+      <div class="tlc-icon">↔️</div>
+      <div class="tlc-body">
+        <div class="tlc-label">
+          <span data-i18n="settings.chatWidth">Chat width</span>
+          <span class="range-val" id="chatWidthVal" style="margin-left:8px;">880px</span>
+        </div>
+      </div>
+      <div class="tlc-control" style="flex:1;max-width:120px;">
+        <input class="setting-input" type="range" min="480" max="3000" step="40" value="880" id="chatWidthSlider" style="padding:0;cursor:pointer;">
+      </div>
+    </div>
+    <div class="tlc-row">
+      <div class="tlc-icon">🖼️</div>
+      <div class="tlc-body">
+        <div class="tlc-label" data-i18n="settings.maxImgSize">Max image size</div>
+        <div class="tlc-hint" data-i18n="settings.maxImgSizeHint">Above this limit a dialog will ask to raise it.</div>
+      </div>
+      <div class="tlc-control">
+        <input class="setting-input tlc-number" type="number" id="maxImgSizeInput"
+          min="100" max="102400" step="100" value="500">
+        <span class="tlc-unit" data-i18n="settings.maxImgSizeKb">KB</span>
+      </div>
+    </div>
+  </div>
+
+  <button class="save-btn" id="saveSettingsBtn" data-i18n="settings.saveBtn">💾 Save &amp; load models</button>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SETTINGS PANEL  (Sicherheit · Account)
+     ════════════════════════════════════════════════════════════════ -->
+<div class="panel" id="settingsPanel">
+  <div class="panel-title">
+    <span data-i18n="settings.title">Settings</span>
+    <button class="close-btn" id="settingsPanelClose">✕</button>
+  </div>
+
+  <!-- Active provider quick info -->
   <div class="section-header" data-i18n="settings.activeProvider">Provider (active)</div>
   <div class="info-box" id="activeProviderInfo" data-i18n="settings.noProvider">No provider selected.</div>
   <button class="ghost-btn" id="goProviderFromSettings" data-i18n="settings.manageProviders">🔌 Manage providers →</button>
@@ -217,40 +391,6 @@
   </div>
 
   <hr class="divider">
-  <div class="section-header" data-i18n="settings.model">Model</div>
-  <div class="setting-group">
-    <select class="setting-input" id="modelInput">
-      <option value="" data-i18n="settings.noProviderOpt2">— Configure provider —</option>
-    </select>
-  </div>
-
-  <div class="section-header" data-i18n="conv.params">Conversation parameters</div>
-  <div class="setting-group">
-    <div class="setting-label">
-      <span data-i18n="settings.chatWidth">Chat width</span>
-      <span class="range-val" id="chatWidthVal">880px</span>
-    </div>
-    <input class="setting-input" type="range" min="480" max="3000" step="40" value="880" id="chatWidthSlider">
-  </div>
-  <div class="setting-group">
-    <div class="setting-label">
-      <span data-i18n="settings.temperature">Temperature</span>
-      <span class="range-val" id="tempVal">0.7</span>
-    </div>
-    <input class="setting-input" type="range" min="0" max="2" step="0.1" value="0.7" id="temperature">
-  </div>
-  <div class="setting-group">
-    <div class="setting-label" data-i18n="settings.systemPrompt">System Prompt (default)</div>
-    <textarea class="setting-input" id="systemPrompt" rows="4"
-      placeholder="" data-i18n="settings.systemPlaceholder" data-i18n-attr="placeholder"></textarea>
-  </div>
-  <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:4px;" id="modelMaxInfo"></div>
-  <p style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;" data-i18n="settings.maxTokensAuto">
-    Max tokens are taken automatically from the model.
-  </p>
-  <button class="save-btn" id="saveSettingsBtn" data-i18n="settings.saveBtn">💾 Save &amp; load models</button>
-
-  <hr class="divider">
   <div class="section-header" data-i18n="settings.security">🔒 Security</div>
   <p style="font-size:11px;color:var(--muted);line-height:1.5;margin-bottom:6px;" data-i18n="settings.secDesc">
     API keys are encrypted with AES-GCM-256 in the browser.
@@ -259,21 +399,12 @@
     🔐 All data is stored AES-256-GCM encrypted per account.
   </p>
 
-  <!-- Image size limit -->
-  <div class="setting-group">
-    <div class="setting-label" data-i18n="settings.maxImgSize">Max. image storage size</div>
-    <div style="display:flex;gap:8px;align-items:center;">
-      <input class="setting-input" type="number" id="maxImgSizeInput"
-        min="100" max="102400" step="100" value="500" style="flex:1;text-align:center;">
-      <span style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;flex-shrink:0;" data-i18n="settings.maxImgSizeKb">KB</span>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" data-i18n="settings.maxImgSizeHint">
-      Images above this limit: a dialog will ask to raise the limit.
-    </div>
-  </div>
+  <!-- Image size limit moved to Tuning → Limits -->
 
-  <div class="section-header" style="margin-top:0;" data-i18n="account.username">Username</div>
+  <hr class="divider">
+  <div class="section-header" style="margin-top:0;" data-i18n="account.username">👤 Account</div>
   <div class="setting-group">
+    <div class="setting-label" data-i18n="account.username">Username</div>
     <input class="setting-input" type="text" id="accountNameInput"
       placeholder="Your name…" data-i18n="account.usernamePlaceholder" data-i18n-attr="placeholder"
       style="width:100%;margin-bottom:6px;">
@@ -380,7 +511,7 @@
      ════════════════════════════════════════════════════════════════ -->
 <div class="panel" id="profilePanel">
   <div class="panel-title">
-    <span data-i18n="profile.title">Agent Profiles</span>
+    <span data-i18n="profile.title">Profile</span>
     <button class="close-btn" id="profilePanelClose">✕</button>
   </div>
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;"
@@ -392,10 +523,6 @@
     <div class="setting-label" data-i18n="profile.name">Name</div>
     <input class="setting-input" type="text" id="peNameInput"
       placeholder="" data-i18n="profile.namePlaceholder" data-i18n-attr="placeholder">
-    <div class="setting-label" style="margin-top:10px;" data-i18n="profile.modelForProfile">Model for this profile</div>
-    <select class="setting-input" id="peModelInput">
-      <option value="" data-i18n="profile.globalModel">— Use global model —</option>
-    </select>
     <div class="setting-label" style="margin-top:10px;" data-i18n="profile.systemPrompt">System Prompt</div>
     <textarea class="setting-input" id="peSysPrompt" rows="3"
       placeholder="" data-i18n="profile.sysPHint" data-i18n-attr="placeholder"></textarea>
@@ -478,13 +605,35 @@
     </div>
   </div>
   <div class="header-right">
-    <div class="profile-badge" id="profileBadge" title="" data-i18n="header.profileTitle" data-i18n-attr="title">
-      <div class="profile-dot" id="profileBadgeDot" style="background:var(--muted)"></div>
-      <span id="profileBadgeName" data-i18n="header.noProfile">No Profile</span>
+    <!-- ── Panel icon toolbar ── -->
+    <div class="panel-toolbar" id="panelToolbar">
+      <button class="panel-toolbar-btn" id="openProfileHeaderBtn" title="" data-i18n="header.profilesTitle" data-i18n-attr="title" data-panel="profilePanel">
+        <span class="ptb-icon-wrap">
+          <span class="ptb-icon">👤</span>
+          <span class="ptb-status-dot" id="profileBadgeDot" style="background:var(--muted)"></span>
+        </span>
+        <span class="ptb-label" data-i18n="toolbar.profiles">Profil</span>
+      </button>
+      <button class="panel-toolbar-btn" id="openProviderHeaderBtn" title="" data-i18n="header.providerTitle" data-i18n-attr="title" data-panel="providerPanel">
+        <span class="ptb-icon-wrap">
+          <span class="ptb-icon">🔌</span>
+          <span class="ptb-status-dot" id="statusDot"></span>
+        </span>
+        <span class="ptb-label" data-i18n="toolbar.api">API</span>
+      </button>
+      <button class="panel-toolbar-btn" id="openTuningBtn" title="" data-i18n="header.tuningTitle" data-i18n-attr="title" data-panel="tuningPanel">
+        <span class="ptb-icon">⚙️</span>
+        <span class="ptb-label" data-i18n="toolbar.tuning">Tuning</span>
+      </button>
+      <button class="panel-toolbar-btn" id="openModelMaxHeaderBtn" title="" data-i18n="header.limitsTitle" data-i18n-attr="title" data-panel="modelMaxPanel" style="display:none">
+        <span class="ptb-icon">📊</span>
+        <span class="ptb-label" data-i18n="toolbar.limits">Limits</span>
+      </button>
+      <button class="panel-toolbar-btn" id="openSettingsBtn" title="" data-i18n="header.settingsTitle" data-i18n-attr="title" data-panel="settingsPanel">
+        <span class="ptb-icon">⚙</span>
+        <span class="ptb-label" data-i18n="toolbar.settings">Settings</span>
+      </button>
     </div>
-    <div class="status-dot" id="statusDot"></div>
-    <button class="settings-btn" id="openProviderHeaderBtn" title="" data-i18n="header.providerTitle" data-i18n-attr="title">🔌</button>
-    <button class="settings-btn" id="openSettingsBtn" title="" data-i18n="header.settingsTitle" data-i18n-attr="title">⚙</button>
     <div class="lang-switcher" id="langSwitcher">
       <button class="lang-btn" id="langToggleBtn" title="" data-i18n="header.langTitle" data-i18n-attr="title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -537,6 +686,7 @@
         <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
         <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
         <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
+        <button class="action-btn web-search-btn" id="webSearchBtn" title="" data-i18n="web.buttonTitle" data-i18n-attr="title">Web</button>
         <button class="send-btn" id="sendBtn">
           <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="22" y1="2" x2="11" y2="13"/>
@@ -556,6 +706,19 @@
 </div>
 
 <!-- Hidden file inputs (also used by edit mode) -->
+<!-- webSearchMode is controlled via the toolbar Web button; keep select hidden for JS compat -->
+<select id="webSearchMode" style="display:none">
+  <option value="manual">manual</option>
+  <option value="auto">auto</option>
+  <option value="always">always</option>
+  <option value="off">off</option>
+</select>
+<!-- modelInput is shown in the header model picker; keep select hidden for JS compat -->
+<select id="modelInput" style="display:none">
+  <option value=""></option>
+</select>
+<!-- systemPrompt is managed via agent profiles; keep textarea hidden for JS compat -->
+<textarea id="systemPrompt" style="display:none"></textarea>
 <input type="file" id="fileInput"
   accept="text/*,.txt,.md,.csv,.json,.xml,.yaml,.yml,.log,.py,.js,.ts,.html,.css,.sh,.bat,.ini,.cfg,.toml,.pdf,application/pdf"
   style="display:none">

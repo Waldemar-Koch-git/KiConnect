@@ -229,7 +229,16 @@ def check_origin():
 ALLOWED_DOMAINS = {
     'chat.kiconnect.nrw', 'api.anthropic.com', 'api.openai.com',
     'openrouter.ai', 'api.mistral.ai', 'generativelanguage.googleapis.com',
-    'api.x.ai', 'api.groq.com','api.deepseek.com', 
+    'api.x.ai', 'api.groq.com','api.deepseek.com',
+    'api.search.brave.com', 'html.duckduckgo.com', 'lite.duckduckgo.com',
+    'api.qwant.com', 'search.yahoo.com', 'www.startpage.com',
+    'www.googleapis.com',
+    'api.bing.microsoft.com',
+    'api.mojeek.com',
+    'yandex.com',
+    'searx.be', 'searxng.world', 'search.bus-hit.me',
+    'searx.tiekoetter.com', 'search.sapti.me', 'searx.prvcy.eu',
+    'searx.fmac.xyz', 'search.ononoki.org',
 }
 
 # ── Private IP-Bereiche (SSRF-Schutz) ────────────────────────────
@@ -266,7 +275,7 @@ def is_private_ip(hostname):
         except ValueError: return True
     return False
 
-def is_allowed(target_url):
+def is_allowed(target_url, method='GET'):
     try: parsed = urlparse(target_url)
     except Exception: return False, 'Ungueltige URL'
     if parsed.scheme not in ('http', 'https'): return False, 'Nur HTTP/HTTPS'
@@ -274,7 +283,7 @@ def is_allowed(target_url):
     if not host: return False, 'Kein Hostname'
     try: ipaddress.ip_address(host); return False, 'Direkte IP nicht erlaubt'
     except ValueError: pass
-    if not any(host == d or host.endswith('.' + d) for d in ALLOWED_DOMAINS):
+    if not any(host == d or host.endswith('.' + d) for d in ALLOWED_DOMAINS) and method.upper() != 'GET':
         return False, 'Domain nicht erlaubt'
     if is_private_ip(host): return False, 'Privater Host nicht erlaubt'
     return True, ''
@@ -304,8 +313,10 @@ CORS_HEADERS = {
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': (
         'Authorization, Content-Type, x-api-key, '
+        'X-Subscription-Token, '
         'anthropic-version, anthropic-dangerous-direct-browser-access, '
-        'HTTP-Referer, X-Title'
+        'HTTP-Referer, X-Title, '
+        'Ocp-Apim-Subscription-Key'           # Bing Search API
     ),
 }
 EXCLUDED_RESP_HEADERS = {
@@ -325,8 +336,14 @@ SECURITY_HEADERS = {
         "connect-src 'self' https://api.anthropic.com https://api.openai.com "
         "https://chat.kiconnect.nrw https://openrouter.ai "
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
-        "https://api.x.ai https://api.groq.com; "
-        "https://api.deepseek.com; " 
+        "https://api.x.ai https://api.groq.com "
+        "https://api.deepseek.com https://api.search.brave.com https://html.duckduckgo.com "
+        "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
+        "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
+        "https://api.mojeek.com https://yandex.com "
+        "https://searx.be https://searxng.world https://search.bus-hit.me "
+        "https://searx.tiekoetter.com https://search.sapti.me https://searx.prvcy.eu "
+        "https://searx.fmac.xyz https://search.ononoki.org; "
         "img-src 'self' data: blob:; "
         "font-src 'self' https://cdn.jsdelivr.net; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
@@ -378,17 +395,36 @@ def _proxy_request(target_url):
     try: target_url = unquote(target_url)
     except Exception: pass
 
-    ok, reason = is_allowed(target_url)
+    ok, reason = is_allowed(target_url, request.method)
     if not ok:
         print(f'  blocked [{reason}]')
         return Response('{"error":"Request blocked."}', 403, content_type='application/json')
 
     ALLOWED_REQ_HEADERS = {
         'authorization','content-type','x-api-key',
+        'x-subscription-token',
         'anthropic-version','anthropic-dangerous-direct-browser-access',
-        'accept','http-referer','x-title',
+        'accept','http-referer','x-title','origin',
+        'ocp-apim-subscription-key',          # Bing Search API
+        'user-agent',                          # Search engines (browser can't send it, proxy injects below)
+        'referer','accept-language','sec-fetch-site','sec-fetch-mode','sec-fetch-dest',
     }
     fwd_headers = {k: v for k, v in request.headers if k.lower() in ALLOWED_REQ_HEADERS}
+    # Inject a browser-like User-Agent when none is present — required by DuckDuckGo,
+    # Bing, Brave etc. (browsers cannot set User-Agent in fetch, so the proxy must do it)
+    if not any(k.lower() == 'user-agent' for k in fwd_headers):
+        fwd_headers['User-Agent'] = (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        )
+    fwd_headers.setdefault('Accept-Language', 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7')
+    fwd_headers.setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7')
+    if 'http-referer' in {k.lower() for k in fwd_headers} and not any(k.lower() == 'referer' for k in fwd_headers):
+        for k, v in list(fwd_headers.items()):
+            if k.lower() == 'http-referer':
+                fwd_headers['Referer'] = v
+                break
     body = request.get_data()
     if len(body) > MAX_BODY_SIZE:
         return Response('{"error":"Request body too large."}', 413, content_type='application/json')
@@ -441,13 +477,15 @@ if __name__ == '__main__':
     print('║                                                                  ║')
     print('║  Storage-API  (nur localhost):                                   ║')
     print('║    GET/PUT  /store/                Account registry              ║')
-    print('║    GET      /store/<id>            Keys auflisten                ║')
-    print('║    GET/PUT/DELETE /store/<id>/<k>  Datei lesen/write         ║')
+    print('║    GET      /store/<id>            Keys list                     ║')
+    print('║    GET/PUT/DELETE /store/<id>/<k>  Data read/write               ║')
     print('║                                                                  ║')
     print('║  Proxy-Allowlist:                                                ║')
     print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com       ║')
     print('║    openrouter.ai · api.mistral.ai · googleapis.com               ║')
     print('║    api.x.ai · api.groq.com · api.deepseek.com                    ║')
+    print('║  Search: brave · duckduckgo (lite) · google · bing               ║')
+    print('║          mojeek · yandex · searxng (public instances)            ║')
     print('║                                                                  ║')
     print('║  Stop: Ctrl+C                                                    ║')
     print('╚══════════════════════════════════════════════════════════════════╝')
@@ -455,4 +493,3 @@ if __name__ == '__main__':
 
     serve(app, host='127.0.0.1', port=5000, threads=8,
           channel_timeout=120, cleanup_interval=10)
-

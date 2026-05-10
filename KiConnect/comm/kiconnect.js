@@ -4,7 +4,7 @@
 // ================================================================
 
 // ── Theme ─────────────────────────────────────────────────────────
-const THEMES = ['dark', 'oled', 'white', 'gold'];
+const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
 function applyTheme(name) {
   if (!THEMES.includes(name)) name = 'dark';
@@ -66,6 +66,7 @@ function setLang(code) {
   currentLang = code;
   localStorage.setItem('kic_lang', code);
   applyTranslations();
+  if (typeof updateProfileBadge === 'function') updateProfileBadge();
   retranslateBubbleButtons();
   retranslateSuggestionChips();
   if (typeof updateThinkingIntensityUI === 'function') updateThinkingIntensityUI();
@@ -76,6 +77,7 @@ function setLang(code) {
   }
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   if (typeof window._kicVoiceRetranslate === 'function') window._kicVoiceRetranslate();
+  if (typeof renderSidebar === 'function') renderSidebar();
   renderLangDropdown();
   closeLangDropdown();
 }
@@ -310,11 +312,15 @@ function getModelMaxOutput(modelId) {
 }
 
 // ── STATE ─────────────────────────────────────────────────────────
-let config = {
+const DEFAULT_CONFIG = {
   model: '', temperature: 0.7, maxTokens: null, systemPrompt: '',
   activeProfileId: null, userModelMaxOverrides: {}, chatMaxWidth: 880,
   thinkingEnabled: false, thinkingIntensity: 2, thinkingBudget: 8000,
+  webSearchMode: 'manual', webSearchEngine: 'free', webSearchApiKey: '', webSearchResultCount: 8,
+  webSearchEnabled: false,
 };
+function freshConfig() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
+let config = freshConfig();
 let providers = [];
 let profiles  = [];
 let folders   = [];
@@ -330,6 +336,8 @@ let editingProviderId = null;
 let draggedChatId   = null;
 let draggedFolderId = null;   // NEW: folder drag state
 let sidebarCollapsed = false;
+let webSearchCache = new Map();
+const WEB_SEARCH_RESULT_MAX = 30;
 // Multi-select state
 let _selectedChatIds = new Set();
 let _multiSelectMode = false;
@@ -767,7 +775,10 @@ async function load() {
     if (dec !== null) return dec;
     try { return JSON.parse(raw); } catch { return fallback; }
   }
-  try { config = {...config, ...await loadKey('config', {})}; } catch{}
+  try { config = {...freshConfig(), ...config, ...await loadKey('config', {})}; } catch{}
+  if (!['manual','auto','always','off'].includes(config.webSearchMode)) config.webSearchMode = 'manual';
+  if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex'].includes(config.webSearchEngine)) config.webSearchEngine = 'free';
+  config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
   try {
     const rawProviders = await loadKey('providers', []);
     providers = await Promise.all(rawProviders.map(decryptProvider));
@@ -876,6 +887,11 @@ const USE_PROXY = (window.location.hostname === 'localhost' || window.location.h
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
   'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com',
+  'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
+  'api.qwant.com','search.yahoo.com','www.startpage.com',
+  'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',
+  'searx.be','searxng.world','search.bus-hit.me','searx.tiekoetter.com',
+  'search.sapti.me','searx.prvcy.eu','searx.fmac.xyz','search.ononoki.org',
 ];
 function isSafeApiUrl(url) {
   try {
@@ -885,6 +901,11 @@ function isSafeApiUrl(url) {
 }
 function proxyUrl(url) {
   if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
+  return USE_PROXY ? '/proxy/' + url : url;
+}
+function proxyPublicUrl(url) {
+  const u = new URL(url);
+  if (!/^https?:$/i.test(u.protocol)) throw new Error(t('js.apiDomainBlocked') || 'URL not allowed.');
   return USE_PROXY ? '/proxy/' + url : url;
 }
 
@@ -925,8 +946,8 @@ function openProviderPanel() {
   renderProviderList();
   document.getElementById('providerPanel').classList.add('open');
   document.getElementById('overlay').classList.add('show');
+  document.querySelector('[data-panel="providerPanel"]')?.classList.add('active');
 }
-
 function renderProviderList() {
   const list = document.getElementById('providerList');
   list.innerHTML = '';
@@ -1039,7 +1060,6 @@ function applyProfile(p) {
   config.activeProfileId = p.id;
   config.systemPrompt  = p.systemPrompt ?? '';
   config.temperature   = p.temperature  ?? 0.7;
-  if (p.model) config.model = p.model;
   syncSettingsPanel(); updateProfileBadge();
   const sel = document.getElementById('modelSelector');
   if (sel && config.model) {
@@ -1051,12 +1071,33 @@ function applyProfile(p) {
 }
 function updateProfileBadge() {
   const p = activeProfile();
+  // Update legacy badge name (hidden via CSS but keep for safety)
   const nameEl = document.getElementById('profileBadgeName');
   if (nameEl) {
     if (p) { nameEl.textContent = p.name; nameEl.removeAttribute('data-i18n'); }
     else   { nameEl.textContent = t('header.noProfile'); nameEl.setAttribute('data-i18n','header.noProfile'); }
   }
-  document.getElementById('profileBadgeDot').style.background = p ? p.color : 'var(--muted)';
+  // Update profile color dot in toolbar button
+  const dot = document.getElementById('profileBadgeDot');
+  if (dot) {
+    const col = p ? p.color : 'var(--muted)';
+    dot.style.background = col;
+    dot.style.boxShadow = p ? `0 0 6px ${col}` : 'none';
+  }
+  // Update Profil button label to show active profile name
+  const profileBtn = document.getElementById('openProfileHeaderBtn');
+  if (profileBtn) {
+    const lbl = profileBtn.querySelector('.ptb-label');
+    if (lbl) {
+      if (p) {
+        lbl.textContent = p.name;
+        lbl.removeAttribute('data-i18n');
+      } else {
+        lbl.textContent = t('toolbar.profiles');
+        lbl.setAttribute('data-i18n', 'toolbar.profiles');
+      }
+    }
+  }
 }
 
 function renderProfileList() {
@@ -1082,7 +1123,7 @@ function renderProfileList() {
     nameEl.className = 'profile-item-name'; nameEl.textContent = p.name;
     const descEl = document.createElement('div');
     descEl.className = 'profile-item-desc';
-    descEl.textContent = (p.model ? p.model.split('/').pop().slice(0,24) : t('js.globalModel')) + ' · Temp ' + (p.temperature ?? 0.7);
+    descEl.textContent = 'Temp ' + (p.temperature ?? 0.7);
     info.appendChild(nameEl); info.appendChild(descEl);
     const actions = document.createElement('div');
     actions.className = 'profile-item-actions';
@@ -1111,7 +1152,6 @@ function startNewProfile() {
   document.getElementById('peUseModelMax').checked = true;
   document.getElementById('profileEditorTitle').textContent = t('profile.new');
   renderColorRow(PROFILE_COLORS[profiles.length % PROFILE_COLORS.length]);
-  syncPeModelSelect('');
   document.getElementById('profileEditor').style.display = 'block';
 }
 function editProfile(id) {
@@ -1124,8 +1164,7 @@ function editProfile(id) {
   document.getElementById('peUseModelMax').checked = p.useModelMax !== false;
   document.getElementById('profileEditorTitle').textContent = t('profile.edit');
   renderColorRow(p.color);
-  syncPeModelSelect(p.model||'');
-  const { modelId } = splitModelId(p.model || config.model);
+  const { modelId } = splitModelId(config.model);
   const modelMax = getModelMaxOutput(modelId);
   const slider = document.getElementById('peMaxTokensSlider');
   const storedVal = p.maxTokens || modelMax;
@@ -1133,16 +1172,8 @@ function editProfile(id) {
   document.getElementById('peMaxTokensNum').textContent = parseInt(slider.value).toLocaleString();
   document.getElementById('profileEditor').style.display = 'block';
 }
-function syncPeModelSelect(selected) {
-  const src = document.getElementById('modelSelector');
-  const dst = document.getElementById('peModelInput');
-  dst.innerHTML = `<option value="">${escHtml(t('js.globalModelOpt'))}</option>` +
-    Array.from(src.querySelectorAll('optgroup, option')).map(el=>el.outerHTML).join('');
-  dst.value = selected || '';
-  updatePeMaxTokensUI();
-}
 function updatePeMaxTokensUI() {
-  const fullId = document.getElementById('peModelInput').value || config.model;
+  const fullId = config.model;
   const { modelId } = splitModelId(fullId);
   const max = getModelMaxOutput(modelId);
   const useMax = document.getElementById('peUseModelMax').checked;
@@ -1180,7 +1211,7 @@ function saveProfileEditor() {
   const sliderVal = parseInt(document.getElementById('peMaxTokensSlider').value);
   const useModelMax = document.getElementById('peUseModelMax').checked;
   const data = {
-    name, model: document.getElementById('peModelInput').value, color: getSelectedColor(),
+    name, color: getSelectedColor(),
     systemPrompt: document.getElementById('peSysPrompt').value,
     temperature: parseFloat(document.getElementById('peTemp').value),
     useModelMax, maxTokens: useModelMax ? null : sliderVal,
@@ -1215,6 +1246,19 @@ function syncSettingsPanel() {
   if (label)  label.textContent = w + 'px';
   const imgSizeEl = document.getElementById('maxImgSizeInput');
   if (imgSizeEl) imgSizeEl.value = Math.round(getMaxImageStorageBytes() / 1024);
+  const webModeEl = document.getElementById('webSearchMode');
+  const webEngineEl = document.getElementById('webSearchEngine');
+  const webKeyEl = document.getElementById('webSearchApiKey');
+  const webKeyGroup = document.getElementById('webSearchApiKeyGroup');
+  const webCountEl = document.getElementById('webSearchCount');
+  const webCountVal = document.getElementById('webSearchCountVal');
+  if (webModeEl) webModeEl.value = config.webSearchMode || 'manual';
+  if (webEngineEl) webEngineEl.value = config.webSearchEngine || 'free';
+  if (webKeyEl) webKeyEl.value = config.webSearchApiKey || '';
+  updateWebSearchKeyUI(config.webSearchEngine || 'free');
+  if (webCountEl) webCountEl.value = config.webSearchResultCount || 8;
+  if (webCountVal) webCountVal.textContent = config.webSearchResultCount || 8;
+  updateWebSearchButton();
   // Populate account name field
   const accNameInput = document.getElementById('accountNameInput');
   if (accNameInput && _activeAccountId) {
@@ -1230,13 +1274,23 @@ function saveSettings() {
   const sel = document.getElementById('modelInput').value;
   if (sel) config.model = sel;
   const p = activeProfile();
-  if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; if(sel) p.model=sel; }
+  if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; }
   // Save image size limit
   const imgSizeEl = document.getElementById('maxImgSizeInput');
   if (imgSizeEl) {
     const kb = parseInt(imgSizeEl.value);
     if (kb >= 100) setMaxImageStorageBytes(kb * 1024);
   }
+  const webModeEl = document.getElementById('webSearchMode');
+  const webEngineEl = document.getElementById('webSearchEngine');
+  const webKeyEl = document.getElementById('webSearchApiKey');
+  const webCountEl = document.getElementById('webSearchCount');
+  if (webModeEl) config.webSearchMode = webModeEl.value || 'manual';
+  if (webEngineEl) config.webSearchEngine = webEngineEl.value || 'free';
+  if (webKeyEl) config.webSearchApiKey = webKeyEl.value.trim();
+  if (webCountEl) config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(webCountEl.value) || 8));
+  if (config.webSearchMode === 'off') config.webSearchEnabled = false;
+  updateWebSearchButton();
   save(); fetchModels(); closePanels(); toast(t('js.settingsSaved'));
 }
 function applyChatWidth(val) {
@@ -1415,7 +1469,6 @@ async function fetchModels() {
   sel.onchange = () => {
     config.model = sel.value;
     document.getElementById('modelInput').value = config.model;
-    const p = activeProfile(); if(p) p.model = config.model;
     updateModelMaxInfo(); updateThinkingUI(); save(); renderAttachments();
     if (window.syncCustomDropdown) syncCustomDropdown();
   };
@@ -1501,19 +1554,16 @@ function toggleThinking() {
   save();
   toast(config.thinkingEnabled ? t('js.thinkingEnabled') : t('js.thinkingDisabled'));
 }
-function syncAllModelSelects() {
-  const src = document.getElementById('modelSelector');
-  const dst = document.getElementById('peModelInput');
-  if (!dst) return;
-  dst.innerHTML = `<option value="">${escHtml(t('js.globalModelOpt'))}</option>` +
-    Array.from(src.querySelectorAll('optgroup, option')).map(el=>el.outerHTML).join('');
-  dst.value = '';
-}
+function syncAllModelSelects() {}
 function setStatus(c) {
   const d = document.getElementById('statusDot');
+  if (!d) return;
   const colors = { green:'var(--green)', red:'var(--red)', yellow:'#f0c040', grey:'var(--muted)' };
   const col = colors[c] || colors.grey;
-  d.style.background = col; d.style.boxShadow = `0 0 8px ${col}`;
+  d.style.background = col;
+  d.style.boxShadow = `0 0 8px ${col}`;
+  // pulse only while pending/streaming (yellow)
+  d.style.animation = (c === 'yellow') ? 'pulse 1s infinite' : 'pulse 2s infinite';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1802,11 +1852,14 @@ function renderSidebar() {
         const msBtn = document.createElement('button');
         msBtn.className = 'sidebar-action-btn';
         msBtn.id = 'multiSelectEnterBtn';
-        msBtn.title = t('js.multiSelect') || 'Multi Select';
-        msBtn.textContent = '☐';
         msBtn.addEventListener('click', enterMultiSelectMode);
         actionsEl.appendChild(msBtn);
-      }
+	}
+      const existingMsBtn = document.getElementById('multiSelectEnterBtn');
+      if (existingMsBtn) {
+        existingMsBtn.title = t('js.multiSelect') || 'Multi Select';
+        existingMsBtn.textContent = '☐';
+	}
     }
   }
 
@@ -1814,11 +1867,11 @@ function renderSidebar() {
   const targetFolderId = getSidebarTargetFolderId();
   const newChatBtn = document.getElementById('newChatBtn');
   if (newChatBtn) {
-    newChatBtn.classList.toggle('primary', targetFolderId !== undefined);
+    newChatBtn.classList.remove('primary');
     const targetName = targetFolderId === null
       ? (t('js.noFolder') || 'No folder')
       : (folders.find(f=>f.id===targetFolderId)?.name || '');
-    newChatBtn.title = targetName ? `New chat in ${targetName}` : '';
+    newChatBtn.title = targetName ? tf('js.newChatIn', { name: targetName }) : '';
   }
 
   folders.forEach(f => {
@@ -2118,6 +2171,7 @@ function buildMsgEl(msg, idx) {
     contentHtml = formatText(msg.content);
   } else if (Array.isArray(msg.content)) {
     msg.content.forEach(part => {
+      if (part._webSearch) return;
       if (part.type === 'text') {
         // Skip file-content blocks (they start with the file marker)
         const isFContent = part.text && part.text.startsWith('--- ');
@@ -2151,6 +2205,22 @@ function buildMsgEl(msg, idx) {
       chipWrap.appendChild(chip);
     });
     bubble.appendChild(chipWrap);
+  }
+
+  if (msg._webSources && msg._webSources.length) {
+    const sourceWrap = document.createElement('div');
+    sourceWrap.className = 'web-sources';
+    msg._webSources.slice(0, WEB_SEARCH_RESULT_MAX).forEach(src => {
+      const a = document.createElement('a');
+      a.className = 'web-source-chip';
+      a.href = src.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.title = src.snippet ? `${src.url}\n\n${src.snippet}` : src.url;
+      a.textContent = `[${src.index}] ${src.title || src.url}`;
+      sourceWrap.appendChild(a);
+    });
+    bubble.appendChild(sourceWrap);
   }
 
   if (!contentHtml && bubble.children.length === 0)
@@ -2543,6 +2613,7 @@ function _toAnthropicContent(content) {
     if (p.type === 'pdf_base64') return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.data } };
     // pdf_text: text-mode PDF stored structurally — expand to labelled text block for the API
     if (p.type === 'pdf_text') return { type: 'text', text: `${tf('js.fileContent',{name:p.name})}\n${p.text}\n${t('js.fileEnd')}` };
+    if (p.type === 'text') return { type: 'text', text: p.text || '' };
     return p;
   });
 }
@@ -2558,6 +2629,8 @@ function _toOpenAIContent(content) {
       return { type: 'text', text: `${tf('js.fileContent',{name:p.name})}\n${p.text}\n${t('js.fileEnd')}` };
     if (p.type === 'pdf_base64')
       return { type: 'text', text: `[PDF: ${p.name}]` }; // b64 not supported in OpenAI text mode
+    if (p.type === 'text')
+      return { type: 'text', text: p.text || '' };
     return p;
   });
 }
@@ -2900,6 +2973,571 @@ function setSendMode(mode) {
   document.getElementById('stopIcon').style.display  = mode==='stop' ? '' : 'none';
 }
 
+function updateWebSearchButton(searching=false) {
+  const btn = document.getElementById('webSearchBtn');
+  if (!btn) return;
+  const mode = config.webSearchMode || 'manual';
+  const active = mode === 'always' || config.webSearchEnabled;
+  btn.classList.toggle('active', active && mode !== 'off');
+  btn.classList.toggle('searching', searching);
+  btn.disabled = mode === 'off' || searching;
+  btn.textContent = searching ? '...' : 'Web';
+}
+
+function toggleWebSearch() {
+  if ((config.webSearchMode || 'manual') === 'off') {
+    toast(t('web.offToast'));
+    return;
+  }
+  config.webSearchEnabled = !config.webSearchEnabled;
+  updateWebSearchButton();
+  save();
+  toast(config.webSearchEnabled ? t('web.enabledToast') : t('web.disabledToast'));
+}
+
+function shouldAutoWebSearch(text) {
+  const s = (text || '').toLowerCase();
+  if (!s.trim()) return false;
+  if (extractHttpUrls(text).length) return true;
+  if (/\b(zusammenfassung|zusammenfassen|quelle|quellen|summarize|summary|source|sources)\b/.test(s)) return true;
+  if (/^(mach mir eine zusammenfassung|fass .* zusammen|finde|pruefe|prüfe|look up|check)\b/.test(s)) return true;
+  return /\b(heute|gestern|morgen|aktuell|aktuelle|aktueller|news|neueste|letzte|letzten|wetter|kurs|preis|preise|kosten|kostet|teuer|günstig|guenstig|stand|release|version|öffnungszeit|oeffnungszeit|verfügbar|verfuegbar|202[4-9]|203\d)\b/.test(s)
+    || /\b(today|yesterday|tomorrow|current|latest|recent|news|weather|price|prices|cost|costs|cheap|available|availability|opening hours|stock|release|version|202[4-9]|203\d)\b/.test(s)
+    || /\b(vps|server|tarif|tarife|angebot|angebote|deal|deals|provider|hosting|domain|cloud)\b/.test(s)
+    || /^(was kostet|wie teuer|wie viel kostet|welcher preis|wann ist|wo finde|wer ist aktuell)\b/.test(s)
+    || /^(how much|what does .* cost|what is the current|when is|where can i find|who is currently)\b/.test(s)
+    || /^(suche|recherchiere|search|research)\b/.test(s);
+}
+
+function shouldUseWebSearch(text) {
+  const mode = config.webSearchMode || 'manual';
+  if (mode === 'off') return false;
+  if (mode === 'always') return true;
+  if (config.webSearchEnabled) return true;
+  return mode === 'auto' && shouldAutoWebSearch(text);
+}
+
+function cleanSearchQuery(text) {
+  return (text || '')
+    .replace(/^(suche|recherchiere|search|research)\s+(nach|zu|for|about)?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+const ENGINES_NEEDING_KEY = new Set(['brave','google','bing','mojeek','yandex']);
+function webEngineNeedsKey(engine) { return ENGINES_NEEDING_KEY.has(engine); }
+
+function updateWebSearchKeyUI(engine) {
+  const group  = document.getElementById('webSearchApiKeyGroup');
+  const label  = document.getElementById('webSearchApiKeyLabel');
+  const hint   = document.getElementById('webSearchApiKeyHint');
+  const input  = document.getElementById('webSearchApiKey');
+  if (!group) return;
+  const noKey = !webEngineNeedsKey(engine) && engine !== 'searxng';
+  group.style.display = noKey ? 'none' : 'block';
+  const info = {
+    brave:   { label: t('web.braveKey'),   hint: t('web.hintBrave'),   ph: 'BSA...' },
+    google:  { label: t('web.googleKey'),  hint: t('web.hintGoogle'),  ph: 'AIza...::cx_...' },
+    bing:    { label: t('web.bingKey'),    hint: t('web.hintBing'),    ph: 'Azure Cognitive Services key' },
+    mojeek:  { label: t('web.mojeekKey'),  hint: t('web.hintMojeek'),  ph: 'Mojeek API key' },
+    yandex:  { label: t('web.yandexKey'),  hint: t('web.hintYandex'),  ph: 'folderId::apiKey' },
+    searxng: { label: t('web.searxngKey'), hint: t('web.hintSearxng'), ph: 'https://searx.be' },
+  };
+  const i = info[engine] || info.brave;
+  if (label) label.textContent = i.label;
+  if (hint)  hint.textContent  = i.hint;
+  if (input) input.placeholder = i.ph;
+}
+
+const SEARXNG_PUBLIC_INSTANCES = [
+  'https://searx.be','https://searxng.world','https://search.bus-hit.me',
+  'https://searx.tiekoetter.com','https://search.sapti.me',
+  'https://searx.prvcy.eu','https://searx.fmac.xyz','https://search.ononoki.org',
+];
+
+const WEB_SEARCH_LOCALES = {
+  en: { ddg:'us-en', searx:'en-US', qwant:'en_US', startpage:'english', bing:'en-US', braveCountry:'US', braveLang:'en', googleLr:'lang_en', yandex:'en' },
+  de: { ddg:'de-de', searx:'de-DE', qwant:'de_DE', startpage:'deutsch', bing:'de-DE', braveCountry:'DE', braveLang:'de', googleLr:'lang_de', yandex:'de' },
+  fr: { ddg:'fr-fr', searx:'fr-FR', qwant:'fr_FR', startpage:'francais', bing:'fr-FR', braveCountry:'FR', braveLang:'fr', googleLr:'lang_fr', yandex:'fr' },
+  es: { ddg:'es-es', searx:'es-ES', qwant:'es_ES', startpage:'espanol', bing:'es-ES', braveCountry:'ES', braveLang:'es', googleLr:'lang_es', yandex:'es' },
+  it: { ddg:'it-it', searx:'it-IT', qwant:'it_IT', startpage:'italiano', bing:'it-IT', braveCountry:'IT', braveLang:'it', googleLr:'lang_it', yandex:'it' },
+  tr: { ddg:'tr-tr', searx:'tr-TR', qwant:'en_US', startpage:'turkce', bing:'tr-TR', braveCountry:'TR', braveLang:'tr', googleLr:'lang_tr', yandex:'tr' },
+  ru: { ddg:'ru-ru', searx:'ru-RU', qwant:'en_US', startpage:'russian', bing:'ru-RU', braveCountry:'RU', braveLang:'ru', googleLr:'lang_ru', yandex:'ru' },
+  el: { ddg:'gr-el', searx:'el-GR', qwant:'en_US', startpage:'greek', bing:'el-GR', braveCountry:'GR', braveLang:'el', googleLr:'lang_el', yandex:'el' },
+  zh: { ddg:'cn-zh', searx:'zh-CN', qwant:'en_US', startpage:'chinese', bing:'zh-CN', braveCountry:'CN', braveLang:'zh-hans', googleLr:'lang_zh-CN', yandex:'zh' },
+  ar: { ddg:'xa-ar', searx:'ar-SA', qwant:'en_US', startpage:'arabic', bing:'ar-SA', braveCountry:'SA', braveLang:'ar', googleLr:'lang_ar', yandex:'ar' },
+  hi: { ddg:'in-hi', searx:'hi-IN', qwant:'en_US', startpage:'hindi', bing:'hi-IN', braveCountry:'IN', braveLang:'hi', googleLr:'lang_hi', yandex:'hi' },
+  ta: { ddg:'in-ta', searx:'ta-IN', qwant:'en_US', startpage:'tamil', bing:'ta-IN', braveCountry:'IN', braveLang:'ta', googleLr:'lang_ta', yandex:'en' },
+  bn: { ddg:'in-bn', searx:'bn-IN', qwant:'en_US', startpage:'bengali', bing:'bn-IN', braveCountry:'IN', braveLang:'bn', googleLr:'lang_bn', yandex:'en' },
+  pa: { ddg:'in-pa', searx:'pa-IN', qwant:'en_US', startpage:'punjabi', bing:'pa-IN', braveCountry:'IN', braveLang:'pa', googleLr:'lang_pa', yandex:'en' },
+  ur: { ddg:'pk-ur', searx:'ur-PK', qwant:'en_US', startpage:'urdu', bing:'ur-PK', braveCountry:'PK', braveLang:'ur', googleLr:'lang_ur', yandex:'en' },
+};
+
+function getWebSearchLocale() {
+  return WEB_SEARCH_LOCALES[currentLang] || WEB_SEARCH_LOCALES.en;
+}
+
+function getAcceptLanguage() {
+  const primary = getWebSearchLocale().searx || 'en-US';
+  const short = primary.split('-')[0];
+  return `${primary},${short};q=0.9,en;q=0.7`;
+}
+
+function localizedHeaders(extra = {}) {
+  return { 'Accept-Language': getAcceptLanguage(), ...extra };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(proxyUrl(url), { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchPublicWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(proxyPublicUrl(url), { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeSearchUrl(href, base) {
+  if (!href) return '';
+  try {
+    let u = new URL(href, base);
+    let raw = u.searchParams.get('uddg') || u.searchParams.get('u') || u.searchParams.get('url');
+    if (!raw && /\/RU=/.test(u.pathname)) {
+      raw = decodeURIComponent((u.pathname.match(/\/RU=([^/]+)/) || [])[1] || '');
+    }
+    if (raw) u = new URL(raw);
+    if (!/^https?:$/i.test(u.protocol)) return '';
+    return u.href;
+  } catch {
+    return '';
+  }
+}
+
+function uniqueSearchResults(results, count) {
+  const seen = new Set();
+  return (results || []).filter(r => {
+    const url = normalizeSearchUrl(r.url);
+    if (!r.title || !url || seen.has(url)) return false;
+    seen.add(url);
+    r.url = url;
+    r.title = r.title.replace(/\s+/g, ' ').trim();
+    r.snippet = (r.snippet || '').replace(/\s+/g, ' ').trim();
+    return true;
+  }).slice(0, count).map((r, i) => ({ ...r, index: i + 1 }));
+}
+
+function parseDuckDuckGoHtml(html, count, base) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  let results = [...doc.querySelectorAll('a.result-link')].map(a => {
+    const row = a.closest('tr');
+    const snippet = row?.nextElementSibling?.querySelector('.result-snippet') ||
+                    row?.parentElement?.querySelector('.result-snippet');
+    return {
+      title: a.textContent || '',
+      url: normalizeSearchUrl(a.getAttribute('href') || a.href, base),
+      snippet: snippet?.textContent || '',
+    };
+  });
+  if (!results.length) {
+    results = [...doc.querySelectorAll('.result')].map(el => {
+      const link = el.querySelector('.result__a');
+      const snip = el.querySelector('.result__snippet');
+      return {
+        title: link?.textContent || '',
+        url: normalizeSearchUrl(link?.getAttribute('href') || link?.href || '', base),
+        snippet: snip?.textContent || '',
+      };
+    });
+  }
+  return uniqueSearchResults(results, count);
+}
+
+async function searchDuckDuckGo(q, count) {
+  const locale = getWebSearchLocale();
+  const headers = localizedHeaders({ 'Accept': 'text/html', 'HTTP-Referer': 'https://duckduckgo.com/' });
+  const urls = [
+    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}&kl=${encodeURIComponent(locale.ddg)}`,
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}&kl=${encodeURIComponent(locale.ddg)}`,
+  ];
+  for (const url of urls) {
+    const res = await fetchWithTimeout(url, { headers }, 10000);
+    if (!res.ok) throw new Error(`DuckDuckGo ${res.status}: ${await res.text()}`);
+    const results = parseDuckDuckGoHtml(await res.text(), count, url);
+    if (results.length) return results;
+  }
+  return [];
+}
+
+async function searchSearxng(q, count, instanceUrl = '') {
+  const locale = getWebSearchLocale();
+  const instances = instanceUrl ? [instanceUrl.replace(/\/$/, '')] : SEARXNG_PUBLIC_INSTANCES;
+  let lastError = null;
+  for (const instance of instances.sort(() => Math.random() - 0.5)) {
+    try {
+      for (const language of [locale.searx, 'all']) {
+        const collected = [];
+        for (let page = 1; page <= Math.ceil(count / 10) && collected.length < count; page++) {
+          const url = `${instance}/search?q=${encodeURIComponent(q)}&format=json&categories=general&pageno=${page}&language=${encodeURIComponent(language)}`;
+          const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'application/json' }) }, 10000);
+          if (!res.ok) throw new Error(`SearXNG ${res.status}: ${await res.text()}`);
+          const data = await res.json();
+          collected.push(...(data.results || []).map(r => ({
+            title: r.title || '',
+            url: r.url || '',
+            snippet: r.content || r.description || '',
+          })));
+        }
+        const results = uniqueSearchResults(collected, count);
+        if (results.length) return results;
+      }
+    } catch (e) {
+      lastError = e;
+      console.warn('[web-search] SearXNG failed:', instance, e.message || e);
+    }
+  }
+  if (lastError) throw lastError;
+  return [];
+}
+
+async function searchQwant(q, count) {
+  const locale = getWebSearchLocale();
+  const url = `https://api.qwant.com/v3/search/web?q=${encodeURIComponent(q)}&count=${count}&locale=${encodeURIComponent(locale.qwant)}&offset=0&device=desktop&safesearch=1`;
+  const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'application/json', 'HTTP-Referer': 'https://www.qwant.com/', 'Origin': 'https://www.qwant.com' }) }, 10000);
+  if (!res.ok) throw new Error(`Qwant ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const items = data?.data?.result?.items || data?.data?.items || [];
+  const flat = [];
+  const walk = value => {
+    if (!value || flat.length >= count * 3) return;
+    if (Array.isArray(value)) return value.forEach(walk);
+    if (typeof value === 'object') {
+      if ((value.url || value.link) && (value.title || value.name)) flat.push(value);
+      Object.keys(value).forEach(k => {
+        if (['items','mainline','webPages'].includes(k)) walk(value[k]);
+      });
+    }
+  };
+  walk(items);
+  return uniqueSearchResults(flat.map(r => ({
+    title: r.title || r.name || '',
+    url: r.url || r.link || '',
+    snippet: r.desc || r.description || r.snippet || '',
+  })), count);
+}
+
+async function searchYahoo(q, count) {
+  const url = `https://search.yahoo.com/search?p=${encodeURIComponent(q)}`;
+  const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'text/html', 'HTTP-Referer': 'https://search.yahoo.com/' }) }, 10000);
+  if (!res.ok) throw new Error(`Yahoo ${res.status}: ${await res.text()}`);
+  const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+  const results = [...doc.querySelectorAll('a')].map(a => {
+    const title = (a.querySelector('h3')?.textContent || a.textContent || '').trim();
+    return {
+      title,
+      url: normalizeSearchUrl(a.getAttribute('href') || a.href, url),
+      snippet: a.closest('div')?.querySelector('.compText, .fc-falcon, p')?.textContent || '',
+    };
+  }).filter(r => r.title.length > 8);
+  return uniqueSearchResults(results, count);
+}
+
+async function searchStartpage(q, count) {
+  const locale = getWebSearchLocale();
+  const url = `https://www.startpage.com/sp/search?query=${encodeURIComponent(q)}&language=${encodeURIComponent(locale.startpage)}`;
+  const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'text/html', 'HTTP-Referer': 'https://www.startpage.com/' }) }, 10000);
+  if (!res.ok) throw new Error(`Startpage ${res.status}: ${await res.text()}`);
+  const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+  const results = [...doc.querySelectorAll('a[href]')].map(a => ({
+    title: a.textContent || '',
+    url: normalizeSearchUrl(a.getAttribute('href') || a.href, url),
+    snippet: a.closest('article, .w-gl__result, .result')?.textContent || '',
+  })).filter(r => r.title.trim().length > 12);
+  return uniqueSearchResults(results, count);
+}
+
+async function searchFreeFallback(q, count) {
+  const engines = [
+    ['DuckDuckGo', () => searchDuckDuckGo(q, count)],
+    ['Startpage', () => searchStartpage(q, count)],
+    ['SearXNG', () => searchSearxng(q, count)],
+  ];
+  const errors = [];
+  const combined = [];
+  for (const [name, run] of engines) {
+    try {
+      const results = await run();
+      combined.push(...results);
+      const unique = uniqueSearchResults(combined, count);
+      if (unique.length >= count) return unique;
+    } catch (e) {
+      errors.push(`${name}: ${e.message || e}`);
+      console.warn('[web-search] free engine failed:', name, e.message || e);
+    }
+  }
+  const unique = uniqueSearchResults(combined, count);
+  if (unique.length) return unique;
+  if (errors.length) throw new Error(errors.join(' | '));
+  return [];
+}
+
+async function fillWithFreeFallback(q, count, initialResults, excludedEngine = '') {
+  let combined = [...(initialResults || [])];
+  if (uniqueSearchResults(combined, count).length >= count) return uniqueSearchResults(combined, count);
+  const engines = [
+    ['duckduckgo', () => searchDuckDuckGo(q, count)],
+    ['startpage', () => searchStartpage(q, count)],
+    ['searxng', () => searchSearxng(q, count)],
+  ].filter(([name]) => name !== excludedEngine);
+  for (const [, run] of engines) {
+    try {
+      combined.push(...await run());
+      const unique = uniqueSearchResults(combined, count);
+      if (unique.length >= count) return unique;
+    } catch (e) {
+      console.warn('[web-search] fill fallback failed:', e.message || e);
+    }
+  }
+  return uniqueSearchResults(combined, count);
+}
+
+async function performWebSearch(query) {
+  const engine = config.webSearchEngine || 'free';
+  const key = (config.webSearchApiKey || '').trim();
+  if (webEngineNeedsKey(engine) && !key) {
+    openSettings();
+    throw new Error(t('web.noKey'));
+  }
+  const locale = getWebSearchLocale();
+  const count = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
+  const q = cleanSearchQuery(query);
+  if (!q) return null;
+  const cacheKey = `${engine}:${count}:${q.toLowerCase()}`;
+  const cached = webSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < 30 * 60 * 1000) return cached.value;
+
+  updateWebSearchButton(true);
+  let results = [];
+
+  if (engine === 'brave') {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=${count}&text_decorations=false&safesearch=moderate&country=${encodeURIComponent(locale.braveCountry)}&search_lang=${encodeURIComponent(locale.braveLang)}&ui_lang=${encodeURIComponent(locale.searx)}`;
+    const res = await fetch(proxyUrl(url), {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': key },
+    });
+    if (!res.ok) throw new Error(`Brave Search ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    results = (data.web?.results || []).slice(0, count).map((r, i) => ({
+      index: i + 1,
+      title: (r.title || r.url || '').replace(/\s+/g, ' ').trim(),
+      url: r.url || '',
+      snippet: (r.description || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && r.url);
+
+  } else if (engine === 'google') {
+    const [gkey, cx] = key.split('::');
+    if (!gkey || !cx) throw new Error(t('web.googleKeyFormat'));
+    const googleItems = [];
+    for (let start = 1; start <= count && googleItems.length < count; start += 10) {
+      const googleCount = Math.min(10, count - googleItems.length);
+      const url = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(gkey.trim())}&cx=${encodeURIComponent(cx.trim())}&q=${encodeURIComponent(q)}&num=${googleCount}&start=${start}&lr=${encodeURIComponent(locale.googleLr)}`;
+      const res = await fetch(proxyUrl(url));
+      if (!res.ok) throw new Error(`Google ${res.status}: ${await res.text()}`);
+      const data = await res.json();
+      googleItems.push(...(data.items || []));
+      if (!data.items?.length) break;
+    }
+    results = googleItems.slice(0, count).map((r, i) => ({
+      index: i + 1,
+      title: (r.title || '').replace(/\s+/g, ' ').trim(),
+      url: r.link || '',
+      snippet: (r.snippet || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && r.url);
+
+  } else if (engine === 'bing') {
+    const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&count=${count}&mkt=${encodeURIComponent(locale.bing)}&safeSearch=Moderate`;
+    const res = await fetch(proxyUrl(url), {
+      headers: { 'Ocp-Apim-Subscription-Key': key, 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Bing ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    results = (data.webPages?.value || []).slice(0, count).map((r, i) => ({
+      index: i + 1,
+      title: (r.name || '').replace(/\s+/g, ' ').trim(),
+      url: r.url || '',
+      snippet: (r.snippet || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && r.url);
+
+  } else if (engine === 'mojeek') {
+    const url = `https://api.mojeek.com/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(q)}&t=${count}&fmt=json`;
+    const res = await fetch(proxyUrl(url), { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(`Mojeek ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    results = (data.results || []).slice(0, count).map((r, i) => ({
+      index: i + 1,
+      title: (r.title || '').replace(/\s+/g, ' ').trim(),
+      url: r.url || '',
+      snippet: (r.desc || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && r.url);
+
+  } else if (engine === 'yandex') {
+    const parts = key.split('::');
+    const folderId = parts[0]?.trim();
+    const ykey = parts[1]?.trim();
+    if (!folderId || !ykey) throw new Error(t('web.yandexKeyFormat'));
+    const url = `https://yandex.com/search/xml?folderid=${encodeURIComponent(folderId)}&apikey=${encodeURIComponent(ykey)}&query=${encodeURIComponent(q)}&results=${count}&lang=${encodeURIComponent(locale.yandex)}`;
+    const res = await fetch(proxyUrl(url), { headers: { 'Accept': 'application/xml' } });
+    if (!res.ok) throw new Error(`Yandex ${res.status}: ${await res.text()}`);
+    const xml = await res.text();
+    const xmlDoc = new DOMParser().parseFromString(xml, 'text/xml');
+    results = [...xmlDoc.querySelectorAll('doc')].slice(0, count).map((d, i) => ({
+      index: i + 1,
+      title: (d.querySelector('title')?.textContent || '').replace(/\s+/g, ' ').trim(),
+      url: (d.querySelector('url')?.textContent || '').trim(),
+      snippet: (d.querySelector('headline, passage')?.textContent || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && /^https?:\/\//i.test(r.url));
+
+  } else if (engine === 'qwant') {
+    try {
+      results = await searchQwant(q, count);
+    } catch (e) {
+      console.warn('[web-search] Qwant failed, falling back:', e.message || e);
+      results = await searchFreeFallback(q, count);
+    }
+
+  } else if (engine === 'yahoo') {
+    try {
+      results = await searchYahoo(q, count);
+    } catch (e) {
+      console.warn('[web-search] Yahoo failed, falling back:', e.message || e);
+      results = await searchFreeFallback(q, count);
+    }
+
+  } else if (engine === 'startpage') {
+    results = await searchStartpage(q, count);
+
+  } else if (engine === 'searxng') {
+    results = await searchSearxng(q, count, (key && /^https?:\/\//i.test(key)) ? key : '');
+
+  } else if (engine === 'duckduckgo') {
+    results = await searchDuckDuckGo(q, count);
+
+  } else {
+    results = await searchFreeFallback(q, count);
+  }
+
+  if (!results.length && ['searxng','qwant','yahoo'].includes(engine)) {
+    console.warn('[web-search] selected engine returned no results, trying free fallback:', engine);
+    results = await searchFreeFallback(q, count);
+  }
+  if (results.length < count && ['free','duckduckgo','startpage','searxng','qwant','yahoo'].includes(engine)) {
+    results = await fillWithFreeFallback(q, count, results, engine === 'free' ? '' : engine);
+  }
+
+  const value = { query: q, results };
+  webSearchCache.set(cacheKey, { time: Date.now(), value });
+  return value;
+}
+
+function formatWebSearchBlock(search) {
+  if (!search?.results?.length) return '';
+  const lines = [
+    `[Web search results for: "${search.query}"]`,
+    t('web.modelInstruction'),
+    '',
+  ];
+  search.results.forEach(r => {
+    lines.push(`[${r.index}] ${r.title}`);
+    lines.push(`URL: ${r.url}`);
+    if (r.snippet) lines.push(`Snippet: ${r.snippet}`);
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+function buildWebAugmentedContent(originalContent, search) {
+  const block = formatWebSearchBlock(search);
+  if (!block) return originalContent;
+  const webPart = { type: 'text', text: `${block}\n\n---\n\nUser question:`, _webSearch: true };
+  if (Array.isArray(originalContent)) return [webPart, ...originalContent];
+  return [webPart, { type: 'text', text: originalContent || '' }];
+}
+
+function extractHttpUrls(text) {
+  const matches = (text || '').match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
+  return [...new Set(matches.map(u => u.replace(/[.,;:!?]+$/g, '')))].slice(0, 3);
+}
+
+function readablePageText(doc) {
+  doc.querySelectorAll('script,style,noscript,svg,nav,footer,header,form,aside').forEach(el => el.remove());
+  const main = doc.querySelector('main, article, [role="main"]') || doc.body || doc;
+  return (main.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+async function fetchLinkedPage(url) {
+  const res = await fetchPublicWithTimeout(url, {
+    headers: localizedHeaders({ 'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5' }),
+  }, 12000);
+  if (!res.ok) throw new Error(`${new URL(url).hostname} ${res.status}`);
+  const len = parseInt(res.headers.get('content-length') || '0');
+  if (len > 2 * 1024 * 1024) throw new Error(`${new URL(url).hostname} response too large`);
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const raw = await res.text();
+  let title = url, text = raw;
+  if (contentType.includes('html') || /^\s*<!doctype html|<html[\s>]/i.test(raw)) {
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    title = doc.querySelector('meta[property="og:title"]')?.content || doc.querySelector('title')?.textContent || url;
+    text = readablePageText(doc);
+  }
+  return { title: title.replace(/\s+/g, ' ').trim().slice(0, 240), url, text: text.slice(0, 12000) };
+}
+
+async function fetchLinkedPagesFromText(text) {
+  const pages = [];
+  for (const url of extractHttpUrls(text)) {
+    try {
+      const page = await fetchLinkedPage(url);
+      if (page.text) pages.push(page);
+    } catch (e) {
+      console.warn('[web-link] fetch failed:', url, e.message || e);
+    }
+  }
+  return pages;
+}
+
+function formatLinkedPagesBlock(pages) {
+  if (!pages?.length) return '';
+  const lines = [
+    '[Linked page content]',
+    'The user included URL(s). Use the fetched page text as external context. Cite linked pages with [L1], [L2], etc. when relevant, and say when the fetched text is insufficient.',
+    '',
+  ];
+  pages.forEach((p, i) => {
+    lines.push(`[L${i + 1}] ${p.title || p.url}`);
+    lines.push(`URL: ${p.url}`);
+    lines.push(`Content excerpt: ${p.text}`);
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+function buildLinkedPageAugmentedContent(originalContent, pages) {
+  const block = formatLinkedPagesBlock(pages);
+  if (!block) return originalContent;
+  const linkPart = { type: 'text', text: `${block}\n\n---\n\nUser question:`, _webSearch: true };
+  if (Array.isArray(originalContent)) return [linkPart, ...originalContent];
+  return [linkPart, { type: 'text', text: originalContent || '' }];
+}
+
 async function sendMessage() {
   if(isStreaming) return;
   const input=document.getElementById('messageInput');
@@ -2909,6 +3547,11 @@ async function sendMessage() {
   const provider=providerForModel(config.model)||providers[0];
   if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
   if(!provider.apiKey){toast(t('js.noApiKey'));openProviderPanel();return;}
+  if (shouldUseWebSearch(text) && webEngineNeedsKey(config.webSearchEngine || 'free') && !(config.webSearchApiKey || '').trim()) {
+    toast(t('web.noKey'));
+    openSettings();
+    return;
+  }
   const att=[...attachments];
   input.value=''; autoResize(input); clearAttachments();
   await sendMessageCore(text, att);
@@ -2921,6 +3564,8 @@ async function sendMessageCore(text, att) {
   const provider=providerForModel(config.model)||providers[0];
   const isKiConnect=provider?.type==='kiconnect-nrw'||(provider?.type==='openai-compat'&&(provider.serverUrl||'').includes('kiconnect.nrw'));
   const documentIds=[];
+  let webSearch = null;
+  let linkedPages = [];
 
   for(const a of att){
     if(a.type==='pdf-b64'&&a.pdfMode==='b64'&&isKiConnect&&a.rawBuf){
@@ -2966,13 +3611,44 @@ async function sendMessageCore(text, att) {
     if(userContent.length===0&&text) userContent=text;
   } else { userContent=text; }
 
+  linkedPages = await fetchLinkedPagesFromText(text);
+  if (linkedPages.length) {
+    userContent = buildLinkedPageAugmentedContent(userContent, linkedPages);
+  }
+
+  if (shouldUseWebSearch(text)) {
+    try {
+      toast(t('web.searching'));
+      webSearch = await performWebSearch(text);
+      if (webSearch?.results?.length) {
+        userContent = buildWebAugmentedContent(userContent, webSearch);
+        toast(tf('web.resultsFound', { n: webSearch.results.length }));
+      } else {
+        toast(t('web.noResults'));
+      }
+    } catch (err) {
+      toast(tf('web.failed', { e: err.message || err }));
+      webSearch = null;
+    } finally {
+      updateWebSearchButton(false);
+      if ((config.webSearchMode || 'manual') === 'manual') config.webSearchEnabled = false;
+      updateWebSearchButton(false);
+      save();
+    }
+  }
+
   const maxBytes=getMaxImageStorageBytes();
   // BEGIN MODIFIED — Bug 1 fix: preserve pdf_base64 blocks and store text-mode PDFs
   // as {type:'pdf_text'} with name+text, so rerun/edit can restore them language-independently.
+  const webSourceChips = [
+    ...(linkedPages || []).map((p, i) => ({ index:`L${i + 1}`, title:p.title || p.url, url:p.url, snippet:p.text?.slice(0, 280) || '' })),
+    ...(webSearch?.results || [])
+  ];
   const userMsgForStorage={
     role:'user',
     content:Array.isArray(userContent)
       ?userContent.map(p=>{
+        if(p._webSearch) return p;
         // pdf_base64: keep — _toAnthropicContent converts to {type:'document'} on send
         if(p.type==='pdf_base64') return p;
         // text-mode PDF content block: convert to structured {type:'pdf_text'} for storage
@@ -2981,7 +3657,8 @@ async function sendMessageCore(text, att) {
         return p;
       })
       :userContent,
-    _files:fileNames.length?fileNames:undefined
+    _files:fileNames.length?fileNames:undefined,
+    _webSources:webSourceChips.length?webSourceChips:undefined
   };
   // END MODIFIED
   const chat=currentChat();
@@ -2995,12 +3672,12 @@ async function sendMessageCore(text, att) {
   // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
   // BEGIN MODIFIED: also filter out pdf_text blocks (file content, shown as chips)
   const displayContent = Array.isArray(userContent)
-    ? userContent.filter(p => (p.type==='text' && !p.text?.startsWith('---')) || p.type==='image_url')
+    ? userContent.filter(p => !p._webSearch && ((p.type==='text' && !p.text?.startsWith('---')) || p.type==='image_url'))
     : userContent;
   // END MODIFIED
   // Use active-path index so data-idx matches getActivePath(chat) — needed for edit/delete/copy
   const idx=getActivePath(chat).length-1;
-  const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames},idx);
+  const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames,_webSources:webSourceChips.length?webSourceChips:undefined},idx);
   appendToMessages(msgEl);
   scrollToBottom();
 
@@ -3487,12 +4164,14 @@ function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
 function closePanels(){
-  ['settingsPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
-function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
-function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
+function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
+function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');}
+function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
 
@@ -3509,7 +4188,7 @@ async function handleDrop(e){
 }
 
 // ── Modell-Limits Panel ───────────────────────────────────────────
-function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
+function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="modelMaxPanel"]')?.classList.add('active');}
 
 function renderModelMaxList(){
   const list=document.getElementById('modelMaxList');
@@ -3865,7 +4544,7 @@ function logoutNow() {
   localStorage.removeItem('kic_active_account');
   // Reset app state
   providers = []; profiles = []; folders = []; chats = []; currentChatId = null;
-  config = { model:'', temperature:0.7, maxTokens:null, systemPrompt:'', activeProfileId:null, userModelMaxOverrides:{}, chatMaxWidth:880 };
+  config = freshConfig();
   // Hide main UI
   document.querySelector('.main')?.style.setProperty('display','none');
   document.querySelector('header')?.style.setProperty('display','none');
@@ -3970,7 +4649,7 @@ function clearAllData() {
     deleteAccount(_activeAccountId);
   }
   providers = []; profiles = []; folders = []; chats = [];
-  config = { model:'', temperature:0.7, maxTokens:null, systemPrompt:'', activeProfileId:null, userModelMaxOverrides:{}, chatMaxWidth:880 };
+  config = freshConfig();
   closePanels(); renderSidebar(); renderMessages([]); updateProfileBadge();
   toast(t('js.cleared'));
   setTimeout(() => logoutNow(), 1500);
@@ -3981,11 +4660,16 @@ function clearAllData() {
 // ═══════════════════════════════════════════════════════════════
 function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
-  document.getElementById('openProviderHeaderBtn').addEventListener('click', openProviderPanel);
-  document.getElementById('openSettingsBtn').addEventListener('click', openSettings);
-  document.getElementById('profileBadge').addEventListener('click', openProfilePanel);
+  document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
+  document.getElementById('openSettingsBtn').addEventListener('click', ()=>{closePanels();openSettings();});
+  document.getElementById('openTuningBtn').addEventListener('click', ()=>{closePanels();openTuningPanel();});
+  document.getElementById('openProfileHeaderBtn').addEventListener('click', ()=>{closePanels();openProfilePanel();});
+  document.getElementById('openModelMaxHeaderBtn').addEventListener('click', ()=>{closePanels();openModelMaxPanel();});
   document.getElementById('langToggleBtn').addEventListener('click', toggleLangDropdown);
   document.getElementById('overlay').addEventListener('click', closePanels);
+
+  // Tuning Panel
+  document.getElementById('tuningPanelClose').addEventListener('click', closePanels);
 
   // Settings Panel
   document.getElementById('settingsPanelClose').addEventListener('click', closePanels);
@@ -4007,6 +4691,16 @@ function setupEventListeners(){
   document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
   document.getElementById('temperature').addEventListener('input', e=>{document.getElementById('tempVal').textContent=e.target.value;});
   document.getElementById('chatWidthSlider').addEventListener('input', e=>applyChatWidth(e.target.value));
+  document.getElementById('webSearchCount')?.addEventListener('input', e=>{document.getElementById('webSearchCountVal').textContent=e.target.value;});
+  document.getElementById('webSearchMode')?.addEventListener('change', e=>{
+    config.webSearchMode = e.target.value || 'manual';
+    if(config.webSearchMode==='off') config.webSearchEnabled=false;
+    updateWebSearchButton();
+  });
+  document.getElementById('webSearchEngine')?.addEventListener('change', e=>{
+    config.webSearchEngine = e.target.value || 'free';
+    updateWebSearchKeyUI(config.webSearchEngine);
+  });
 
   // Thinking Toggle
   document.getElementById('thinkingToggle').addEventListener('click', toggleThinking);
@@ -4036,7 +4730,6 @@ function setupEventListeners(){
   document.getElementById('cancelProfileBtn').addEventListener('click', cancelProfileEditor);
   document.getElementById('peTemp').addEventListener('input', e=>{document.getElementById('peTempVal').textContent=e.target.value;});
   document.getElementById('peUseModelMax').addEventListener('change', updatePeMaxTokensUI);
-  document.getElementById('peModelInput').addEventListener('change', updatePeMaxTokensUI);
   document.getElementById('peMaxTokensSlider').addEventListener('input', e=>{document.getElementById('peMaxTokensNum').textContent=parseInt(e.target.value).toLocaleString();});
 
   // Model Limits Panel
@@ -4071,6 +4764,7 @@ function setupEventListeners(){
   document.getElementById('attachFileBtn').addEventListener('click',()=>document.getElementById('fileInput').click());
   document.getElementById('attachImageBtn').addEventListener('click',()=>document.getElementById('imageInput').click());
   document.getElementById('clearAttachBtn').addEventListener('click', clearAttachments);
+  document.getElementById('webSearchBtn')?.addEventListener('click', toggleWebSearch);
   document.getElementById('fileInput').addEventListener('change', handleFileAttach);
   document.getElementById('imageInput').addEventListener('change', handleImageAttach);
   // Edit-mode file inputs (hidden inputs for adding files while editing a bubble)
