@@ -119,7 +119,7 @@ const TRANSLATIONS = {
     'provider.edit': 'Edit provider',
     'provider.new': 'New provider',
     'profile.title': 'Profile',
-    'profile.desc': 'Profiles define roles or personas – e.g. "Math Professor" or "Student".<br>Each profile saves its own system prompt and temperature.',
+    'profile.desc': 'Profiles define roles or personas – e.g. "Math Professor" or "Student".<br>Each profile saves its own system prompt, temperature, and optionally a custom token limit.',
     'profile.addNew': '＋ Create new agent profile',
     'profile.name': 'Name',
     'profile.namePlaceholder': 'e.g. Math Professor, Student, Employee',
