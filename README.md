@@ -13,21 +13,35 @@ A local, secure chat client for various AI providers (OpenAI, Anthropic/Claude, 
 - 🛡️ **Brute-force protection** – Exponential lockout starting at the 5th failed attempt (30s → 60s → 120s → …), not bypassable via cache clearing
 - 🌐 **Browser-independent persistence** – Data is stored in `./datas/` on the local server; any browser (Chrome, Firefox, Edge, …) accesses the same accounts
 - 🧠 **Extended Thinking / Reasoning** for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.)
-  - Anthropic: Continuous token budget (1k–32k) + Prompt Caching (~90% fewer tokens)
+  - Anthropic Claude 4+ (Opus, Sonnet, Haiku): **Adaptive Thinking** with effort levels (low/medium/high) via new `output_config` API
+  - Anthropic Claude 3.7: Legacy token budget (1k–32k) + Prompt Caching (~90% fewer tokens)
   - OpenAI: Reasoning effort (low/medium/high)
-- 📁 **Chat organisation** with folders, drag & drop, and branches
+- 🔍 **Integrated web search** – Augments messages with live web results before sending to the AI
+  - Modes: Manual button, Auto (for current-events queries), Always, or Off
+  - Free engines (no key): DuckDuckGo, Startpage, SearXNG, Qwant, Yahoo — with automatic fallback chaining
+  - Premium engines (API key): Brave Search, Google Custom Search, Bing/Azure, Mojeek, Yandex
+  - Configurable result count (3–30), 30-minute result cache, locale-aware queries
+  - Automatic URL fetching: if the user's message contains links, page content is fetched and included as context
+- 📁 **Chat organisation** with folders, drag & drop (chats and folders), and branches
 - 🖼️ **Image & PDF support** (vision models, Ctrl+V paste, PDF text extraction)
 - 🖨️ **Print function** – Print the full chat or individual messages (including LaTeX rendering)
 - 🎙️ **Voice input & output** – Speech-to-text input and text-to-speech playback via the Web Speech API (`kiconnect-voice.js`)
+  - Dialog mode: AI reply is read aloud, then microphone activates again automatically
+  - Configurable voice, rate, pitch, and recognition language
 - 🌍 **Multilingual** – additional languages can be added in `kiconnect-languages-i18n.js`
   - Already included: EN, DE, FR, ES, IT, TR, RU, EL, ZH, AR, HI, TA, BN, PA, UR
+- 🎨 **Themes** – 12 built-in themes including OLED variants
+  - Standard: `dark`, `white`, `nord`, `dracula`, `forest`, `mocha`, `rose`, `solarized`
+  - OLED (pure black): `dark_oled`, `gold_oled`, `emerald_oled`, `red_oled`
+- ☑️ **Multi-select** – Select multiple chats in the sidebar for bulk deletion or folder moves
 - ⚡ **Streaming responses** in real time with thinking block display
-- 📊 **Token statistics** per message and total per chat
+- 📊 **Token statistics** per message and total per chat (including prompt cache hits)
 - 🧮 **LaTeX/MathJax** for mathematical formulas
 - 📝 **Markdown rendering** via marked.js (GFM-compatible)
-- 📱 **Responsive design** with adjustable chat width
+- 📱 **Responsive design** with adjustable chat width and resizable sidebar
 - 🎨 **Agent profiles** with individual system prompts, temperatures, and model limits
-- 🔄 **Folder drag & drop** for sidebar reorganisation
+- 🔄 **Folder drag & drop** for sidebar reorganisation (folders and chats)
+- 🔀 **Branching & regeneration** – Branch from any message; regenerated replies are stored as siblings with full history preserved
 
 ---
 
@@ -133,6 +147,36 @@ python kiconnect-proxy.py
 
 ---
 
+## Web Search
+
+KI Connect can augment messages with live web results before sending them to the AI. Configure web search via the **Tuning panel** (🎨 button in the toolbar).
+
+### Search Modes
+- **Manual** (default) – Click the 🔍 button next to the input field to enable search for the next message
+- **Auto** – Automatically searches for queries about current events, recent news, or time-sensitive topics
+- **Always** – Every message triggers a web search
+- **Off** – Web search disabled
+
+### Search Engines
+| Engine | Key required | Notes |
+|---|---|---|
+| Free fallback | No | Tries DuckDuckGo → Startpage → SearXNG in sequence |
+| DuckDuckGo | No | Direct scrape of lite.duckduckgo.com |
+| SearXNG | No | Rotates public instances; optionally enter a custom URL |
+| Qwant | No | |
+| Yahoo | No | |
+| Startpage | No | |
+| Brave Search | Yes | 2,000 free queries/month at search.brave.com/search/api |
+| Google Custom Search | Yes | Format: `APIKEY::CX_ID`; 100 free queries/day |
+| Bing (Azure) | Yes | 3,000 free queries/month |
+| Mojeek | Yes | |
+| Yandex | Yes | Format: `FOLDERID::APIKEY` |
+
+### URL fetching
+If the user's message contains `http://` or `https://` links, KI Connect automatically fetches those pages and includes the extracted text as additional context (up to 12,000 characters per page, max 3 URLs).
+
+---
+
 ## Multi-Account & Browser Sync
 
 KI Connect supports multiple local accounts on the same machine. All data is stored in the `./datas/` subfolder next to `kiconnect-proxy.py`:
@@ -158,9 +202,31 @@ Chrome, Firefox, and Edge on the same PC access the **same accounts and chats** 
 
 For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.):
 
-- **Anthropic**: Continuous budget (1024–32000 tokens) for Extended Thinking
+- **Anthropic Claude 4+** (Opus 4.6, Sonnet 4.6, Haiku 4.5): Adaptive thinking — three effort levels (low/medium/high) using the new `output_config.effort` API. Temperature is automatically omitted for these models.
+- **Anthropic Claude 3.7**: Legacy mode — continuous token budget (1,024–32,000 tokens)
 - **OpenAI**: Discrete levels (low/medium/high) for Reasoning Effort
 - **Display**: Collapsible "thinking process" block above the response
+
+---
+
+## Themes
+
+Select a theme via the **Tuning panel** (🎨). Themes are saved per browser session without requiring a password.
+
+| Theme | Style |
+|---|---|
+| `dark` | Default dark |
+| `white` | Light / paper |
+| `nord` | Nordic blue tones |
+| `dracula` | Purple-pink accents |
+| `forest` | Green tones |
+| `mocha` | Warm brown |
+| `rose` | Rose/pink |
+| `solarized` | Solarized palette |
+| `dark_oled` | Pure black OLED |
+| `gold_oled` | Pure black + gold OLED |
+| `emerald_oled` | Pure black + green OLED |
+| `red_oled` | Pure black + red OLED |
 
 ---
 
