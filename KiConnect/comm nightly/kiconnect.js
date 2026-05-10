@@ -4,7 +4,7 @@
 // ================================================================
 
 // ── Theme ─────────────────────────────────────────────────────────
-const THEMES = ['dark', 'oled', 'white', 'gold'];
+const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
 function applyTheme(name) {
   if (!THEMES.includes(name)) name = 'dark';
@@ -944,8 +944,8 @@ function openProviderPanel() {
   renderProviderList();
   document.getElementById('providerPanel').classList.add('open');
   document.getElementById('overlay').classList.add('show');
+  document.querySelector('[data-panel="providerPanel"]')?.classList.add('active');
 }
-
 function renderProviderList() {
   const list = document.getElementById('providerList');
   list.innerHTML = '';
@@ -1058,7 +1058,6 @@ function applyProfile(p) {
   config.activeProfileId = p.id;
   config.systemPrompt  = p.systemPrompt ?? '';
   config.temperature   = p.temperature  ?? 0.7;
-  if (p.model) config.model = p.model;
   syncSettingsPanel(); updateProfileBadge();
   const sel = document.getElementById('modelSelector');
   if (sel && config.model) {
@@ -1070,12 +1069,25 @@ function applyProfile(p) {
 }
 function updateProfileBadge() {
   const p = activeProfile();
+  // Update legacy badge name (hidden via CSS but keep for safety)
   const nameEl = document.getElementById('profileBadgeName');
   if (nameEl) {
     if (p) { nameEl.textContent = p.name; nameEl.removeAttribute('data-i18n'); }
     else   { nameEl.textContent = t('header.noProfile'); nameEl.setAttribute('data-i18n','header.noProfile'); }
   }
-  document.getElementById('profileBadgeDot').style.background = p ? p.color : 'var(--muted)';
+  // Update profile color dot in toolbar button
+  const dot = document.getElementById('profileBadgeDot');
+  if (dot) {
+    const col = p ? p.color : 'var(--muted)';
+    dot.style.background = col;
+    dot.style.boxShadow = p ? `0 0 6px ${col}` : 'none';
+  }
+  // Update Profil button label to show active profile name
+  const profileBtn = document.getElementById('openProfileHeaderBtn');
+  if (profileBtn) {
+    const lbl = profileBtn.querySelector('.ptb-label');
+    if (lbl) lbl.textContent = p ? p.name : t('toolbar.profiles');
+  }
 }
 
 function renderProfileList() {
@@ -1101,7 +1113,7 @@ function renderProfileList() {
     nameEl.className = 'profile-item-name'; nameEl.textContent = p.name;
     const descEl = document.createElement('div');
     descEl.className = 'profile-item-desc';
-    descEl.textContent = (p.model ? p.model.split('/').pop().slice(0,24) : t('js.globalModel')) + ' · Temp ' + (p.temperature ?? 0.7);
+    descEl.textContent = 'Temp ' + (p.temperature ?? 0.7);
     info.appendChild(nameEl); info.appendChild(descEl);
     const actions = document.createElement('div');
     actions.className = 'profile-item-actions';
@@ -1130,7 +1142,6 @@ function startNewProfile() {
   document.getElementById('peUseModelMax').checked = true;
   document.getElementById('profileEditorTitle').textContent = t('profile.new');
   renderColorRow(PROFILE_COLORS[profiles.length % PROFILE_COLORS.length]);
-  syncPeModelSelect('');
   document.getElementById('profileEditor').style.display = 'block';
 }
 function editProfile(id) {
@@ -1143,8 +1154,7 @@ function editProfile(id) {
   document.getElementById('peUseModelMax').checked = p.useModelMax !== false;
   document.getElementById('profileEditorTitle').textContent = t('profile.edit');
   renderColorRow(p.color);
-  syncPeModelSelect(p.model||'');
-  const { modelId } = splitModelId(p.model || config.model);
+  const { modelId } = splitModelId(config.model);
   const modelMax = getModelMaxOutput(modelId);
   const slider = document.getElementById('peMaxTokensSlider');
   const storedVal = p.maxTokens || modelMax;
@@ -1152,16 +1162,8 @@ function editProfile(id) {
   document.getElementById('peMaxTokensNum').textContent = parseInt(slider.value).toLocaleString();
   document.getElementById('profileEditor').style.display = 'block';
 }
-function syncPeModelSelect(selected) {
-  const src = document.getElementById('modelSelector');
-  const dst = document.getElementById('peModelInput');
-  dst.innerHTML = `<option value="">${escHtml(t('js.globalModelOpt'))}</option>` +
-    Array.from(src.querySelectorAll('optgroup, option')).map(el=>el.outerHTML).join('');
-  dst.value = selected || '';
-  updatePeMaxTokensUI();
-}
 function updatePeMaxTokensUI() {
-  const fullId = document.getElementById('peModelInput').value || config.model;
+  const fullId = config.model;
   const { modelId } = splitModelId(fullId);
   const max = getModelMaxOutput(modelId);
   const useMax = document.getElementById('peUseModelMax').checked;
@@ -1199,7 +1201,7 @@ function saveProfileEditor() {
   const sliderVal = parseInt(document.getElementById('peMaxTokensSlider').value);
   const useModelMax = document.getElementById('peUseModelMax').checked;
   const data = {
-    name, model: document.getElementById('peModelInput').value, color: getSelectedColor(),
+    name, color: getSelectedColor(),
     systemPrompt: document.getElementById('peSysPrompt').value,
     temperature: parseFloat(document.getElementById('peTemp').value),
     useModelMax, maxTokens: useModelMax ? null : sliderVal,
@@ -1262,7 +1264,7 @@ function saveSettings() {
   const sel = document.getElementById('modelInput').value;
   if (sel) config.model = sel;
   const p = activeProfile();
-  if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; if(sel) p.model=sel; }
+  if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; }
   // Save image size limit
   const imgSizeEl = document.getElementById('maxImgSizeInput');
   if (imgSizeEl) {
@@ -1457,7 +1459,6 @@ async function fetchModels() {
   sel.onchange = () => {
     config.model = sel.value;
     document.getElementById('modelInput').value = config.model;
-    const p = activeProfile(); if(p) p.model = config.model;
     updateModelMaxInfo(); updateThinkingUI(); save(); renderAttachments();
     if (window.syncCustomDropdown) syncCustomDropdown();
   };
@@ -1543,19 +1544,16 @@ function toggleThinking() {
   save();
   toast(config.thinkingEnabled ? t('js.thinkingEnabled') : t('js.thinkingDisabled'));
 }
-function syncAllModelSelects() {
-  const src = document.getElementById('modelSelector');
-  const dst = document.getElementById('peModelInput');
-  if (!dst) return;
-  dst.innerHTML = `<option value="">${escHtml(t('js.globalModelOpt'))}</option>` +
-    Array.from(src.querySelectorAll('optgroup, option')).map(el=>el.outerHTML).join('');
-  dst.value = '';
-}
+function syncAllModelSelects() {}
 function setStatus(c) {
   const d = document.getElementById('statusDot');
+  if (!d) return;
   const colors = { green:'var(--green)', red:'var(--red)', yellow:'#f0c040', grey:'var(--muted)' };
   const col = colors[c] || colors.grey;
-  d.style.background = col; d.style.boxShadow = `0 0 8px ${col}`;
+  d.style.background = col;
+  d.style.boxShadow = `0 0 8px ${col}`;
+  // pulse only while pending/streaming (yellow)
+  d.style.animation = (c === 'yellow') ? 'pulse 1s infinite' : 'pulse 2s infinite';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4153,12 +4151,14 @@ function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
 function closePanels(){
-  ['settingsPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
-function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
-function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
+function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
+function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');}
+function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
 
@@ -4175,7 +4175,7 @@ async function handleDrop(e){
 }
 
 // ── Modell-Limits Panel ───────────────────────────────────────────
-function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');}
+function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="modelMaxPanel"]')?.classList.add('active');}
 
 function renderModelMaxList(){
   const list=document.getElementById('modelMaxList');
@@ -4647,11 +4647,16 @@ function clearAllData() {
 // ═══════════════════════════════════════════════════════════════
 function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
-  document.getElementById('openProviderHeaderBtn').addEventListener('click', openProviderPanel);
-  document.getElementById('openSettingsBtn').addEventListener('click', openSettings);
-  document.getElementById('profileBadge').addEventListener('click', openProfilePanel);
+  document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
+  document.getElementById('openSettingsBtn').addEventListener('click', ()=>{closePanels();openSettings();});
+  document.getElementById('openTuningBtn').addEventListener('click', ()=>{closePanels();openTuningPanel();});
+  document.getElementById('openProfileHeaderBtn').addEventListener('click', ()=>{closePanels();openProfilePanel();});
+  document.getElementById('openModelMaxHeaderBtn').addEventListener('click', ()=>{closePanels();openModelMaxPanel();});
   document.getElementById('langToggleBtn').addEventListener('click', toggleLangDropdown);
   document.getElementById('overlay').addEventListener('click', closePanels);
+
+  // Tuning Panel
+  document.getElementById('tuningPanelClose').addEventListener('click', closePanels);
 
   // Settings Panel
   document.getElementById('settingsPanelClose').addEventListener('click', closePanels);
@@ -4712,7 +4717,6 @@ function setupEventListeners(){
   document.getElementById('cancelProfileBtn').addEventListener('click', cancelProfileEditor);
   document.getElementById('peTemp').addEventListener('input', e=>{document.getElementById('peTempVal').textContent=e.target.value;});
   document.getElementById('peUseModelMax').addEventListener('change', updatePeMaxTokensUI);
-  document.getElementById('peModelInput').addEventListener('change', updatePeMaxTokensUI);
   document.getElementById('peMaxTokensSlider').addEventListener('input', e=>{document.getElementById('peMaxTokensNum').textContent=parseInt(e.target.value).toLocaleString();});
 
   // Model Limits Panel
