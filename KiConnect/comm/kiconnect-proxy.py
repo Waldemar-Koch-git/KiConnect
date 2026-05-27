@@ -34,6 +34,7 @@ import json
 import time
 import sys
 import threading
+import webbrowser
 from collections import defaultdict
 from urllib.parse import urlparse, unquote
 
@@ -491,5 +492,6 @@ if __name__ == '__main__':
     print('╚══════════════════════════════════════════════════════════════════╝')
     print()
 
+    threading.Timer(1.2, lambda: webbrowser.open('http://localhost:5000')).start()
     serve(app, host='127.0.0.1', port=5000, threads=8,
           channel_timeout=120, cleanup_interval=10)
