@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.11</title>
+  <title>AI Chat 2.12</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -571,6 +571,73 @@
   <button class="ghost-btn" style="margin-top:12px;" id="resetAllModelMaxBtn" data-i18n="modellimits.resetAll">↺ Reset all</button>
 </div>
 
+<div class="panel" id="introPanel">
+  <div class="panel-title">
+    <span data-i18n="intro.title">Quick intro</span>
+    <button class="close-btn" id="introPanelClose">✕</button>
+  </div>
+  <p class="intro-lead" data-i18n="intro.desc">
+    A short orientation for setting up KI Connect and finding the most important controls.
+  </p>
+  <div class="intro-status" id="introProviderStatus"></div>
+  <div class="intro-steps">
+    <div class="intro-step">
+      <div class="intro-step-num">1</div>
+      <div>
+        <div class="intro-step-title" data-i18n="intro.stepLanguageTitle">Choose interface language</div>
+        <div class="intro-step-text" data-i18n="intro.stepLanguageText">Start by choosing the language for KI Connect. The whole interface updates immediately.</div>
+      </div>
+    </div>
+    <div class="intro-step">
+      <div class="intro-step-num">2</div>
+      <div>
+        <div class="intro-step-title" data-i18n="intro.stepApiTitle">Add an API provider</div>
+        <div class="intro-step-text" data-i18n="intro.stepApiText">Open API, add a provider, enter a readable name, choose the provider type, add the server URL if needed, then paste the API key.</div>
+      </div>
+    </div>
+    <div class="intro-step">
+      <div class="intro-step-num">3</div>
+      <div>
+        <div class="intro-step-title" data-i18n="intro.stepModelTitle">Choose a model</div>
+        <div class="intro-step-text" data-i18n="intro.stepModelText">After saving the provider, use the model picker at the top to choose one of the loaded models.</div>
+      </div>
+    </div>
+    <div class="intro-step">
+      <div class="intro-step-num">4</div>
+      <div>
+        <div class="intro-step-title" data-i18n="intro.stepProfileTitle">Optional profile</div>
+        <div class="intro-step-text" data-i18n="intro.stepProfileText">Use Profile to create roles or personas with their own system prompt and output settings.</div>
+      </div>
+    </div>
+    <div class="intro-step">
+      <div class="intro-step-num">5</div>
+      <div>
+        <div class="intro-step-title" data-i18n="intro.stepChatsTitle">Organize chats</div>
+        <div class="intro-step-text" data-i18n="intro.stepChatsText">Use folders in the sidebar. Multi-select lets you select several chats and move or delete them together.</div>
+      </div>
+    </div>
+  </div>
+  <div class="intro-actions">
+    <button class="ghost-btn" id="introGoProviderBtn" data-i18n="intro.openProvider">Open API setup</button>
+    <button class="save-btn" id="introCloseBtn" data-i18n="intro.close">Got it</button>
+  </div>
+</div>
+
+<div class="tour-layer" id="tourLayer" aria-hidden="true">
+  <div class="tour-dim"></div>
+  <div class="tour-spotlight" id="tourSpotlight"></div>
+  <div class="tour-card" id="tourCard" role="dialog" aria-live="polite">
+    <div class="tour-progress" id="tourProgress"></div>
+    <div class="tour-title" id="tourTitle"></div>
+    <div class="tour-text" id="tourText"></div>
+    <div class="tour-actions">
+      <button class="tour-btn" id="tourSkipBtn" data-i18n="tour.skip">End</button>
+      <button class="tour-btn" id="tourBackBtn" data-i18n="tour.back">Back</button>
+      <button class="tour-btn primary" id="tourNextBtn" data-i18n="tour.next">Next</button>
+    </div>
+  </div>
+</div>
+
 <!-- ════════════════════════════════════════════════════════════════
      HEADER
      ════════════════════════════════════════════════════════════════ -->
@@ -632,6 +699,10 @@
       <button class="panel-toolbar-btn" id="openSettingsBtn" title="" data-i18n="header.settingsTitle" data-i18n-attr="title" data-panel="settingsPanel">
         <span class="ptb-icon">⚙</span>
         <span class="ptb-label" data-i18n="toolbar.settings">Settings</span>
+      </button>
+      <button class="panel-toolbar-btn" id="openIntroBtn" title="" data-i18n="header.helpTitle" data-i18n-attr="title" data-panel="introPanel">
+        <span class="ptb-icon">?</span>
+        <span class="ptb-label" data-i18n="toolbar.help">Setup</span>
       </button>
     </div>
     <div class="lang-switcher" id="langSwitcher">

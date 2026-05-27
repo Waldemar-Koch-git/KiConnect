@@ -694,11 +694,17 @@ header {
   padding: 7px 12px; border-radius: 6px;
   cursor: pointer;
   font-size: 13px; font-family: 'IBM Plex Mono', monospace;
-  color: var(--muted); transition: background 0.1s;
+  color: var(--muted); transition: background 0.15s, color 0.15s, transform 0.1s;
   display: flex; align-items: center; gap: 8px;
+  user-select: none;
 }
-.lang-option:hover  { background: var(--surface2); color: var(--text); }
-.lang-option.active { color: var(--accent); }
+.lang-option:hover  {
+  background: var(--accent);
+  color: #fff;
+  transform: translateX(2px);
+}
+.lang-option.active { color: var(--accent); font-weight: 700; }
+.lang-option.active:hover { color: #fff; }
 
 
 /* ── Thinking / Reasoning toggle ─────────────────────────────────── */
@@ -1794,4 +1800,181 @@ textarea::placeholder { color: var(--muted); }
   color: var(--muted);
   font-family: 'IBM Plex Mono', monospace;
   white-space: nowrap;
+}
+
+/* Intro panel */
+.intro-lead {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.intro-status {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+.intro-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.intro-step {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.intro-step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+.intro-step-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.intro-step-text {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.intro-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.intro-actions .ghost-btn,
+.intro-actions .save-btn {
+  margin: 0;
+  flex: 1;
+}
+
+/* Guided setup tour */
+.tour-layer {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  pointer-events: none;  /* layer itself never blocks clicks */
+}
+.tour-layer.active { display: block; }
+.tour-dim {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: none;  /* dim never blocks clicks — spotlight shadow provides the overlay */
+}
+.tour-spotlight {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 120px;
+  height: 48px;
+  border-radius: 12px;
+  border: 2px solid var(--accent);
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.68),
+    0 0 0 6px rgba(61, 126, 255, 0.22),
+    0 0 28px rgba(61, 126, 255, 0.55);
+  pointer-events: none;
+  z-index: 30001;
+  transition: left 0.16s ease, top 0.16s ease, width 0.16s ease, height 0.16s ease;
+}
+body.tour-active .tour-highlight {
+  position: relative;
+  z-index: 30002 !important;
+  outline: none;
+  box-shadow: none;
+  border-radius: 10px;
+}
+body.tour-active .lang-switcher {
+  z-index: 30020;
+}
+/* During tour: ensure the open dropdown sits above everything and is fully clickable */
+body.tour-active .lang-dropdown.open {
+  z-index: 30025;
+  pointer-events: auto;
+  display: block;
+  animation: tour-lang-pulse 1.6s ease-in-out 2;
+}
+body.tour-active .lang-option {
+  pointer-events: auto;
+}
+@keyframes tour-lang-pulse {
+  0%   { box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+  50%  { box-shadow: 0 0 0 4px rgba(61,126,255,0.45), 0 8px 28px rgba(61,126,255,0.35); }
+  100% { box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+}
+body.tour-active .panel.open { z-index: 20001; }
+.tour-card {
+  position: fixed;
+  z-index: 30010;
+  width: min(340px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.5);
+  padding: 14px;
+  color: var(--text);
+  pointer-events: auto;
+}
+.tour-progress {
+  color: var(--accent);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.tour-title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.tour-text {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+.tour-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.tour-btn {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: 'Syne', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 10px;
+}
+.tour-btn:hover { border-color: var(--accent); }
+.tour-btn.primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  border-color: transparent;
+  color: white;
+}
+.tour-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

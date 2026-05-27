@@ -55,7 +55,7 @@ function applyTranslations() {
   });
   const btn = document.getElementById('langBtnLabel');
   if (btn) btn.textContent = LANGUAGES[currentLang]?.code || currentLang.toUpperCase();
-  document.documentElement.dir = currentLang === 'ar' ? 'rtl' : 'ltr';
+  document.documentElement.dir = ['ar', 'ur'].includes(currentLang) ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
   if (typeof syncCustomDropdown === 'function') {
     const hiddenSel = document.getElementById('modelSelector');
@@ -79,7 +79,26 @@ function setLang(code) {
   if (typeof window._kicVoiceRetranslate === 'function') window._kicVoiceRetranslate();
   if (typeof renderSidebar === 'function') renderSidebar();
   renderLangDropdown();
-  closeLangDropdown();
+  // During the tour language step: re-render the tour card in the new language,
+  // keep the dropdown open so the checkmark is visible, and unlock the Next button.
+  // The user then clicks Next themselves to continue the tour in their chosen language.
+  if (_tourActive && TOUR_STEPS[_tourStepIndex]?.prep === 'language') {
+    document.getElementById('langDropdown')?.classList.add('open');
+    // Re-render tour card title + text in the newly chosen language
+    const step = TOUR_STEPS[_tourStepIndex];
+    const titleEl = document.getElementById('tourTitle');
+    const textEl  = document.getElementById('tourText');
+    if (titleEl) titleEl.textContent = t(step.title);
+    if (textEl)  textEl.textContent  = t(step.text);
+    // Enable the Next button now that a language has been selected
+    const nextBtn = document.getElementById('tourNextBtn');
+    if (nextBtn) {
+      nextBtn.disabled = false;
+      nextBtn.title = '';
+    }
+  } else {
+    closeLangDropdown();
+  }
 }
 function renderLangDropdown() {
   const dd = document.getElementById('langDropdown');
@@ -129,6 +148,8 @@ function retranslateSuggestionChips() {
 }
 
 document.addEventListener('click', e => {
+  // Don't close the language dropdown when the tour is showing it for selection
+  if (_tourActive && TOUR_STEPS[_tourStepIndex]?.prep === 'language') return;
   const switcher = document.getElementById('langSwitcher');
   if (switcher && !switcher.contains(e.target)) closeLangDropdown();
 });
@@ -1046,6 +1067,9 @@ async function saveProviderEditor() {
   await save(); renderProviderList(); updateActiveProviderInfo();
   document.getElementById('providerEditor').style.display = 'none';
   fetchModels(); toast(t('js.providerSaved'));
+  if (_tourActive && TOUR_STEPS[_tourStepIndex]?.target === '#saveProviderBtn') {
+    setTimeout(nextTourStep, 250);
+  }
 }
 function cancelProviderEditor() { document.getElementById('providerEditor').style.display = 'none'; }
 function deleteProvider(id) {
@@ -1682,17 +1706,38 @@ function moveChat(chatId, folderId) {
     save(); renderSidebar();
   }
 }
+function getMoveChatIds(chatId) {
+  if (_selectedChatIds.has(chatId)) return [..._selectedChatIds].filter(id => chats.some(c => c.id === id));
+  return [chatId];
+}
+function moveChats(chatIds, folderId) {
+  const ids = [...new Set(chatIds || [])];
+  if (!ids.length) return;
+  ids.forEach(id => {
+    const c = chats.find(x => x.id === id);
+    if (c) c.folderId = folderId;
+  });
+  if (ids.includes(currentChatId)) activeFolderId = folderId || null;
+  save(); renderSidebar();
+  toast(tf(ids.length > 1 ? 'js.chatsMoved' : 'js.chatMoved', { n: ids.length }));
+}
 
 function showChatCtxMenu(e, chatId) {
   e.preventDefault(); e.stopPropagation();
   const menu = document.getElementById('ctxMenu');
   menu.innerHTML = '';
+  const targetIds = getMoveChatIds(chatId);
+  const isMultiTarget = targetIds.length > 1;
 
   // Rename
   const renameItem = document.createElement('div');
   renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
   renameItem.dataset.id = chatId;
   renameItem.addEventListener('click', () => { startRenamingChat(renameItem.dataset.id); hideCtx(); });
+  if (isMultiTarget) {
+    renameItem.style.opacity = '0.5';
+    renameItem.style.pointerEvents = 'none';
+  }
 
   // Move to folder submenu
   if (folders.length > 0) {
@@ -1705,16 +1750,16 @@ function showChatCtxMenu(e, chatId) {
     const noFolderOpt = document.createElement('div');
     noFolderOpt.className = 'ctx-item';
     noFolderOpt.textContent = t('js.noFolder') || '— No Folder —';
-    noFolderOpt.addEventListener('click', () => { moveChat(chatId, null); hideCtx(); });
+    noFolderOpt.addEventListener('click', () => { moveChats(targetIds, null); hideCtx(); });
     submenu.appendChild(noFolderOpt);
     folders.forEach(f => {
       const opt = document.createElement('div');
       opt.className = 'ctx-item';
-      const chat = chats.find(c => c.id === chatId);
-      if (chat && chat.folderId === f.id) opt.style.opacity = '0.5';
+      const allAlreadyThere = targetIds.every(id => chats.find(c => c.id === id)?.folderId === f.id);
+      if (allAlreadyThere) opt.style.opacity = '0.5';
       opt.textContent = f.name;
       opt.dataset.fid = f.id;
-      opt.addEventListener('click', () => { moveChat(chatId, opt.dataset.fid); hideCtx(); });
+      opt.addEventListener('click', () => { moveChats(targetIds, opt.dataset.fid); hideCtx(); });
       submenu.appendChild(opt);
     });
     moveItem.appendChild(submenu);
@@ -1781,11 +1826,19 @@ function deleteSelectedChats() {
   document.body.classList.remove('multiselect-active');
   save(); renderSidebar();
 }
-function onDragStart(e, id) { draggedChatId=id; e.dataTransfer.effectAllowed='move'; }
+function onDragStart(e, id) {
+  draggedChatId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  if (e.dataTransfer) e.dataTransfer.setData('text/plain', 'chat:' + id);
+}
 function onDropFolder(e, folderId) {
   e.preventDefault();
   document.querySelectorAll('.drag-target').forEach(el=>el.classList.remove('drag-target'));
-  if (draggedChatId) { activeFolderId = folderId || null; moveChat(draggedChatId, folderId); draggedChatId=null; }
+  if (draggedChatId) {
+    activeFolderId = folderId || null;
+    moveChats(getMoveChatIds(draggedChatId), folderId);
+    draggedChatId=null;
+  }
 }
 
 // ── Sidebar Render ────────────────────────────────────────────────
@@ -1988,7 +2041,7 @@ function buildChatItem(c) {
   div.className = 'chat-item'
     + (c.id === currentChatId ? ' active' : '')
     + (_multiSelectMode && isSelected ? ' multi-selected' : '');
-  div.draggable = !_multiSelectMode;
+  div.draggable = !_multiSelectMode || isSelected;
   div.dataset.id = c.id;
 
   // Checkbox for multi-select mode
@@ -1998,7 +2051,7 @@ function buildChatItem(c) {
   cb.addEventListener('click', e => { e.stopPropagation(); toggleChatSelect(c.id); });
 
   div.addEventListener('dragstart', e => {
-    if (_multiSelectMode) { e.preventDefault(); return; }
+    if (_multiSelectMode && !isSelected) { e.preventDefault(); return; }
     e.stopPropagation(); onDragStart(e, div.dataset.id);
   });
   div.addEventListener('click', () => {
@@ -4164,7 +4217,7 @@ function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
 function closePanels(){
-  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel','introPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
   document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
 }
@@ -4172,6 +4225,255 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
 function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');}
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
+function renderIntroPanel() {
+  const status = document.getElementById('introProviderStatus');
+  if (!status) return;
+  if (!providers.length) {
+    status.textContent = t('intro.noProvider');
+    return;
+  }
+  const withKeys = providers.filter(p => p.apiKey).length;
+  const names = providers.map(p => p.name).join(', ');
+  status.textContent = tf('intro.configuredProviders', { n: providers.length, keys: withKeys, names });
+}
+function openIntroPanel(){
+  renderIntroPanel();
+  document.getElementById('introPanel').classList.add('open');
+  document.getElementById('overlay').classList.add('show');
+  document.querySelector('[data-panel="introPanel"]')?.classList.add('active');
+}
+let _tourActive = false;
+let _tourStepIndex = 0;
+let _tourTargetEl = null;
+let _tourPlacementTimer = null;
+const TOUR_STEPS = [
+  { target: '#langToggleBtn', title: 'tour.languageTitle', text: 'tour.languageText', prep: 'language' },
+  { target: '#openIntroBtn', title: 'tour.welcomeTitle', text: 'tour.welcomeText', prep: 'home' },
+  { target: '#openProviderHeaderBtn', title: 'tour.apiButtonTitle', text: 'tour.apiButtonText', prep: 'home' },
+  { target: '#addProviderBtn', title: 'tour.addProviderTitle', text: 'tour.addProviderText', prep: 'providerPanel' },
+  { target: '#pvNameInput', title: 'tour.providerNameTitle', text: 'tour.providerNameText', prep: 'providerEditor', focus: true },
+  { target: '#providerTypeRow', title: 'tour.providerTypeTitle', text: 'tour.providerTypeText', prep: 'providerEditor' },
+  { target: '#pvServerUrlGroup', title: 'tour.serverUrlTitle', text: 'tour.serverUrlText', prep: 'providerEditor', focus: '#pvServerUrl' },
+  { target: '#pvApiKey', title: 'tour.apiKeyTitle', text: 'tour.apiKeyText', prep: 'providerEditor', focus: true },
+  { target: '#saveProviderBtn', title: 'tour.saveProviderTitle', text: 'tour.saveProviderText', prep: 'providerEditor' },
+  { target: '#cmTrigger', title: 'tour.modelTitle', text: 'tour.modelText', prep: 'chat' },
+  { target: '#messageInput', title: 'tour.firstChatTitle', text: 'tour.firstChatText', prep: 'chat', focus: true },
+];
+function markGuidedIntroDone() {
+  if (!_activeAccountId) return;
+  localStorage.setItem(accountKey('guided_intro_done'), '1');
+  localStorage.removeItem(accountKey('guided_intro_pending'));
+}
+function shouldAutoStartGuidedIntro() {
+  if (!_activeAccountId) return false;
+  return localStorage.getItem(accountKey('guided_intro_pending')) === '1' &&
+         localStorage.getItem(accountKey('guided_intro_done')) !== '1';
+}
+function startGuidedIntro(stepIndex = 0) {
+  _tourActive = true;
+  _tourStepIndex = Math.max(0, Math.min(stepIndex, TOUR_STEPS.length - 1));
+  document.body.classList.add('tour-active');
+  const layer = document.getElementById('tourLayer');
+  layer?.classList.add('active');
+  layer?.setAttribute('aria-hidden', 'false');
+  showTourStep();
+}
+function endGuidedIntro() {
+  _tourActive = false;
+  markGuidedIntroDone();
+  document.body.classList.remove('tour-active');
+  const layer = document.getElementById('tourLayer');
+  layer?.classList.remove('active');
+  layer?.setAttribute('aria-hidden', 'true');
+  clearTourHighlight();
+}
+function clearTourHighlight() {
+  if (_tourTargetEl) _tourTargetEl.classList.remove('tour-highlight');
+  _tourTargetEl = null;
+  if (_tourPlacementTimer) {
+    clearTimeout(_tourPlacementTimer);
+    _tourPlacementTimer = null;
+  }
+}
+function prepareTourStep(step) {
+  if (step.prep === 'language') {
+    closePanels();
+    renderLangDropdown();
+    document.getElementById('langDropdown')?.classList.add('open');
+  }
+  if (step.prep === 'home') closePanels();
+  if (step.prep === 'providerPanel') {
+    closePanels();
+    openProviderPanel();
+  }
+  if (step.prep === 'providerEditor') {
+    closePanels();
+    openProviderPanel();
+    if (document.getElementById('providerEditor')?.style.display === 'none') startNewProvider();
+  }
+  if (step.prep === 'chat') closePanels();
+}
+function getTourTarget(step) {
+  let el = document.querySelector(step.target);
+  if (step.prep === 'language') {
+    el = document.getElementById('langSwitcher') || el;
+  }
+  if (step.target === '#pvServerUrlGroup' && el && getComputedStyle(el).display === 'none') {
+    el = document.getElementById('pvApiKey');
+  }
+  return el;
+}
+function getTourTargetRect(target) {
+  if (!target) return null;
+  const rects = [target.getBoundingClientRect()];
+  if (target.id === 'langSwitcher') {
+    const dd = document.getElementById('langDropdown');
+    if (dd && dd.classList.contains('open')) rects.push(dd.getBoundingClientRect());
+  }
+  const left = Math.min(...rects.map(r => r.left));
+  const top = Math.min(...rects.map(r => r.top));
+  const right = Math.max(...rects.map(r => r.right));
+  const bottom = Math.max(...rects.map(r => r.bottom));
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+function showTourStep() {
+  if (!_tourActive) return;
+  const step = TOUR_STEPS[_tourStepIndex];
+  if (!step) { endGuidedIntro(); return; }
+  prepareTourStep(step);
+  clearTourHighlight();
+  const target = getTourTarget(step);
+  _tourTargetEl = target;
+  if (target) {
+    target.classList.add('tour-highlight');
+    target.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+  }
+  const progress = document.getElementById('tourProgress');
+  const title = document.getElementById('tourTitle');
+  const text = document.getElementById('tourText');
+  const back = document.getElementById('tourBackBtn');
+  const next = document.getElementById('tourNextBtn');
+  if (progress) progress.textContent = tf('tour.progress', { n: _tourStepIndex + 1, total: TOUR_STEPS.length });
+  if (title) title.textContent = t(step.title);
+  if (text) text.textContent = t(step.text);
+  if (back) back.disabled = _tourStepIndex === 0;
+  if (next) {
+    const isLangStep = step.prep === 'language';
+    next.disabled = isLangStep;
+    next.textContent = _tourStepIndex === TOUR_STEPS.length - 1 ? t('tour.finish') : t('tour.next');
+    if (isLangStep) next.title = t('tour.languageTitle');
+  }
+  scheduleTourPlacement(target, step);
+}
+function scheduleTourPlacement(target, step) {
+  if (_tourPlacementTimer) clearTimeout(_tourPlacementTimer);
+  const focusTarget = step.focus === true ? target : (step.focus ? document.querySelector(step.focus) : null);
+  const delays = [80, 220, 380, 520];
+  const run = (idx = 0) => {
+    if (!_tourActive || TOUR_STEPS[_tourStepIndex] !== step) return;
+    positionTourCard(target);
+    if (idx === delays.length - 1 && focusTarget && typeof focusTarget.focus === 'function') {
+      focusTarget.focus({ preventScroll: true });
+    }
+    if (idx + 1 < delays.length) {
+      _tourPlacementTimer = setTimeout(() => run(idx + 1), delays[idx + 1] - delays[idx]);
+    }
+  };
+  _tourPlacementTimer = setTimeout(() => run(0), delays[0]);
+}
+function positionTourCard(target) {
+  const card = document.getElementById('tourCard');
+  if (!card) return;
+  positionTourSpotlight(target);
+  const inPanel = !!target?.closest?.('.panel');
+  const margin = inPanel ? 28 : 14;
+  const targetGap = inPanel ? 28 : 14;
+  const cw = card.offsetWidth || 340;
+  const ch = card.offsetHeight || 180;
+  const maxLeft = Math.max(margin, window.innerWidth - cw - margin);
+  const maxTop = Math.max(margin, window.innerHeight - ch - margin);
+  let left = Math.min(maxLeft, Math.max(margin, (window.innerWidth - cw) / 2));
+  let top = Math.min(maxTop, Math.max(margin, (window.innerHeight - ch) / 2));
+  if (target) {
+    const r = getTourTargetRect(target) || target.getBoundingClientRect();
+    const clampX = x => Math.min(maxLeft, Math.max(margin, x));
+    const clampY = y => Math.min(maxTop, Math.max(margin, y));
+    const candidates = [
+      { left: r.left - cw - targetGap, top: r.top, pref: inPanel ? 0 : 1 },
+      { left: r.right + targetGap, top: r.top, pref: inPanel ? 1 : 0 },
+      { left: r.left, top: r.bottom + targetGap, pref: 2 },
+      { left: r.left, top: r.top - ch - targetGap, pref: 3 },
+      { left: (window.innerWidth - cw) / 2, top: window.innerHeight - ch - margin, pref: 4 },
+      { left: (window.innerWidth - cw) / 2, top: margin, pref: 5 },
+    ].map(c => ({ ...c, left: clampX(c.left), top: clampY(c.top) }));
+    const overlapArea = c => {
+      const x = Math.max(0, Math.min(c.left + cw, r.right) - Math.max(c.left, r.left));
+      const y = Math.max(0, Math.min(c.top + ch, r.bottom) - Math.max(c.top, r.top));
+      return x * y;
+    };
+    const distance = c => Math.abs((c.left + cw / 2) - (r.left + r.width / 2)) + Math.abs((c.top + ch / 2) - (r.top + r.height / 2));
+    candidates.sort((a, b) => (overlapArea(a) - overlapArea(b)) || (a.pref - b.pref) || (distance(a) - distance(b)));
+    left = candidates[0].left;
+    top = candidates[0].top;
+  }
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+}
+function positionTourSpotlight(target) {
+  const spot = document.getElementById('tourSpotlight');
+  if (!spot) return;
+  const pad = target?.closest?.('.panel') ? 10 : 8;
+  let left = window.innerWidth / 2 - 60;
+  let top = window.innerHeight / 2 - 24;
+  let width = 120;
+  let height = 48;
+  if (target) {
+    const r = getTourTargetRect(target) || target.getBoundingClientRect();
+    left = Math.max(8, r.left - pad);
+    top = Math.max(8, r.top - pad);
+    width = Math.min(window.innerWidth - left - 8, r.width + pad * 2);
+    height = Math.min(window.innerHeight - top - 8, r.height + pad * 2);
+  }
+  spot.style.left = `${left}px`;
+  spot.style.top = `${top}px`;
+  spot.style.width = `${width}px`;
+  spot.style.height = `${height}px`;
+}
+function nextTourStep() {
+  if (_tourStepIndex >= TOUR_STEPS.length - 1) { endGuidedIntro(); return; }
+  _tourStepIndex++;
+  // Skip the server-URL step if it is hidden (i.e. provider type != openai-compat)
+  const step = TOUR_STEPS[_tourStepIndex];
+  if (step?.target === '#pvServerUrlGroup') {
+    const el = document.getElementById('pvServerUrlGroup');
+    if (!el || getComputedStyle(el).display === 'none') {
+      _tourStepIndex++;
+    }
+  }
+  showTourStep();
+}
+function prevTourStep() {
+  if (_tourStepIndex <= 0) return;
+  _tourStepIndex--;
+  // Skip the server-URL step backwards too if it is hidden
+  const step = TOUR_STEPS[_tourStepIndex];
+  if (step?.target === '#pvServerUrlGroup') {
+    const el = document.getElementById('pvServerUrlGroup');
+    if ((!el || getComputedStyle(el).display === 'none') && _tourStepIndex > 0) {
+      _tourStepIndex--;
+    }
+  }
+  showTourStep();
+}
+function handleExternalLinkClick(e) {
+  const a = e.target.closest?.('a[href]');
+  if (!a) return;
+  let url;
+  try { url = new URL(a.getAttribute('href'), location.href); } catch { return; }
+  if (!/^https?:$/i.test(url.protocol)) return;
+  e.preventDefault();
+  window.open(url.href, '_blank', 'noopener,noreferrer');
+}
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
 
@@ -4445,6 +4747,7 @@ async function doSetupPassword() {
   if (confEl) confEl.value = '';
   if (nameEl) nameEl.value = '';
   if (errorEl) errorEl.textContent = '';
+  localStorage.setItem(accountKey('guided_intro_pending'), '1');
   hideLoginScreen();
   await bootApp();
   toast(t('js.pwdSetupDone') || '🔐 Account created — welcome!');
@@ -4662,6 +4965,7 @@ function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
   document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
   document.getElementById('openSettingsBtn').addEventListener('click', ()=>{closePanels();openSettings();});
+  document.getElementById('openIntroBtn').addEventListener('click', ()=>startGuidedIntro());
   document.getElementById('openTuningBtn').addEventListener('click', ()=>{closePanels();openTuningPanel();});
   document.getElementById('openProfileHeaderBtn').addEventListener('click', ()=>{closePanels();openProfilePanel();});
   document.getElementById('openModelMaxHeaderBtn').addEventListener('click', ()=>{closePanels();openModelMaxPanel();});
@@ -4673,6 +4977,13 @@ function setupEventListeners(){
 
   // Settings Panel
   document.getElementById('settingsPanelClose').addEventListener('click', closePanels);
+  document.getElementById('introPanelClose').addEventListener('click', closePanels);
+  document.getElementById('introCloseBtn').addEventListener('click', closePanels);
+  document.getElementById('introGoProviderBtn').addEventListener('click',()=>startGuidedIntro(1));
+  document.getElementById('tourSkipBtn')?.addEventListener('click', endGuidedIntro);
+  document.getElementById('tourBackBtn')?.addEventListener('click', prevTourStep);
+  document.getElementById('tourNextBtn')?.addEventListener('click', nextTourStep);
+  window.addEventListener('resize', () => { if (_tourActive) positionTourCard(_tourTargetEl); });
   document.getElementById('goProviderFromSettings').addEventListener('click',()=>{closePanels();openProviderPanel();});
   document.getElementById('goModelLimits').addEventListener('click',()=>{closePanels();openModelMaxPanel();});
   document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
@@ -4760,6 +5071,7 @@ function setupEventListeners(){
   document.getElementById('sendBtn').addEventListener('click', handleSendStop);
   document.getElementById('messageInput').addEventListener('keydown', handleKey);
   document.getElementById('messageInput').addEventListener('input', e=>autoResize(e.target));
+  document.addEventListener('click', handleExternalLinkClick);
   document.getElementById('messageInput').addEventListener('paste', handlePaste);
   document.getElementById('attachFileBtn').addEventListener('click',()=>document.getElementById('fileInput').click());
   document.getElementById('attachImageBtn').addEventListener('click',()=>document.getElementById('imageInput').click());
@@ -5021,6 +5333,9 @@ async function bootApp() {
   if (providers.length && providers.some(p => p.apiKey)) fetchModels();
   else openProviderPanel();
   startSessionCountdown();
+  if (shouldAutoStartGuidedIntro()) {
+    setTimeout(() => startGuidedIntro(), 350);
+  }
 }
 
 // ── Custom Model Dropdown ─────────────────────────────────────────
