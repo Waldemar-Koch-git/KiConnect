@@ -167,6 +167,7 @@ const PROVIDER_TYPES = {
   'xai':           { label:'xAI Grok',           needsUrl:false },
   'groq':          { label:'Groq',               needsUrl:false },
   'deepseek':      { label:'DeepSeek',           needsUrl:false },
+  'minimax':       { label:'MiniMax',            needsUrl:false },
 };
 const PROVIDER_HINTS = {
   'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances …',
@@ -179,6 +180,7 @@ const PROVIDER_HINTS = {
   'xai':           '💡 API Key : console.x.ai · Grok 3 with optional 🧠 Thinking',
   'groq':          '💡 API Key : console.groq.com · Ultra-fast inference · Models live',
   'deepseek':      '💡 API Key : platform.deepseek.com · Models loaded live, reasoning for R1',
+  'minimax':       '💡 API Key : platform.minimax.io · OpenAI-compatible · Models loaded live',
 };
 // Static entries only needed for providers that don't expose live model metadata
 // (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
@@ -893,6 +895,7 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'xai')           return 'https://api.x.ai/v1';
   if (provider.type === 'groq')          return 'https://api.groq.com/openai/v1';
   if (provider.type === 'deepseek')      return 'https://api.deepseek.com/v1';
+  if (provider.type === 'minimax')       return 'https://api.minimax.io/v1';
   return null;
 }
 function effectiveMaxTokens() {
@@ -907,7 +910,7 @@ function effectiveMaxTokens() {
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
-  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com',
+  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io',
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
   'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',

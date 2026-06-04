@@ -1,29 +1,3 @@
-"""
-KI Connect NRW — CORS-Proxy + Storage-Server (v5.0 / Waitress WSGI)
-====================================================================
-CHANGELOG v5.1 (Browser-unabhaengige Persistenz):
-  NEU: /store/ REST-API — Daten liegen in ./datas/ auf dem Dateisystem,
-  unabhaengig vom Browser. Alle Browser teilen sich dieselben Accounts.
-
-  Endpunkte (nur von localhost erreichbar):
-    GET  /store/                     Account registry lesen
-    PUT  /store/                     Account registry write
-    GET  /store/<accountId>          Keys eines Accounts auflisten
-    GET  /store/<accountId>/<key>    entry lesen
-    PUT  /store/<accountId>/<key>    entry write
-    DEL  /store/<accountId>/<key>    entry loeschen
-
-  Sicherheit:
-    - Nur localhost (Origin + Host Check)
-    - accountId/key strikt validiert (alphanumerisch + _-)
-    - Path-Traversal durch realpath-Pruefung verhindert
-    - Atomares Schreiben via tmp-Datei + os.replace()
-    - Thread-Lock fuer alle Dateioperationen
-
-CHANGELOG v4.4: accept-encoding nicht weitergeleitet (gzip-Fix)
-CHANGELOG v4.2: Rate-Limiting thread-safe, location-Header gefiltert
-"""
-
 from flask import Flask, request, Response, send_from_directory, abort
 import requests
 import ipaddress
@@ -40,7 +14,7 @@ from urllib.parse import urlparse, unquote
 
 app = Flask(__name__)
 
-# ── Verzeichnisse ─────────────────────────────────────────────────
+# ── Directories ───────────────────────────────────────────────────
 STATIC_DIR = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR   = os.path.join(STATIC_DIR, 'datas')
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -51,7 +25,7 @@ ALLOWED_ORIGINS = {
     'http://127.0.0.1:5000',
 }
 
-# ── Maximale Groessen (DoS-Schutz) ───────────────────────────────
+# ── Max Size (DoS-Protection) ─────────────────────────────────────
 MAX_BODY_SIZE  = 50  * 1024 * 1024   # 50 MB fuer Proxy-Requests
 MAX_STORE_SIZE = 100 * 1024 * 1024   # 100 MB pro Storage-entry
 app.config['MAX_CONTENT_LENGTH'] = MAX_STORE_SIZE
@@ -59,8 +33,8 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_STORE_SIZE
 # ── Storage-Lock (thread-safe Datei-I/O) ─────────────────────────
 _store_lock = threading.Lock()
 
-# ── Input-Validierung ─────────────────────────────────────────────
-# accountId: Timestamp + Zufallsteil, z.B. "1718000000000_ab3f7"
+# ── Input-Validating ─────────────────────────────────────────────
+# accountId: Timestamp + random-part, z.B. "1718000000000_ab3f7"
 # key: config, providers, profiles, folders, chats, current_chat, ...
 _SAFE_ID_RE  = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
 _SAFE_KEY_RE = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
@@ -230,7 +204,7 @@ def check_origin():
 ALLOWED_DOMAINS = {
     'chat.kiconnect.nrw', 'api.anthropic.com', 'api.openai.com',
     'openrouter.ai', 'api.mistral.ai', 'generativelanguage.googleapis.com',
-    'api.x.ai', 'api.groq.com','api.deepseek.com',
+    'api.x.ai', 'api.groq.com','api.deepseek.com','api.minimax.io',
     'api.search.brave.com', 'html.duckduckgo.com', 'lite.duckduckgo.com',
     'api.qwant.com', 'search.yahoo.com', 'www.startpage.com',
     'www.googleapis.com',
@@ -338,7 +312,8 @@ SECURITY_HEADERS = {
         "https://chat.kiconnect.nrw https://openrouter.ai "
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
         "https://api.x.ai https://api.groq.com "
-        "https://api.deepseek.com https://api.search.brave.com https://html.duckduckgo.com "
+        "https://api.deepseek.com https://api.minimax.io "
+        "https://api.search.brave.com https://html.duckduckgo.com "
         "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
         "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
         "https://api.mojeek.com https://yandex.com "
@@ -474,9 +449,9 @@ if __name__ == '__main__':
     print('║  KI Connect — CORS-Proxy + Storage-Server  (v5.1 / Waitress)     ║')
     print('╠══════════════════════════════════════════════════════════════════╣')
     print('║  Running on:  http://localhost:5000                              ║')
-    print('║  Data dir:    ./datas/   (browser-unabhaengige Persistenz)       ║')
+    print('║  Data dir:    ./datas/   (browser-independent persistence)       ║')
     print('║                                                                  ║')
-    print('║  Storage-API  (nur localhost):                                   ║')
+    print('║  Storage-API  (only localhost):                                  ║')
     print('║    GET/PUT  /store/                Account registry              ║')
     print('║    GET      /store/<id>            Keys list                     ║')
     print('║    GET/PUT/DELETE /store/<id>/<k>  Data read/write               ║')
@@ -484,7 +459,7 @@ if __name__ == '__main__':
     print('║  Proxy-Allowlist:                                                ║')
     print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com       ║')
     print('║    openrouter.ai · api.mistral.ai · googleapis.com               ║')
-    print('║    api.x.ai · api.groq.com · api.deepseek.com                    ║')
+    print('║    api.x.ai · api.groq.com · api.deepseek.com · api.minimax.io   ║')
     print('║  Search: brave · duckduckgo (lite) · google · bing               ║')
     print('║          mojeek · yandex · searxng (public instances)            ║')
     print('║                                                                  ║')
