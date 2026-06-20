@@ -168,6 +168,7 @@ const PROVIDER_TYPES = {
   'groq':          { label:'Groq',               needsUrl:false },
   'deepseek':      { label:'DeepSeek',           needsUrl:false },
   'minimax':       { label:'MiniMax',            needsUrl:false },
+  'glm':           { label:'GLM (z.ai)',         needsUrl:false },
 };
 const PROVIDER_HINTS = {
   'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances …',
@@ -181,6 +182,7 @@ const PROVIDER_HINTS = {
   'groq':          '💡 API Key : console.groq.com · Ultra-fast inference · Models live',
   'deepseek':      '💡 API Key : platform.deepseek.com · Models loaded live, reasoning for R1',
   'minimax':       '💡 API Key : platform.minimax.io · OpenAI-compatible · Models loaded live',
+  'glm':           '💡 API Key : z.ai · OpenAI-compatible · 🧠 Thinking for GLM models',
 };
 // Static entries only needed for providers that don't expose live model metadata
 // (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
@@ -325,6 +327,9 @@ function getModelDefaultMax(modelId) {
   if (/gemini-2\.5/i.test(modelId)) return 65536;
   if (/gemini/i.test(modelId)) return 8192;
   if (/grok-3/i.test(modelId)) return 131072;
+  if (/^glm-(5|4\.[67])/i.test(modelId)) return 131072;
+  if (/^glm-4\.5/i.test(modelId)) return 98304;
+  if (/^glm-4-32b/i.test(modelId)) return 16384;
   return 4096;
 }
 function getModelMaxOutput(modelId) {
@@ -896,6 +901,7 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'groq')          return 'https://api.groq.com/openai/v1';
   if (provider.type === 'deepseek')      return 'https://api.deepseek.com/v1';
   if (provider.type === 'minimax')       return 'https://api.minimax.io/v1';
+  if (provider.type === 'glm')           return 'https://api.z.ai/api/paas/v4';
   return null;
 }
 function effectiveMaxTokens() {
@@ -910,7 +916,7 @@ function effectiveMaxTokens() {
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
-  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io',
+  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai',
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
   'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',
@@ -1423,6 +1429,9 @@ async function fetchModels() {
           extraHeaders['HTTP-Referer'] = window.location.origin;
           extraHeaders['X-Title'] = 'KI Connect NRW';
         }
+        if (provider.type === 'glm') {
+          extraHeaders['Accept-Language'] = 'en-US,en';
+        }
         const res = await fetch(proxyUrl(`${endpoint}/models`), {
           headers: { 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders }
         });
@@ -1518,7 +1527,8 @@ function isThinkingCapable(modelId) {
   const bare = modelId.split('/').pop().toLowerCase();
   return THINKING_MODELS.has(modelId) || THINKING_MODELS.has(bare) ||
     /^o\d/.test(bare) || /claude-(opus|sonnet)-4/.test(bare) || /claude-3-7/.test(bare) ||
-    /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare);
+    /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare) ||
+    /^glm-(5|4\.[567])/i.test(bare);
 }
 function isAnthropicThinkingModel(modelId) {
   return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
@@ -2843,9 +2853,19 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
       if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
     }
     if (documentIds?.length) reqBody.documents = documentIds;
-    reqBody.stream_options = { include_usage: true };
+    if (provider.type !== 'glm') {
+      reqBody.stream_options = { include_usage: true };
+    }
+    // GLM (z.ai) uses a different thinking shape than o-series/deepseek:
+    // it sets `thinking: { type: 'enabled' }` instead of `reasoning_effort`,
+    // and streams the reasoning trace via delta.reasoning_content.
+    if (provider.type === 'glm' && isThinkingCapable(modelId)) {
+      reqBody.thinking = { type: config.thinkingEnabled ? 'enabled' : 'disabled' };
+      delete reqBody.reasoning_effort;
+    }
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+    if (provider.type === 'glm') { extraHeaders['Accept-Language'] = 'en-US,en'; }
     const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
@@ -2856,6 +2876,8 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     removeTyping(typingId);
     const aiEl = appendEmptyAI();
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
+    let thinkingText = '';
+    const isGlm = provider.type === 'glm';
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -2866,8 +2888,19 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         try {
           const chunk = JSON.parse(payload);
           const delta = chunk.choices?.[0]?.delta?.content || '';
+          const reasoningDelta = isGlm ? (chunk.choices?.[0]?.delta?.reasoning_content || '') : '';
+          if (reasoningDelta) {
+            thinkingText += reasoningDelta;
+          }
           assistantText += delta;
-          if (delta) {
+          if (isGlm) {
+            // GLM: render live bubble with thinking block + assistant text
+            if (reasoningDelta || delta) {
+              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+              scrollToBottom();
+            }
+          } else if (delta) {
             aiEl.querySelector('.bubble').innerHTML = formatText(assistantText);
             _rememberStreamSnapshot(assistantText, usageData);
             scrollToBottom();
@@ -2875,10 +2908,13 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
           if (chunk.usage) {
             const u = chunk.usage;
             usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens || 0 };
-            _rememberStreamSnapshot(assistantText, usageData);
+            _rememberStreamSnapshot(isGlm ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData);
           }
         } catch {}
       }
+    }
+    if (isGlm && thinkingText) {
+      assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
     }
     typesetMath();
   }

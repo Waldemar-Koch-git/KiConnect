@@ -9,7 +9,7 @@
     default-src 'self';
     script-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
     style-src   'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
+    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
     img-src     'self' data: blob:;
     font-src    'self' https://cdn.jsdelivr.net;
     worker-src  blob:;
@@ -19,7 +19,7 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.13</title>
+  <title>AI Chat 2.14</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
     window.MathJax = {
@@ -489,6 +489,7 @@
       <div class="type-chip" data-type="groq">Groq</div>
 	  <div class="type-chip" data-type="deepseek">DeepSeek</div>
       <div class="type-chip" data-type="minimax">MiniMax</div>
+      <div class="type-chip" data-type="glm">GLM (z.ai)</div>
     </div>
     <div id="pvProviderHint" style="font-size:10px;color:var(--muted);margin-top:6px;font-family:'IBM Plex Mono',monospace;line-height:1.5;display:none;padding:6px 8px;background:rgba(61,126,255,0.05);border-radius:6px;border:1px solid rgba(61,126,255,0.15);"></div>
     <div id="pvServerUrlGroup" style="margin-top:10px;">

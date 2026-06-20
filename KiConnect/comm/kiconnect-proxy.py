@@ -205,6 +205,7 @@ ALLOWED_DOMAINS = {
     'chat.kiconnect.nrw', 'api.anthropic.com', 'api.openai.com',
     'openrouter.ai', 'api.mistral.ai', 'generativelanguage.googleapis.com',
     'api.x.ai', 'api.groq.com','api.deepseek.com','api.minimax.io',
+    'api.z.ai',
     'api.search.brave.com', 'html.duckduckgo.com', 'lite.duckduckgo.com',
     'api.qwant.com', 'search.yahoo.com', 'www.startpage.com',
     'www.googleapis.com',
@@ -313,6 +314,7 @@ SECURITY_HEADERS = {
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
         "https://api.x.ai https://api.groq.com "
         "https://api.deepseek.com https://api.minimax.io "
+        "https://api.z.ai "
         "https://api.search.brave.com https://html.duckduckgo.com "
         "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
         "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
@@ -460,6 +462,7 @@ if __name__ == '__main__':
     print('║    chat.kiconnect.nrw · api.anthropic.com · api.openai.com       ║')
     print('║    openrouter.ai · api.mistral.ai · googleapis.com               ║')
     print('║    api.x.ai · api.groq.com · api.deepseek.com · api.minimax.io   ║')
+    print('║    api.z.ai                                                      ║')
     print('║  Search: brave · duckduckgo (lite) · google · bing               ║')
     print('║          mojeek · yandex · searxng (public instances)            ║')
     print('║                                                                  ║')
