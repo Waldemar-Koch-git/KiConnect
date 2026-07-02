@@ -2716,13 +2716,82 @@ function _applyPromptCache(msgs) {
   }
 }
 
-// _renderThinkingBubble: Returns combined thinking+text HTML for the live bubble.
-function _renderThinkingBubble(thinkingText, assistantText) {
-  const th = thinkingText
-    ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock', { n: thinkingText.length })}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`
-    : '';
-  return th + formatText(assistantText);
+// _splitStableTail: splits streamed text at the last line break that is NOT
+// inside an open ``` fence or an open $$...$$ / \[...\] display-math block.
+// Everything before that point is "stable" (a finished line/row — safe to
+// render once and never touch again). Everything after is "tail" (still
+// being written, gets re-rendered frequently). This is what lets already
+// -typeset formulas in e.g. a growing table stay put instead of flickering.
+function _splitStableTail(text) {
+  let fence = false, dollarBlock = false, bracketBlock = false, lastSafe = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith('```', i)) fence = !fence;
+    else if (!fence && text.startsWith('$$', i)) dollarBlock = !dollarBlock;
+    else if (!fence && !dollarBlock && text.startsWith('\\[', i)) bracketBlock = true;
+    else if (!fence && !dollarBlock && text.startsWith('\\]', i)) bracketBlock = false;
+
+    if (text[i] === '\n' && !fence && !dollarBlock && !bracketBlock) lastSafe = i;
+  }
+  if (lastSafe === -1) return { stable: '', tail: text };
+  return { stable: text.slice(0, lastSafe + 1), tail: text.slice(lastSafe + 1) };
 }
+
+// Tracks, per bubble element, how much of its content is already frozen —
+// so we only touch .msg-stable when there's genuinely new finished content.
+const _streamStableCache = new WeakMap();
+
+// renderStreamingBubble: live-updates a message bubble during streaming
+// while preserving already-rendered (typeset) content. Splits into a frozen
+// "stable" container (rendered once per finished line, then left alone) and
+// a small "tail" container (the current in-progress line, re-rendered often).
+function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
+  let stableEl = bubbleEl.querySelector('.msg-stable');
+  let tailEl = bubbleEl.querySelector('.msg-tail');
+  if (!stableEl) {
+    bubbleEl.innerHTML =
+      '<div class="msg-thinking" style="display:contents"></div>' +
+      '<div class="msg-stable" style="display:contents"></div>' +
+      '<div class="msg-tail" style="display:contents"></div>';
+    stableEl = bubbleEl.querySelector('.msg-stable');
+    tailEl = bubbleEl.querySelector('.msg-tail');
+    _streamStableCache.set(bubbleEl, { len: 0 });
+  }
+
+  const thinkEl = bubbleEl.querySelector('.msg-thinking');
+  if (thinkEl) {
+    thinkEl.innerHTML = thinkingText
+      ? `<details class="thinking-block" style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--accent2);opacity:0.8;">${tf('js.thinkingBlock', { n: thinkingText.length })}</summary><pre style="font-size:11px;color:var(--muted);white-space:pre-wrap;margin-top:6px;padding:8px;background:#0a0c10;border-radius:6px;">${escHtml(thinkingText)}</pre></details>`
+      : '';
+  }
+
+  const { stable, tail } = _splitStableTail(assistantText || '');
+  const cached = _streamStableCache.get(bubbleEl) || { len: 0 };
+
+  if (stable.length > cached.len) {
+    // New finished line(s) — render once and typeset immediately (this fires
+    // per completed line, not per token, so it's cheap even for big tables).
+    stableEl.innerHTML = formatText(stable);
+    _streamStableCache.set(bubbleEl, { len: stable.length });
+    typesetMath(stableEl);
+  }
+  tailEl.innerHTML = formatText(tail);
+  typesetMathThrottled(tailEl);
+}
+
+// _finalizeStreamingBubble: called once the stream is done — flushes any
+// remaining tail into stable and does one authoritative full typeset.
+function _finalizeStreamingBubble(bubbleEl, assistantText) {
+  const stableEl = bubbleEl.querySelector('.msg-stable');
+  const tailEl = bubbleEl.querySelector('.msg-tail');
+  if (stableEl && tailEl) {
+    stableEl.innerHTML = formatText(assistantText || '');
+    tailEl.innerHTML = '';
+    _streamStableCache.set(bubbleEl, { len: (assistantText || '').length });
+  }
+  typesetMath(bubbleEl);
+}
+
+
 
 function _streamStoredText(thinkingText, assistantText) {
   return (thinkingText ? `<thinking>\n${thinkingText}\n</thinking>\n\n` : '') + (assistantText || '');
@@ -2819,11 +2888,11 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
           else if (ev.type === 'content_block_delta') {
             if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
               thinkingText += ev.delta.thinking || '';
-              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
             } else if (ev.delta?.type === 'text_delta') {
               assistantText += ev.delta.text;
-              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
               scrollToBottom();
             }
@@ -2831,8 +2900,8 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         } catch {}
       }
     }
+    _finalizeStreamingBubble(aiEl.querySelector('.bubble'), assistantText);
     if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
-    typesetMath();
 
   } else {
     const endpoint = getProviderEndpoint(provider);
@@ -2896,12 +2965,12 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
           if (isGlm) {
             // GLM: render live bubble with thinking block + assistant text
             if (reasoningDelta || delta) {
-              aiEl.querySelector('.bubble').innerHTML = _renderThinkingBubble(thinkingText, assistantText);
+              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
               scrollToBottom();
             }
           } else if (delta) {
-            aiEl.querySelector('.bubble').innerHTML = formatText(assistantText);
+            renderStreamingBubble(aiEl.querySelector('.bubble'), '', assistantText);
             _rememberStreamSnapshot(assistantText, usageData);
             scrollToBottom();
           }
@@ -2913,10 +2982,10 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         } catch {}
       }
     }
+    _finalizeStreamingBubble(aiEl.querySelector('.bubble'), assistantText);
     if (isGlm && thinkingText) {
       assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
     }
-    typesetMath();
   }
 
   _finishLiveStreamUI();
@@ -4132,8 +4201,25 @@ function wireCodeCopyButtons(container) {
 }
 
 // ── Math ──────────────────────────────────────────────────────────
-function typesetMath() {
-  if(window.MathJax&&MathJax.typesetPromise){MathJax.typesetPromise([document.getElementById('messages')]).catch(()=>{});}
+function typesetMath(el) {
+  const target = el || document.getElementById('messages');
+  if (window.MathJax && MathJax.typesetPromise) {
+    MathJax.typesetPromise([target]).catch(err => console.error('[MathJax typeset error]', err));
+  }
+}
+
+// Throttled variant: used during streaming so LaTeX renders progressively
+// instead of only once at the very end. Scoped to a single element (the
+// currently streaming bubble) to avoid re-scanning the whole chat on every call.
+let _mjThrottle = { timer: null, last: 0 };
+function typesetMathThrottled(el, delay = 400) {
+  clearTimeout(_mjThrottle.timer);
+  const now = Date.now();
+  const wait = Math.max(0, delay - (now - _mjThrottle.last));
+  _mjThrottle.timer = setTimeout(() => {
+    _mjThrottle.last = Date.now();
+    typesetMath(el);
+  }, wait);
 }
 
 // ── PDF Helpers ───────────────────────────────────────────────────
@@ -5259,10 +5345,14 @@ function printSingleBubble() {
       window.MathJax = {
         tex: { inlineMath:[['$','$'],['\\\\(','\\\\)']], displayMath:[['$$','$$'],['\\\\[','\\\\]']], processEscapes:true },
         options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
+        chtml: {
+          fontURL: '${new URL('_render/newcm-font/chtml/woff2', document.baseURI).href}',
+          dynamicPrefix: '${new URL('_render/newcm-font/chtml/dynamic', document.baseURI).href}'
+        },
         startup: { typeset: true },
       };
     <\/script>
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js" crossorigin="anonymous"><\/script>
+    <script src="${new URL('_render/latex/tex-chtml.js', document.baseURI).href}"><\/script>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
       body { font-family: Georgia, 'Times New Roman', serif; max-width: 740px; margin: 40px auto; color: #111; font-size: 12pt; line-height: 1.65; }

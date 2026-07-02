@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <link rel="icon" href="data:,">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-    style-src   'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+    script-src  'self' 'unsafe-inline';
+    style-src   'self' 'unsafe-inline';
     connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
     img-src     'self' data: blob:;
-    font-src    'self' https://cdn.jsdelivr.net;
+    font-src    'self';
     worker-src  blob:;
     frame-src   'none';
     object-src  'none';
@@ -19,49 +20,34 @@
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.14</title>
+  <title>AI Chat 2.15</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
-    window.MathJax = {
-      tex: { inlineMath:[['$','$'],['\\(','\\)']], displayMath:[['$$','$$'],['\\[','\\]']], processEscapes:true },
-      options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
-      startup: { typeset:false },
-    };
+	window.MathJax = {
+	  tex: { inlineMath:[['$','$'],['\\(','\\)']], displayMath:[['$$','$$'],['\\[','\\]']], processEscapes:true },
+	  options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
+	  chtml: {
+		fontURL: new URL('_render/newcm-font/chtml/woff2', document.baseURI).href,
+		dynamicPrefix: new URL('_render/newcm-font/chtml/dynamic', document.baseURI).href
+	  },
+	  startup: { typeset:false },
+	};
   </script>
-  <!--
-    LOCAL DEPENDENCIES — Please download these files once and place them
-    next to kiconnect.html (no CDN, no tracking):
+  <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
+  <!-- MathJax 4.1.2 (LaTeX rendering) -->
+  <script src="_render/latex/tex-chtml.js"></script>
+  
+  <!-- marked.js 18.0.5 (Markdown rendering) -->
+  <script src="_render/marked.umd.js"></script>
 
-    MathJax (LaTeX rendering):
-      curl -L "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" -o tex-chtml.js
+  <!-- DOMPurify 3.4.11 (HTML sanitizing) -->
+  <script src="_render/purify.js"></script>
 
-    PDF.js (PDF processing):
-      curl -L "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js" -o pdf.min.js
-      curl -L "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js" -o pdf.worker.min.js
-
-    DOMPurify (XSS protection):
-      curl -L "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" -o purify.min.js
-
-    Or npm: npm install mathjax pdfjs-dist dompurify
-  -->
-  <!-- MathJax 3.2.2 via CDN (fonts are loaded automatically) -->
-  <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js" async
-          crossorigin="anonymous"></script>
-
-  <!-- marked.js 12.0.0 via CDN – Markdown rendering -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"
-          crossorigin="anonymous"></script>
-
-  <!-- DOMPurify 3.2.4 via CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"
-          crossorigin="anonymous"></script>
-
-  <!-- PDF.js 3.11.174 via CDN (pdf.min.js + pdf.worker.min.js must have exactly the same version!) -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"
-        crossorigin="anonymous"></script>
+  <!-- PDF.js local (pdf.js + pdf.worker.js must have exactly the same version) -->
+  <script src="_render/pdf.js"></script>
   <script>
     if (typeof pdfjsLib !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
       window._pdfjsLib = pdfjsLib;
     }
   </script>

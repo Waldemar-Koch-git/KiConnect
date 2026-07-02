@@ -307,7 +307,7 @@ SECURITY_HEADERS = {
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     'Content-Security-Policy': (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self' https://api.anthropic.com https://api.openai.com "
         "https://chat.kiconnect.nrw https://openrouter.ai "
@@ -323,7 +323,7 @@ SECURITY_HEADERS = {
         "https://searx.tiekoetter.com https://search.sapti.me https://searx.prvcy.eu "
         "https://searx.fmac.xyz https://search.ononoki.org; "
         "img-src 'self' data: blob:; "
-        "font-src 'self' https://cdn.jsdelivr.net; "
+        "font-src 'self'; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
     ),
     'Permissions-Policy': (

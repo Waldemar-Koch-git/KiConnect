@@ -40,6 +40,8 @@ call :download "comm\kiconnect-proxy.py"
 call :download "comm\kiconnect-voice.js"
 call :download "update.bat"
 
+echo.
+call :ensure_render
 
 echo.
 echo  [OK] Update completed.
@@ -68,6 +70,65 @@ REM ============================================================
     ) else (
         echo  [ OK ] %REMOTE_FILE%
     )
+    goto :eof
+
+
+REM ============================================================
+REM  Helper function: Ensure "comm\_render" exists and is filled
+REM  - If folder is missing or empty:
+REM      1) create it if missing
+REM      2) download _render.zip if not already present
+REM      3) extract it into comm\_render
+REM  - If folder already exists and contains files: do nothing
+REM ============================================================
+:ensure_render
+    set RENDER_DIR=%~dp0comm\_render
+    set RENDER_ZIP=%~dp0comm\_render.zip
+    set RENDER_ZIP_URL=%BASE_URL%/comm/_render.zip
+
+    REM -- Create folder if missing
+    if not exist "%RENDER_DIR%" (
+        echo  [INFO] "_render" folder not found - creating...
+        mkdir "%RENDER_DIR%"
+    )
+
+    REM -- Check if folder is empty (dir /a /b lists any entry, files or subfolders)
+    set RENDER_EMPTY=1
+    for /f %%A in ('dir /a /b "%RENDER_DIR%" 2^>nul') do (
+        set RENDER_EMPTY=0
+        goto :render_check_done
+    )
+    :render_check_done
+
+    if "%RENDER_EMPTY%"=="0" (
+        echo  [ OK ] comm\_render already present - skipping download.
+        goto :eof
+    )
+
+    echo  [INFO] comm\_render is empty - fetching _render.zip...
+
+    REM -- Download zip only if not already present locally
+    if not exist "%RENDER_ZIP%" (
+        curl --silent --fail --location --output "%RENDER_ZIP%" "%RENDER_ZIP_URL%"
+        if errorlevel 1 (
+            echo  [ !! ] Could not download: comm\_render.zip
+            goto :eof
+        ) else (
+            echo  [ OK ] comm\_render.zip downloaded.
+        )
+    ) else (
+        echo  [ OK ] comm\_render.zip already exists locally - using it.
+    )
+
+    REM -- Extract zip into comm\_render using PowerShell
+    echo  [INFO] Extracting _render.zip...
+    powershell -NoProfile -Command "Expand-Archive -LiteralPath '%RENDER_ZIP%' -DestinationPath '%RENDER_DIR%' -Force"
+    if errorlevel 1 (
+        echo  [ !! ] Extraction failed.
+        goto :eof
+    )
+
+    echo  [ OK ] comm\_render extracted successfully.
     goto :eof
 
 
