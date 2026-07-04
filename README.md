@@ -7,7 +7,19 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 ![Preview](./images_/preview.jpg)
 
 ---
-
+## Multilingual interface 
+  - English (en)
+  - German (de)
+  - French (fr)
+  - Spanish (es)
+  - Italian (it)
+  - Turkish (tr)
+  - Russian (ru)
+  - Greek (el)
+  - Simplified Chinese (zh)
+  - Arabic (ar)
+  - (Indian) [ Hindi + Tamil + Bengali + Punjabi + Urdu ]
+  
 ## What makes Ki-Connect different
 
 - **Your data stays with you.** Chats, settings, and API keys are stored on your own computer, not with Anthropic, OpenAI, or any other provider.
