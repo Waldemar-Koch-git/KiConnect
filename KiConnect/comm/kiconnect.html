@@ -14,13 +14,13 @@
     img-src     'self' data: blob:;
     font-src    'self';
     worker-src  blob:;
-    frame-src   'none';
-    object-src  'none';
+    frame-src   'self';
+    object-src  'self';
     base-uri    'self';
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.15</title>
+  <title>AI Chat 2.16</title>
   <link rel="stylesheet" href="kiconnect.css">
   <script>
 	window.MathJax = {
@@ -353,7 +353,15 @@
     </div>
   </div>
 
-  <button class="save-btn" id="saveSettingsBtn" data-i18n="settings.saveBtn">💾 Save &amp; load models</button>
+  <!-- 5. Math rendering (LaTeX / MathJax) -->
+  <hr class="divider">
+  <div class="section-header" data-i18n="tuning.mathTitle">🧮 Math rendering</div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;" data-i18n="tuning.mathDesc">
+    The LaTeX renderer has its own right-click menu (renderer, zoom, font size, …). Those settings are saved by your browser per site and can drift from the app's defaults over time.
+  </div>
+  <button class="ghost-btn" id="resetMathJaxBtn" data-i18n="tuning.mathResetBtn">🔄 Reset math rendering to default</button>
+
+  <div style="font-size:11px;color:var(--muted);margin-top:12px;text-align:center;" data-i18n="tuning.autosaveHint">✓ Changes save automatically</div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════
@@ -745,7 +753,26 @@
         <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
         <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
         <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
-        <button class="action-btn web-search-btn" id="webSearchBtn" title="" data-i18n="web.buttonTitle" data-i18n-attr="title">Web</button>
+        <div class="web-context-wrap" id="webContextWrap">
+          <button class="action-btn web-search-btn" id="webSearchBtn" title="" data-i18n="web.buttonTitle" data-i18n-attr="title">Web</button>
+          <div class="web-context-popover" id="webContextPopover" hidden>
+            <div class="web-context-row">
+              <span class="web-context-label" data-i18n="web.linksToggle">Include pasted links from the text field</span>
+              <button class="mini-toggle" id="webLinkToggle" type="button" aria-pressed="false"></button>
+            </div>
+            <div class="web-context-links" id="webDetectedLinks"></div>
+            <div class="web-context-separator"></div>
+            <div class="web-context-row">
+              <span class="web-context-label" data-i18n="web.searchToggle">Direct web search with message text</span>
+              <button class="mini-toggle" id="webSearchToggle" type="button" aria-pressed="false"></button>
+            </div>
+            <div class="web-context-row compact">
+              <span class="web-context-label" data-i18n="web.resultCount">Results per search</span>
+              <input class="web-context-range" type="range" min="3" max="30" step="1" id="webContextCount">
+              <span class="web-context-count" id="webContextCountVal">8</span>
+            </div>
+          </div>
+        </div>
         <button class="send-btn" id="sendBtn">
           <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <line x1="22" y1="2" x2="11" y2="13"/>

@@ -296,8 +296,11 @@ CORS_HEADERS = {
     ),
 }
 EXCLUDED_RESP_HEADERS = {
-    'transfer-encoding','content-encoding','content-length',
-    'connection','server','x-powered-by','set-cookie','location',
+    # Hop-by-hop headers (RFC 7230 §6.1) — must never be forwarded by a proxy;
+    # passing them through to a WSGI server violates PEP 3333 and crashes waitress.
+    'connection','keep-alive','proxy-authenticate','proxy-authorization',
+    'te','trailer','trailers','transfer-encoding','upgrade',
+    'content-encoding','content-length','server','x-powered-by','set-cookie','location',
 }
 SECURITY_HEADERS = {
     'X-Content-Type-Options': 'nosniff',
@@ -324,6 +327,7 @@ SECURITY_HEADERS = {
         "https://searx.fmac.xyz https://search.ononoki.org; "
         "img-src 'self' data: blob:; "
         "font-src 'self'; "
+        "worker-src blob:; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
     ),
     'Permissions-Policy': (

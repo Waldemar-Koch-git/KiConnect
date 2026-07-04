@@ -131,6 +131,28 @@ function retranslateBubbleButtons() {
     };
     if (keyMap[action]) btn.textContent = t(keyMap[action]);
   });
+  // retranslate personal notes in place (cheap DOM walk, no full re-render,
+  // preserves scroll position, open/closed state and any text currently being typed)
+  document.querySelectorAll('.note-holder').forEach(holder => {
+    const toggleBtn = holder.querySelector('.note-toggle-btn');
+    const noteBox    = holder.querySelector('.note-box');
+    const textarea   = holder.querySelector('.note-textarea');
+    const deleteBtn  = holder.querySelector('.note-delete-btn');
+    const headerLbl  = holder.querySelector('.note-box-header span');
+    const preview    = holder.querySelector('.note-render');
+    const printCopy  = holder.querySelector('.note-print');
+    if (!toggleBtn) return;
+    const hasNote = toggleBtn.classList.contains('has-note');
+    const isOpen  = !!(noteBox && noteBox.style.display !== 'none');
+    toggleBtn.innerHTML = hasNote
+      ? `🗒️ ${escHtml(t('js.noteLabel'))} <span class="note-caret">${isOpen ? '▴' : '▾'}</span>`
+      : `<span class="note-plus">+</span> ${escHtml(t('js.noteAdd'))}`;
+    if (headerLbl) headerLbl.textContent = '🗒️ ' + t('js.noteLabel');
+    if (deleteBtn) deleteBtn.title = t('js.noteDelete');
+    if (textarea)  textarea.placeholder = t('js.notePlaceholder');
+    if (preview)   preview.title = t('js.noteEditHint');
+    if (printCopy) printCopy.dataset.label = t('js.noteLabel');
+  });
 }
 function retranslateSuggestionChips() {
   const suggestions = [
@@ -345,7 +367,7 @@ const DEFAULT_CONFIG = {
   activeProfileId: null, userModelMaxOverrides: {}, chatMaxWidth: 880,
   thinkingEnabled: false, thinkingIntensity: 2, thinkingBudget: 8000,
   webSearchMode: 'manual', webSearchEngine: 'free', webSearchApiKey: '', webSearchResultCount: 8,
-  webSearchEnabled: false,
+  webSearchEnabled: false, webLinkEnabled: false,
 };
 function freshConfig() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
 let config = freshConfig();
@@ -365,6 +387,8 @@ let draggedChatId   = null;
 let draggedFolderId = null;   // NEW: folder drag state
 let sidebarCollapsed = false;
 let webSearchCache = new Map();
+let selectedLinkUrls = new Set();
+let ignoredLinkUrls = new Set();
 const WEB_SEARCH_RESULT_MAX = 30;
 // Multi-select state
 let _selectedChatIds = new Set();
@@ -807,6 +831,7 @@ async function load() {
   if (!['manual','auto','always','off'].includes(config.webSearchMode)) config.webSearchMode = 'manual';
   if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex'].includes(config.webSearchEngine)) config.webSearchEngine = 'free';
   config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
+  config.webLinkEnabled = !!config.webLinkEnabled;
   try {
     const rawProviders = await loadKey('providers', []);
     providers = await Promise.all(rawProviders.map(decryptProvider));
@@ -991,14 +1016,16 @@ function renderProviderList() {
   providers.forEach(p => {
     const ptype = PROVIDER_TYPES[p.type] || {};
     const st = providerStatus[p.id];
+    const enabled = p.enabled !== false;
     let badgeCls, badgeTxt;
-    if (!p.apiKey)        { badgeCls = 'warn'; badgeTxt = t('js.noKey'); }
-    else if (st === 'ok') { badgeCls = 'ok';   badgeTxt = t('js.keyOk'); }
+    if (!enabled)          { badgeCls = '';     badgeTxt = t('js.providerDisabled'); }
+    else if (!p.apiKey)    { badgeCls = 'warn'; badgeTxt = t('js.noKey'); }
+    else if (st === 'ok')  { badgeCls = 'ok';   badgeTxt = t('js.keyOk'); }
     else if (st === 'error') { badgeCls = 'warn'; badgeTxt = t('js.keyError'); }
-    else                  { badgeCls = '';     badgeTxt = t('js.keyPending'); }
+    else                   { badgeCls = '';     badgeTxt = t('js.keyPending'); }
 
     const item = document.createElement('div');
-    item.className = 'provider-item';
+    item.className = 'provider-item' + (enabled ? '' : ' disabled');
     const info = document.createElement('div');
     info.className = 'provider-item-info';
     const nameEl = document.createElement('div');
@@ -1011,6 +1038,11 @@ function renderProviderList() {
     const badge = document.createElement('span');
     badge.className = 'provider-badge ' + badgeCls;
     badge.textContent = badgeTxt;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'provider-toggle' + (enabled ? ' on' : '');
+    toggle.title = enabled ? t('js.disableProvider') : t('js.enableProvider');
+    toggle.addEventListener('click', (e) => { e.stopPropagation(); toggleProviderEnabled(p.id); });
     const actions = document.createElement('div');
     actions.className = 'provider-item-actions';
     const editBtn = document.createElement('button');
@@ -1022,9 +1054,17 @@ function renderProviderList() {
     delBtn.dataset.id = p.id;
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteProvider(delBtn.dataset.id); });
     actions.appendChild(editBtn); actions.appendChild(delBtn);
-    item.appendChild(info); item.appendChild(badge); item.appendChild(actions);
+    item.appendChild(info); item.appendChild(badge); item.appendChild(toggle); item.appendChild(actions);
     list.appendChild(item);
   });
+}
+
+// Toggling a provider off skips it in fetchModels() and blocks sending with its models,
+// without deleting the stored API key/config.
+function toggleProviderEnabled(id) {
+  const p = providers.find(x => x.id === id); if (!p) return;
+  p.enabled = p.enabled === false ? true : false;
+  save(); renderProviderList(); fetchModels();
 }
 
 function startNewProvider() {
@@ -1301,30 +1341,14 @@ function syncSettingsPanel() {
   updateActiveProviderInfo(); updateModelMaxInfo();
 }
 
-function saveSettings() {
-  config.temperature  = parseFloat(document.getElementById('temperature').value);
-  config.systemPrompt = document.getElementById('systemPrompt').value;
-  const sel = document.getElementById('modelInput').value;
-  if (sel) config.model = sel;
-  const p = activeProfile();
-  if (p) { p.systemPrompt = config.systemPrompt; p.temperature = config.temperature; }
-  // Save image size limit
-  const imgSizeEl = document.getElementById('maxImgSizeInput');
-  if (imgSizeEl) {
-    const kb = parseInt(imgSizeEl.value);
-    if (kb >= 100) setMaxImageStorageBytes(kb * 1024);
-  }
-  const webModeEl = document.getElementById('webSearchMode');
-  const webEngineEl = document.getElementById('webSearchEngine');
-  const webKeyEl = document.getElementById('webSearchApiKey');
-  const webCountEl = document.getElementById('webSearchCount');
-  if (webModeEl) config.webSearchMode = webModeEl.value || 'manual';
-  if (webEngineEl) config.webSearchEngine = webEngineEl.value || 'free';
-  if (webKeyEl) config.webSearchApiKey = webKeyEl.value.trim();
-  if (webCountEl) config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(webCountEl.value) || 8));
-  if (config.webSearchMode === 'off') config.webSearchEnabled = false;
-  updateWebSearchButton();
-  save(); fetchModels(); closePanels(); toast(t('js.settingsSaved'));
+// Tuning panel now auto-saves every field as you change it, so the
+// old "Save & load models" button is gone. Text/number/range fields debounce (500ms
+// after the last change) so we don't hammer storage on every keystroke; selects/buttons
+// save right away since a click is already a discrete, deliberate action.
+let _tuningSaveTimer = null;
+function scheduleTuningSave() {
+  clearTimeout(_tuningSaveTimer);
+  _tuningSaveTimer = setTimeout(() => save(), 500);
 }
 function applyChatWidth(val) {
   val = parseInt(val);
@@ -1343,6 +1367,7 @@ async function fetchModels() {
   if (!providers.length) { setStatus('yellow'); return; }
   let allGroups = [], anyOk = false, anyError = false;
   for (const provider of providers) {
+    if (provider.enabled === false) { providerStatus[provider.id] = 'disabled'; continue; }
     if (!provider.apiKey) { providerStatus[provider.id] = 'nokey'; continue; }
     const groupModels = []; let provOk = false;
 
@@ -2090,8 +2115,7 @@ function buildChatItem(c) {
   return div;
 }
 
-// ── Message Rendering ─────────────────────────────────────────────
-// BEGIN MODIFIED — Tree-branch helpers ─────────────────────────────
+// ── Message Rendering: Tree-branch helpers ──────────────────────────
 
 /**
  * getActivePath: Returns the flat message list for the currently active branch.
@@ -2137,7 +2161,6 @@ function getSiblingNodeAt(chat, pathIdx) {
   return getActivePath(chat)[pathIdx] || null;
 }
 
-// END MODIFIED — Tree-branch helpers ───────────────────────────────
 
 // ── Public API for external modules (e.g. kiconnect-voice.js) ────────
 // The voice module (and any other add-on) must NEVER access chat.messages[idx]
@@ -2148,7 +2171,7 @@ window.kicGetMsgByIdx    = (idx) => { const path = window.kicGetActivePath(); co
 window.kicCurrentChat    = () => currentChat();
 // END public API ──────────────────────────────────────────────────────
 
-// BEGIN MODIFIED — renderMessages uses active branch path (tree-aware)
+// renderMessages uses active branch path (tree-aware)
 function renderMessages(messages, _unused) {
   const chat = currentChat();
   const container = document.getElementById('messages');
@@ -2166,7 +2189,6 @@ function renderMessages(messages, _unused) {
   typesetMath();
   updateChatTokenTotal();
 }
-// END MODIFIED
 
 function buildMsgEl(msg, idx) {
   const isUser = msg.role === 'user';
@@ -2196,7 +2218,7 @@ function buildMsgEl(msg, idx) {
   const wrap = document.createElement('div');
   wrap.className = 'bubble-wrap';
 
-  // BEGIN MODIFIED — sibling navigator (< 1/3 >) for AI messages with variants
+  // sibling navigator (< 1/3 >) for AI messages with variants
   if (!isUser && msg._siblings && msg._siblings.length > 1) {
     const nav = document.createElement('div');
     nav.className = 'sibling-nav';
@@ -2224,7 +2246,6 @@ function buildMsgEl(msg, idx) {
     nav.appendChild(btnNext);
     wrap.appendChild(nav);
   }
-  // END MODIFIED
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
@@ -2309,6 +2330,13 @@ function buildMsgEl(msg, idx) {
   actDiv.appendChild(makeActBtn(t('js.branch'),     '', branchFromHere, 'branch'));
   if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate, 'regenerate'));
   actDiv.appendChild(makeActBtn('🖨️',               '', openPrintSingleOverlay, 'print'));
+  // speaker moved into the shared bubble-actions row (same hover group as copy/edit/etc.)
+  if (!isUser) {
+    const vc = document.createElement('div');
+    vc.className = 'bubble-voice-controls';
+    vc.innerHTML = '<button class="bubble-voice-btn" type="button" title="Read aloud">🔊</button>';
+    actDiv.appendChild(vc);
+  }
   actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
 
   if (!isUser && msg._usage) {
@@ -2317,18 +2345,163 @@ function buildMsgEl(msg, idx) {
   } else {
     wrap.appendChild(bubble); wrap.appendChild(actDiv);
   }
-  if (!isUser) {
-    const vc = document.createElement('div');
-    vc.className = 'bubble-voice-controls';
-    vc.innerHTML = '<button class="bubble-voice-btn" title="Read aloud">🔊</button>';
-    wrap.appendChild(vc);
-  }
+
+  // Personal note per bubble (account-specific, encrypted with the rest of the chat)
+  wrap.appendChild(buildNoteSection(msg));
+
   row.appendChild(avatarCol); row.appendChild(wrap);
 
   row.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
     btn.addEventListener('click', () => copyCodeFromBtn(btn));
   });
   return row;
+}
+
+// Personal per-bubble notes (account-specific)
+// A private note attached to a single message. Stored directly on the message
+// object as msg._note / msg._noteOpen, so it rides along with the normal
+// chat-save cycle (encrypted, per-account, per-device via the server store).
+// Never sent to any AI provider — these are custom fields the API request
+// builder never reads.
+const _noteSaveTimers = new WeakMap();
+
+function buildNoteSection(msg) {
+  const holder = document.createElement('div');
+  holder.className = 'note-holder';
+
+  const noteToggleBtn = document.createElement('button');
+  noteToggleBtn.type = 'button';
+  noteToggleBtn.className = 'note-toggle-btn';
+
+  const noteBox = document.createElement('div');
+  noteBox.className = 'note-box';
+
+  const noteHeader = document.createElement('div');
+  noteHeader.className = 'note-box-header';
+  const noteHeaderLabel = document.createElement('span');
+  noteHeaderLabel.textContent = '🗒️ ' + t('js.noteLabel');
+  const noteDeleteBtn = document.createElement('button');
+  noteDeleteBtn.type = 'button';
+  noteDeleteBtn.className = 'note-delete-btn';
+  noteDeleteBtn.title = t('js.noteDelete');
+  noteDeleteBtn.textContent = '✕';
+  noteHeader.appendChild(noteHeaderLabel);
+  noteHeader.appendChild(noteDeleteBtn);
+
+  const noteTextarea = document.createElement('textarea');
+  noteTextarea.className = 'note-textarea';
+  noteTextarea.placeholder = t('js.notePlaceholder');
+  noteTextarea.value = msg._note || '';
+  noteTextarea.rows = 2;
+
+  // Rendered markdown preview, shown instead of the textarea when not editing (Obsidian-style)
+  const notePreview = document.createElement('div');
+  notePreview.className = 'note-render';
+  notePreview.title = t('js.noteEditHint');
+
+  // Always-rendered copy used only for printing, so a collapsed note still prints its content
+  const notePrint = document.createElement('div');
+  notePrint.className = 'note-print';
+  notePrint.dataset.label = t('js.noteLabel');
+
+  noteBox.appendChild(noteHeader);
+  noteBox.appendChild(noteTextarea);
+  noteBox.appendChild(notePreview);
+  holder.appendChild(notePrint);
+
+  function autoGrow() {
+    noteTextarea.style.height = 'auto';
+    noteTextarea.style.height = noteTextarea.scrollHeight + 'px';
+  }
+
+  function refreshToggleLabel() {
+    const hasNote = !!(msg._note && msg._note.trim());
+    const isOpen = !!msg._noteOpen;
+    noteToggleBtn.classList.toggle('has-note', hasNote);
+    holder.classList.toggle('has-note', hasNote);
+    holder.classList.toggle('note-open', isOpen);
+    noteToggleBtn.innerHTML = hasNote
+      ? `🗒️ ${escHtml(t('js.noteLabel'))} <span class="note-caret">${isOpen ? '▴' : '▾'}</span>`
+      : `<span class="note-plus">+</span> ${escHtml(t('js.noteAdd'))}`;
+  }
+
+  // Preview mode renders markdown and is read-only; edit mode shows the raw-text textarea.
+  // Empty notes always start in edit mode since there is nothing to preview yet.
+  function showPreview() {
+    const hasNote = !!(msg._note && msg._note.trim());
+    if (!hasNote) { showEdit(); return; }
+    notePreview.innerHTML = formatText(msg._note);
+    notePreview.style.display = 'block';
+    noteTextarea.style.display = 'none';
+    typesetMath(notePreview);
+  }
+
+  function showEdit() {
+    notePreview.style.display = 'none';
+    noteTextarea.style.display = 'block';
+    autoGrow();
+    noteTextarea.focus();
+  }
+
+  function refreshPrintCopy() {
+    const hasNote = !!(msg._note && msg._note.trim());
+    notePrint.innerHTML = hasNote ? formatText(msg._note) : '';
+  }
+
+  function setOpen(open) {
+    msg._noteOpen = open;
+    noteBox.style.display = open ? 'block' : 'none';
+    if (open) showPreview();
+    refreshToggleLabel();
+  }
+
+  noteToggleBtn.addEventListener('click', () => {
+    setOpen(!msg._noteOpen);
+    save();
+  });
+
+  notePreview.addEventListener('click', showEdit);
+
+  noteTextarea.addEventListener('input', () => {
+    msg._note = noteTextarea.value;
+    autoGrow();
+    const hasNote = !!noteTextarea.value.trim();
+    noteToggleBtn.classList.toggle('has-note', hasNote);
+    holder.classList.toggle('has-note', hasNote);
+    refreshPrintCopy();
+    clearTimeout(_noteSaveTimers.get(msg));
+    _noteSaveTimers.set(msg, setTimeout(() => save(), 500));
+  });
+  noteTextarea.addEventListener('blur', () => {
+    clearTimeout(_noteSaveTimers.get(msg));
+    save();
+    showPreview();
+    // Defensive re-assert: if something else re-rendered the message list
+    // right around this blur (e.g. a concurrent save/stream update touching
+    // the same message), make sure the preview still wins on the next frame
+    // instead of leaving the raw textarea visible until the next full render.
+    requestAnimationFrame(() => {
+      if (document.body.contains(notePreview) && msg._noteOpen) showPreview();
+    });
+  });
+
+  noteDeleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    msg._note = '';
+    noteTextarea.value = '';
+    refreshPrintCopy();
+    setOpen(false);
+    save();
+  });
+
+  noteBox.style.display = msg._noteOpen ? 'block' : 'none';
+  refreshToggleLabel();
+  refreshPrintCopy();
+
+  holder.appendChild(noteToggleBtn);
+  holder.appendChild(noteBox);
+  if (msg._noteOpen) showPreview();
+  return holder;
 }
 
 // ── Simple image lightbox ─────────────────────────────────────────
@@ -2458,7 +2631,7 @@ function startEditBubble(idx) {
   else if (Array.isArray(msg.content))
     text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
 
-  // BEGIN MODIFIED — Bug 3 fix: derive pdfMode from structured storage types (pdf_base64 /
+  // derive pdfMode from structured storage types (pdf_base64 /
   // pdf_text) instead of fragile i18n-string matching. Language-independent.
   _editAttachments = (msg._files || []).map(name => {
     const isImg = /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
@@ -2471,7 +2644,6 @@ function startEditBubble(idx) {
     }
     return { type: 'pdf-b64', name, _storedOnly: true, pdfMode };
   });
-  // END MODIFIED
 
   const row = getBubbleRow(idx); if (!row) return;
   const wrap = row.querySelector('.bubble-wrap');
@@ -2549,7 +2721,7 @@ function confirmEditBubble() {
   if (newText) newContent.push({ type: 'text', text: newText });
   const newFileNames = [];
 
-  // BEGIN MODIFIED — Bug 2+3 fix: restore _storedOnly file content by typed lookup on
+  // restore _storedOnly file content by typed lookup on
   // msg.content (pdf_base64, pdf_text) — language-independent, no fragile regex needed.
   _editAttachments.forEach(a => {
     newFileNames.push(a.name);
@@ -2587,7 +2759,6 @@ function confirmEditBubble() {
       newContent.push({ type: 'text', text: tf('js.fileContent',{name:a.name}) + '\n' + a.content + '\n' + t('js.fileEnd') });
     }
   });
-  // END MODIFIED
 
   msg.content = newContent.length === 1 && newContent[0].type === 'text' ? newContent[0].text : newContent;
   if (newFileNames.length) msg._files = newFileNames; else delete msg._files;
@@ -2624,7 +2795,7 @@ function handleEditImageAttach(e) {
   reader.readAsDataURL(file);
 }
 
-// BEGIN MODIFIED — Navigate between sibling variants; each has its own tail (sub-tree)
+// Navigate between sibling variants; each has its own tail (sub-tree)
 function navigateSibling(idx, delta) {
   const chat = currentChat(); if (!chat) return;
   const path = getActivePath(chat);
@@ -2644,7 +2815,6 @@ function navigateSibling(idx, delta) {
   save();
   renderMessages(chat.messages); // getActivePath will now follow new _siblingIdx
 }
-// END MODIFIED
 
 function branchFromHere(idx) {
   idx=safeIdx(idx); if(idx===null) return;
@@ -2662,9 +2832,9 @@ function branchFromHere(idx) {
   toast(tf('js.branchFrom', {n: idx+1}));
 }
 
-// ── BEGIN MODIFIED: Shared AI-Streaming-Helpers ───────────────────
+// ── Shared AI-Streaming-Helpers ──
 // _toAnthropicContent: Converts internal content array to Anthropic wire format.
-// BEGIN MODIFIED — handles pdf_text (text-mode PDF, language-independent storage type)
+// handles pdf_text (text-mode PDF, language-independent storage type)
 function _toAnthropicContent(content) {
   if (!Array.isArray(content)) return content;
   return content.map(p => {
@@ -2683,11 +2853,9 @@ function _toAnthropicContent(content) {
     return p;
   });
 }
-// END MODIFIED
 
 // _toOpenAIContent: Expands internal storage types (pdf_text, pdf_base64) to plain text/
 // image_url for OpenAI-compat APIs that don't understand these internal block types.
-// BEGIN MODIFIED
 function _toOpenAIContent(content) {
   if (!Array.isArray(content)) return content;
   return content.map(p => {
@@ -2700,7 +2868,6 @@ function _toOpenAIContent(content) {
     return p;
   });
 }
-// END MODIFIED
 
 // _applyPromptCache: Marks the second-to-last message for Anthropic prompt caching.
 function _applyPromptCache(msgs) {
@@ -2908,9 +3075,8 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     const { modelId } = splitModelId(config.model);
     const apiMsgs = [];
     if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
-    // BEGIN MODIFIED: messages are already expanded by caller (_toOpenAIContent) — pass through
+    // messages are already expanded by caller (_toOpenAIContent) — pass through
     messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
-    // END MODIFIED
     const reqBody = { model: modelId, messages: apiMsgs, stream: true };
     const isOSeries = /^o\d/.test(modelId);
     if (isOSeries) {
@@ -2996,7 +3162,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
  * _attachAIActions: Appends action buttons and token badge to the last AI bubble.
  * Shared post-stream logic for both sendMessageCore and rerunFromUserMsg.
  */
-// BEGIN MODIFIED — _attachAIActions: tree-aware, writes into active sibling tail
+// _attachAIActions: tree-aware, writes into active sibling tail
 function _attachAIActions(chat, assistantText, usageData) {
   if (chat._pendingRegenMsg) {
     // Regeneration: push new sibling with empty tail onto the branch node
@@ -3021,10 +3187,8 @@ function _attachAIActions(chat, assistantText, usageData) {
   updateChatTokenTotal();
   save();
 }
-// END MODIFIED
-// ── END MODIFIED: Shared AI-Streaming-Helpers ─────────────────────
 
-// BEGIN MODIFIED — Tree-branch regenerate: old tail is preserved in the current sibling
+// Tree-branch regenerate: old tail is preserved in the current sibling
 async function regenerate(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
@@ -3074,22 +3238,22 @@ function _pruneAfter(chat, targetMsg) {
   };
   pruneFrom(chat.messages);
 }
-// END MODIFIED
 
 // Fires a new AI completion using the current chat.messages state (no user-msg rebuild).
-// BEGIN MODIFIED: Uses _streamAIResponse + _attachAIActions (removed ~80 lines of duplicated stream code)
+// Uses _streamAIResponse + _attachAIActions (removed ~80 lines of duplicated stream code)
 async function rerunFromUserMsg(userMsg) {
   if(!currentChatId) newChat();
   const chat=currentChat(); if(!chat) return;
   const provider=providerForModel(config.model)||providers[0];
   if(!provider||!provider.apiKey){toast(t('js.noProvider'));openProviderPanel();return;}
+  if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
   let assistantText='', usageData=null;
 
   try {
-    // BEGIN MODIFIED: build history from active path up to (including) userMsg
+    // build history from active path up to (including) userMsg
     const activePath = getActivePath(chat);
     const userMsgIdx = activePath.indexOf(userMsg);
     const histSlice  = userMsgIdx >= 0 ? activePath.slice(0, userMsgIdx + 1) : activePath;
@@ -3103,7 +3267,6 @@ async function rerunFromUserMsg(userMsg) {
       messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
         .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
     }
-    // END MODIFIED
     const result = await _streamAIResponse(messages, provider, typingId, []);
     assistantText = result.text; usageData = result.usage;
   } catch(e) {
@@ -3140,9 +3303,11 @@ function updateWebSearchButton(searching=false) {
   const mode = config.webSearchMode || 'manual';
   const active = mode === 'always' || config.webSearchEnabled;
   btn.classList.toggle('active', active && mode !== 'off');
+  btn.classList.toggle('link-active', !!config.webLinkEnabled && getSelectedReadableUrls().length > 0);
   btn.classList.toggle('searching', searching);
   btn.disabled = mode === 'off' || searching;
-  btn.textContent = searching ? '...' : 'Web';
+  btn.textContent = searching ? '...' : 'Web ▾';
+  syncWebContextPopover();
 }
 
 function toggleWebSearch() {
@@ -3156,10 +3321,71 @@ function toggleWebSearch() {
   toast(config.webSearchEnabled ? t('web.enabledToast') : t('web.disabledToast'));
 }
 
+function toggleWebContextPopover(force) {
+  const pop = document.getElementById('webContextPopover');
+  if (!pop) return;
+  pop.hidden = force === undefined ? !pop.hidden : !force;
+  if (!pop.hidden) syncWebContextPopover();
+}
+
+function setMiniToggle(btn, active) {
+  if (!btn) return;
+  btn.classList.toggle('active', !!active);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
+function syncWebContextPopover() {
+  setMiniToggle(document.getElementById('webSearchToggle'), shouldUseWebSearch(document.getElementById('messageInput')?.value || ''));
+  setMiniToggle(document.getElementById('webLinkToggle'), !!config.webLinkEnabled);
+  const count = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
+  const countEl = document.getElementById('webContextCount');
+  const countVal = document.getElementById('webContextCountVal');
+  if (countEl && `${countEl.value}` !== `${count}`) countEl.value = count;
+  if (countVal) countVal.textContent = count;
+  renderDetectedLinks();
+}
+
+function hostLabel(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+function renderDetectedLinks() {
+  const wrap = document.getElementById('webDetectedLinks');
+  const input = document.getElementById('messageInput');
+  if (!wrap || !input) return;
+  const urls = extractReadableHttpUrls(input.value);
+  selectedLinkUrls = new Set([...selectedLinkUrls].filter(url => urls.includes(url)));
+  ignoredLinkUrls = new Set([...ignoredLinkUrls].filter(url => urls.includes(url)));
+  if (config.webLinkEnabled) urls.forEach(url => {
+    if (!ignoredLinkUrls.has(url)) selectedLinkUrls.add(url);
+  });
+  wrap.innerHTML = '';
+  urls.forEach(url => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'web-link-chip';
+    chip.classList.toggle('active', selectedLinkUrls.has(url));
+    chip.title = url;
+    chip.innerHTML = `<b>${selectedLinkUrls.has(url) ? '✓' : '○'}</b><span>${escHtml(hostLabel(url))}</span>`;
+    chip.addEventListener('click', () => {
+      if (selectedLinkUrls.has(url)) {
+        selectedLinkUrls.delete(url);
+        ignoredLinkUrls.add(url);
+      } else {
+        selectedLinkUrls.add(url);
+        ignoredLinkUrls.delete(url);
+      }
+      config.webLinkEnabled = selectedLinkUrls.size > 0;
+      save();
+      updateWebSearchButton();
+    });
+    wrap.appendChild(chip);
+  });
+}
+
 function shouldAutoWebSearch(text) {
   const s = (text || '').toLowerCase();
   if (!s.trim()) return false;
-  if (extractHttpUrls(text).length) return true;
   if (/\b(zusammenfassung|zusammenfassen|quelle|quellen|summarize|summary|source|sources)\b/.test(s)) return true;
   if (/^(mach mir eine zusammenfassung|fass .* zusammen|finde|pruefe|prüfe|look up|check)\b/.test(s)) return true;
   return /\b(heute|gestern|morgen|aktuell|aktuelle|aktueller|news|neueste|letzte|letzten|wetter|kurs|preis|preise|kosten|kostet|teuer|günstig|guenstig|stand|release|version|öffnungszeit|oeffnungszeit|verfügbar|verfuegbar|202[4-9]|203\d)\b/.test(s)
@@ -3638,6 +3864,25 @@ function extractHttpUrls(text) {
   return [...new Set(matches.map(u => u.replace(/[.,;:!?]+$/g, '')))].slice(0, 3);
 }
 
+function stripQuotedAndCodeBlocks(text) {
+  let inFence = false;
+  return (text || '').split(/\r?\n/).map(line => {
+    if (/^\s*```/.test(line)) { inFence = !inFence; return ''; }
+    if (inFence || /^\s*>/.test(line)) return '';
+    return line;
+  }).join('\n');
+}
+
+function extractReadableHttpUrls(text) {
+  return extractHttpUrls(stripQuotedAndCodeBlocks(text));
+}
+
+function getSelectedReadableUrls() {
+  const input = document.getElementById('messageInput');
+  const urls = extractReadableHttpUrls(input?.value || '');
+  return urls.filter(url => selectedLinkUrls.has(url));
+}
+
 function readablePageText(doc) {
   doc.querySelectorAll('script,style,noscript,svg,nav,footer,header,form,aside').forEach(el => el.remove());
   const main = doc.querySelector('main, article, [role="main"]') || doc.body || doc;
@@ -3662,9 +3907,9 @@ async function fetchLinkedPage(url) {
   return { title: title.replace(/\s+/g, ' ').trim().slice(0, 240), url, text: text.slice(0, 12000) };
 }
 
-async function fetchLinkedPagesFromText(text) {
+async function fetchLinkedPagesFromText(text, urls = null) {
   const pages = [];
-  for (const url of extractHttpUrls(text)) {
+  for (const url of (urls || extractReadableHttpUrls(text))) {
     try {
       const page = await fetchLinkedPage(url);
       if (page.text) pages.push(page);
@@ -3708,6 +3953,7 @@ async function sendMessage() {
   const provider=providerForModel(config.model)||providers[0];
   if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
   if(!provider.apiKey){toast(t('js.noApiKey'));openProviderPanel();return;}
+  if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
   if (shouldUseWebSearch(text) && webEngineNeedsKey(config.webSearchEngine || 'free') && !(config.webSearchApiKey || '').trim()) {
     toast(t('web.noKey'));
     openSettings();
@@ -3755,7 +4001,7 @@ async function sendMessageCore(text, att) {
       else if(a.type==='pdf-b64'){
         fileNames.push(a.name);
         if(a._uploadedId){}
-        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'pdf_text',name:a.name,text:txt});} // BEGIN MODIFIED Bug 2: structured pdf_text block instead of i18n-string
+        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'pdf_text',name:a.name,text:txt});} //  Bug 2: structured pdf_text block instead of i18n-string
         else{const b64=(a.data||'').split(',')[1]||a.data;userContent.push({type:'pdf_base64',name:a.name,data:b64});}
       } else if(a.type==='text-file'){
         fileNames.push(a.name);
@@ -3772,7 +4018,11 @@ async function sendMessageCore(text, att) {
     if(userContent.length===0&&text) userContent=text;
   } else { userContent=text; }
 
-  linkedPages = await fetchLinkedPagesFromText(text);
+  const readableUrls = extractReadableHttpUrls(text);
+  const selectedReadableUrls = config.webLinkEnabled
+    ? readableUrls.filter(url => selectedLinkUrls.has(url) || selectedLinkUrls.size === 0)
+    : [];
+  linkedPages = selectedReadableUrls.length ? await fetchLinkedPagesFromText(text, selectedReadableUrls) : [];
   if (linkedPages.length) {
     userContent = buildLinkedPageAugmentedContent(userContent, linkedPages);
   }
@@ -3799,7 +4049,7 @@ async function sendMessageCore(text, att) {
   }
 
   const maxBytes=getMaxImageStorageBytes();
-  // BEGIN MODIFIED — Bug 1 fix: preserve pdf_base64 blocks and store text-mode PDFs
+  // preserve pdf_base64 blocks and store text-mode PDFs
   // as {type:'pdf_text'} with name+text, so rerun/edit can restore them language-independently.
   const webSourceChips = [
     ...(linkedPages || []).map((p, i) => ({ index:`L${i + 1}`, title:p.title || p.url, url:p.url, snippet:p.text?.slice(0, 280) || '' })),
@@ -3821,25 +4071,25 @@ async function sendMessageCore(text, att) {
     _files:fileNames.length?fileNames:undefined,
     _webSources:webSourceChips.length?webSourceChips:undefined
   };
-  // END MODIFIED
   const chat=currentChat();
-  // BEGIN MODIFIED: push into active tail (tree-aware), not always top-level chat.messages
+  // push into active tail (tree-aware), not always top-level chat.messages
   const activeContainer = getActiveContainer(chat);
   activeContainer.push(userMsgForStorage);
   if(chat.messages.length===1){chat.title='…';renderSidebar();autoGenerateChatTitle(chat,text);}
-  // END MODIFIED
 
   // Build display message: only text + images visible, files as chips
   // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
-  // BEGIN MODIFIED: also filter out pdf_text blocks (file content, shown as chips)
+  // also filter out pdf_text blocks (file content, shown as chips)
   const displayContent = Array.isArray(userContent)
     ? userContent.filter(p => !p._webSearch && ((p.type==='text' && !p.text?.startsWith('---')) || p.type==='image_url'))
     : userContent;
-  // END MODIFIED
   // Use active-path index so data-idx matches getActivePath(chat) — needed for edit/delete/copy
   const idx=getActivePath(chat).length-1;
   const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames,_webSources:webSourceChips.length?webSourceChips:undefined},idx);
   appendToMessages(msgEl);
+  selectedLinkUrls.clear();
+  ignoredLinkUrls.clear();
+  renderDetectedLinks();
   scrollToBottom();
 
   const typingId=showTyping();
@@ -3847,7 +4097,7 @@ async function sendMessageCore(text, att) {
   let assistantText='';
   let usageData=null;
 
-  // BEGIN MODIFIED: build wire-format message list, then delegate to shared _streamAIResponse
+  // build wire-format message list, then delegate to shared _streamAIResponse
   try {
     let messages;
     // Use getActivePath so the API receives the correct branch history, not the raw tree array.
@@ -3861,11 +4111,10 @@ async function sendMessageCore(text, att) {
       _applyPromptCache(messages);
     } else {
       // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
-      // BEGIN MODIFIED: expand pdf_text/pdf_base64 for OpenAI-compat too
+      // expand pdf_text/pdf_base64 for OpenAI-compat too
       const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
         .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
       messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
-      // END MODIFIED
     }
     const result=await _streamAIResponse(messages, provider, typingId, documentIds);
     assistantText=result.text; usageData=result.usage;
@@ -3879,7 +4128,6 @@ async function sendMessageCore(text, att) {
     }
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
-  // END MODIFIED
 
   if(assistantText) _attachAIActions(chat, assistantText, usageData);
   activeStreamSnapshot=null;
@@ -3893,7 +4141,7 @@ async function autoGenerateChatTitle(chat, userText) {
   if(!chat) return;
   try {
     const provider = providerForModel(config.model) || providers[0];
-    if(!provider || !provider.apiKey) return;
+    if(!provider || !provider.apiKey || provider.enabled===false) return;
 
     const snippet = (userText||'').slice(0, 500);
     if(!snippet) return;
@@ -4138,6 +4386,32 @@ function formatText(raw) {
     blocks.push(`<span class="math-inline">\\(${math}\\)</span>`);
     return PH(i);
   });
+
+  // ── Step 1b: ensure a blank line precedes list blocks ──────────
+  // CommonMark/marked (with breaks:false) only starts a list at the
+  // beginning of the text or after a blank line. Without that blank
+  // line, "-"/"*"/"1." lines typed right after a text line get pulled
+  // into the previous paragraph as literal characters instead of
+  // becoming an indented <ul>/<ol> — this is what caused notes (which
+  // are usually typed without blank lines) to render list markers as
+  // flat, non-indented text while the same markdown worked fine in the
+  // chat composer where paragraph breaks are more commonly used.
+  {
+    const isListLine = (line) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(line);
+    const lines = s.split('\n');
+    const fixed = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (isListLine(line)) {
+        const prev = fixed[fixed.length - 1];
+        if (prev !== undefined && prev.trim() !== '' && !isListLine(prev)) {
+          fixed.push('');
+        }
+      }
+      fixed.push(line);
+    }
+    s = fixed.join('\n');
+  }
 
   // ── Step 2: marked.js rendern ─────────────────────────────────
   if (typeof marked !== 'undefined') {
@@ -5008,6 +5282,17 @@ function resetSessionNow() {
   setTimeout(() => logoutNow(), 1200);
 }
 
+// Reset MathJax's own right-click menu settings (renderer, zoom, font
+// size, accessibility options, …) back to the app defaults. MathJax stores these itself,
+// separately from anything KiConnect controls, under a fixed localStorage key that is the
+// same across MathJax versions. A reload is required because the output renderer is only
+// picked up at startup.
+function resetMathJaxSettings() {
+  try { localStorage.removeItem('MathJax-Menu-Settings'); } catch (e) {}
+  toast(t('js.mathResetDone'));
+  setTimeout(() => location.reload(), 700);
+}
+
 let _countdownTimer = null;
 function startSessionCountdown() {
   if (_countdownTimer) clearInterval(_countdownTimer);
@@ -5111,7 +5396,6 @@ function setupEventListeners(){
   window.addEventListener('resize', () => { if (_tourActive) positionTourCard(_tourTargetEl); });
   document.getElementById('goProviderFromSettings').addEventListener('click',()=>{closePanels();openProviderPanel();});
   document.getElementById('goModelLimits').addEventListener('click',()=>{closePanels();openModelMaxPanel();});
-  document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
   document.getElementById('changePwdBtn').addEventListener('click', changeLoginPassword);
   document.getElementById('changeAccountNameBtn')?.addEventListener('click', changeAccountName);
   document.getElementById('accountNameInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') changeAccountName(); });
@@ -5123,19 +5407,52 @@ function setupEventListeners(){
   });
   document.getElementById('applySessionBtn').addEventListener('click', applySessionDuration);
   document.getElementById('resetSessionBtn').addEventListener('click', resetSessionNow);
+  document.getElementById('resetMathJaxBtn')?.addEventListener('click', resetMathJaxSettings);
   document.getElementById('logoutBtn').addEventListener('click', logoutNow);
   document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
-  document.getElementById('temperature').addEventListener('input', e=>{document.getElementById('tempVal').textContent=e.target.value;});
-  document.getElementById('chatWidthSlider').addEventListener('input', e=>applyChatWidth(e.target.value));
-  document.getElementById('webSearchCount')?.addEventListener('input', e=>{document.getElementById('webSearchCountVal').textContent=e.target.value;});
+
+  // auto-save every tuning field on change, no explicit Save button needed
+  document.getElementById('temperature').addEventListener('input', e=>{
+    document.getElementById('tempVal').textContent=e.target.value;
+    config.temperature = parseFloat(e.target.value);
+    const p = activeProfile();
+    if (p) p.temperature = config.temperature;
+    scheduleTuningSave();
+  });
+  document.getElementById('systemPrompt')?.addEventListener('input', e=>{
+    config.systemPrompt = e.target.value;
+    const p = activeProfile();
+    if (p) p.systemPrompt = config.systemPrompt;
+    scheduleTuningSave();
+  });
+  document.getElementById('modelInput')?.addEventListener('change', e=>{
+    if (e.target.value) { config.model = e.target.value; scheduleTuningSave(); }
+  });
+  document.getElementById('maxImgSizeInput')?.addEventListener('input', e=>{
+    const kb = parseInt(e.target.value);
+    if (kb >= 100) setMaxImageStorageBytes(kb * 1024);
+  });
+  document.getElementById('webSearchApiKey')?.addEventListener('input', e=>{
+    config.webSearchApiKey = e.target.value.trim();
+    scheduleTuningSave();
+  });
+  document.getElementById('chatWidthSlider').addEventListener('input', e=>{ applyChatWidth(e.target.value); scheduleTuningSave(); });
+  document.getElementById('webSearchCount')?.addEventListener('input', e=>{
+    document.getElementById('webSearchCountVal').textContent=e.target.value;
+    config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(e.target.value) || 8));
+    syncWebContextPopover();
+    scheduleTuningSave();
+  });
   document.getElementById('webSearchMode')?.addEventListener('change', e=>{
     config.webSearchMode = e.target.value || 'manual';
     if(config.webSearchMode==='off') config.webSearchEnabled=false;
     updateWebSearchButton();
+    save();
   });
   document.getElementById('webSearchEngine')?.addEventListener('change', e=>{
     config.webSearchEngine = e.target.value || 'free';
     updateWebSearchKeyUI(config.webSearchEngine);
+    save();
   });
 
   // Thinking Toggle
@@ -5195,13 +5512,40 @@ function setupEventListeners(){
   // Input
   document.getElementById('sendBtn').addEventListener('click', handleSendStop);
   document.getElementById('messageInput').addEventListener('keydown', handleKey);
-  document.getElementById('messageInput').addEventListener('input', e=>autoResize(e.target));
+  document.getElementById('messageInput').addEventListener('input', e=>{ autoResize(e.target); renderDetectedLinks(); updateWebSearchButton(); });
   document.addEventListener('click', handleExternalLinkClick);
   document.getElementById('messageInput').addEventListener('paste', handlePaste);
   document.getElementById('attachFileBtn').addEventListener('click',()=>document.getElementById('fileInput').click());
   document.getElementById('attachImageBtn').addEventListener('click',()=>document.getElementById('imageInput').click());
   document.getElementById('clearAttachBtn').addEventListener('click', clearAttachments);
-  document.getElementById('webSearchBtn')?.addEventListener('click', toggleWebSearch);
+  document.getElementById('webSearchBtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    toggleWebContextPopover();
+  });
+  document.getElementById('webContextPopover')?.addEventListener('click', e => e.stopPropagation());
+  document.getElementById('webSearchToggle')?.addEventListener('click', toggleWebSearch);
+  document.getElementById('webLinkToggle')?.addEventListener('click', () => {
+    config.webLinkEnabled = !config.webLinkEnabled;
+    if (!config.webLinkEnabled) {
+      selectedLinkUrls.clear();
+      ignoredLinkUrls.clear();
+    }
+    save();
+    updateWebSearchButton();
+    toast(tf('web.linkReadingToast', { state: config.webLinkEnabled ? t('web.on') : t('web.off') }));
+  });
+  document.getElementById('webContextCount')?.addEventListener('input', e => {
+    config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(e.target.value) || 8));
+    const settingsCount = document.getElementById('webSearchCount');
+    if (settingsCount) settingsCount.value = config.webSearchResultCount;
+    const settingsVal = document.getElementById('webSearchCountVal');
+    if (settingsVal) settingsVal.textContent = config.webSearchResultCount;
+    save();
+    syncWebContextPopover();
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest?.('#webContextWrap')) toggleWebContextPopover(false);
+  });
   document.getElementById('fileInput').addEventListener('change', handleFileAttach);
   document.getElementById('imageInput').addEventListener('change', handleImageAttach);
   // Edit-mode file inputs (hidden inputs for adding files while editing a bubble)
@@ -5334,6 +5678,7 @@ function printSingleBubble() {
 
   // Formatted HTML via formatText (same rendering as in chat)
   const formattedHtml = formatText(text);
+  const noteHtml = (msg._note && msg._note.trim()) ? formatText(msg._note) : '';
   const role = msg.role === 'user' ? 'Du' : (splitModelId(msg._model || config.model).modelId || 'KI');
   const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
   const win = window.open('', '_blank', 'width=820,height=700');
@@ -5377,6 +5722,8 @@ function printSingleBubble() {
       th, td { border: 1px solid #bbb; padding: 5px 10px; }
       th { background: #eef; }
       hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
+      .note-block { margin-top: 18px; padding: 8px 12px; background: #fff9e0; border: 1px solid #d6b23f; border-left: 3px solid #cf9a1a; border-radius: 4px; font-size: 10.5pt; }
+      .note-block .note-block-label { display: block; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #a9821f; margin-bottom: 4px; }
       @media print {
         body { margin: 20px; }
         .code-block-header { display: none !important; }
@@ -5385,6 +5732,7 @@ function printSingleBubble() {
   </head><body>
     <div class="meta"><strong>${escHtml(role)}</strong> · ${escHtml(date)}</div>
     <div class="content">${formattedHtml}</div>
+    ${noteHtml ? `<div class="note-block"><span class="note-block-label">🗒️ ${escHtml(t('js.noteLabel'))}</span>${noteHtml}</div>` : ''}
     <script>
       var _printed = false;
       function doPrint() {
