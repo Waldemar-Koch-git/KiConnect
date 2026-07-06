@@ -166,7 +166,9 @@ This manual method works on any operating system with Python installed (Windows,
    - **Google Gemini**: API key from [aistudio.google.com](https://aistudio.google.com)
    - **xAI Grok**: API key from [console.x.ai](https://console.x.ai)
    - **Groq**: API key from [console.groq.com](https://console.groq.com) – ultra-fast inference
-   - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) – including DeepSeek R1 reasoning
+   - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) – including DeepSeek 4 & reasoning
+   - **MiniMax**: Api key from [platform.minimax.io](https://platform.minimax.io/console/access)
+   - **GLM**: API key from [z.ai](https://z.ai/manage-apikey/apikey-list)
    - **Custom server**: any OpenAI-compatible API (server URL + optional API key)
 3. Select a model – live model lists from providers (brain icon = thinking-capable)
 4. Optional: create a user profile for different personas/roles
@@ -299,23 +301,22 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 
 ### Architecture
 
-```
-┌─────────────────────┐     ┌───────────────────────────┐     ┌──────────────────┐
-│   Browser           │ ←→  │  kiconnect-proxy.py       │ ←→  │  API provider    │
-│  AES-GCM-256        │     │  127.0.0.1:5000           │     │  OpenAI etc.     │
-│  (encryption        │     │  CORS proxy + storage API │     │  (HTTPS, no      │
-│   in browser)       │     │  ./datas/ (encrypted)     │     │ TLS termination) │
-│  PBKDF2 (600k)      │     │  Thread-safe, atomic I/O  │     │                  │
-│  DOMPurify (local)  │     │                           │     │                  │
-│  marked.js (local)  │     │                           │     │                  │
-│  MathJax (local)    │     │                           │     │                  │
-│  PDF.js (local)     │     │                           │     │                  │
-│  Brute-force lock   │     │                           │     │                  │
-└─────────────────────┘     └───────────────────────────┘     └──────────────────┘
-         ↑
-  [Password-protected]
-  PBKDF2 + session token
-  No plaintext in storage
+```mermaid
+flowchart LR
+    B["<b>Browser</b><br/>━━━━━━━━━━<br/>AES-GCM-256<br><i>(encryption in browser)</i><br/>PBKDF2 (600k)<br/>DOMPurify <i>(local)</i><br/>marked.js <i>(local)<br/>MathJax <i>(local)<br/>PDF.js <i>(local)<br/>Brute-Force Lock"]
+    P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O"]
+    A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i>"]
+
+    B <--> P
+    P <--> A
+
+    N["🔒 Password-protected<br/>PBKDF2 + session token<br/>No plaintext in storage"]
+    B <-.- N
+
+    style B fill:#e0f2fe,stroke:#0284c7,color:#000000
+    style P fill:#fef9c3,stroke:#ca8a04,color:#000000
+    style A fill:#dcfce7,stroke:#16a34a,color:#000000
+    style N fill:#fee2e2,stroke:#dc2626,color:#000000,stroke-dasharray: 3 3
 ```
 
 ---
