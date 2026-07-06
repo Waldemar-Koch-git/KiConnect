@@ -1,25 +1,13 @@
 # Ki-Connect
 
-Ki-Connect is a chat program that gives you access to several AI providers – for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and others. The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
+Ki-Connect is a chat program that gives you access to several AI providers – for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and  others (*[list](TECHNICAL.md#configuration)*). The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
 
 Ki-Connect supports multiple local accounts on the same installation, but it is still designed as a personal tool for one household or one trusted group of people sharing a computer – not as a multi-tenant solution for a company with many independent, mutually untrusted users.
 
 ![Preview](./images_/preview.jpg)
 
 ---
-## Multilingual interface 
-  - English (en)
-  - German (de)
-  - French (fr)
-  - Spanish (es)
-  - Italian (it)
-  - Turkish (tr)
-  - Russian (ru)
-  - Greek (el)
-  - Simplified Chinese (zh)
-  - Arabic (ar)
-  - (Indian) [ Hindi + Tamil + Bengali + Punjabi + Urdu ]
-  
+
 ## What makes Ki-Connect different
 
 - **Your data stays with you.** Chats, settings, and API keys are stored on your own computer, not with Anthropic, OpenAI, or any other provider.
@@ -29,7 +17,7 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 - **Optional web search.** If you turn it on, the AI can look things up on the internet before answering.
 - **Images and PDFs.** You can paste images or upload PDF files so the AI can read them.
 - **Speak instead of type.** There's voice input as well as a read-aloud function for replies.
-- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Hindi, Tamil, Bengali, Punjabi, and Urdu.
+- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Indian ( Hindi, Tamil, Bengali, Punjabi, Urdu).
 - **Several color themes.** From light to dark, including pure-black variants for OLED screens.
 
 ---
