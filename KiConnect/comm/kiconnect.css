@@ -985,11 +985,11 @@ header {
 
 /* ── Folder tree ─────────────────────────────────────────────────── */
 
-.folder         { margin-bottom: 4px; }
+.folder         { margin-bottom: 6px; }
 .folder-header {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 8px; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
-  font-size: 11px; font-family: 'IBM Plex Mono', monospace;
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 8px; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+  font-size: 11px; font-family: 'IBM Plex Mono', monospace; font-weight: 600;
   color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
   transition: all 0.15s; user-select: none;
 }
@@ -1001,8 +1001,12 @@ header {
 }
 .folder-header.active-folder .folder-count { opacity: 0.8; color: var(--accent); }
 .folder-header.drag-target { background: rgba(61, 126, 255, 0.12); border: 1px dashed var(--accent); }
-.folder-arrow              { font-size: 9px; transition: transform 0.2s; display: inline-block; }
+.folder-arrow {
+  font-size: 9px; transition: transform 0.2s; display: inline-block;
+  color: var(--muted); flex-shrink: 0;
+}
 .folder-arrow.open         { transform: rotate(90deg); }
+.folder-icon               { font-size: 12px; flex-shrink: 0; line-height: 1; }
 .folder-name               { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-count              { font-size: 10px; opacity: 0.5; flex-shrink: 0; }
 .folder-actions            { display: flex; gap: 2px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; }
@@ -1014,8 +1018,19 @@ header {
 }
 .folder-btn:hover        { color: var(--text); background: var(--border); }
 .folder-btn.danger:hover { color: var(--red); }
-.folder-chats            { padding-left: 6px; overflow: hidden; max-height: 9999px; transition: max-height 0.2s ease; }
+/* Chats nested inside a folder get a visible indent + a thin guide line so
+   the containment relationship (folder → its chats) reads instantly, instead
+   of folders and chats looking like the same flat level. */
+.folder-chats {
+  padding-left: 14px; margin-left: 11px; margin-top: 2px;
+  border-left: 1px solid var(--border);
+  overflow: hidden; max-height: 9999px; transition: max-height 0.2s ease;
+}
 .folder-chats.collapsed  { max-height: 0; }
+/* The "no folder" bucket is a container too, but visually quieter (dashed,
+   no folder icon) so it doesn't compete with real, user-named folders. */
+.folder.unfiled-group > .folder-header      { font-weight: 400; opacity: 0.85; }
+.folder.unfiled-group > .folder-chats       { border-left-style: dashed; }
 .folder-name-input {
   background: var(--surface2); border: 1px solid var(--accent);
   color: var(--text); font-family: 'IBM Plex Mono', monospace;
@@ -1027,8 +1042,8 @@ header {
 /* ── Chat list items ─────────────────────────────────────────────── */
 
 .chat-item {
-  padding: 7px 8px; border-radius: 7px;
-  cursor: pointer; font-size: 13px; color: var(--muted);
+  padding: 6px 8px; border-radius: 7px;
+  cursor: pointer; font-size: 12.5px; color: var(--muted);
   transition: all 0.15s; margin-bottom: 1px;
   display: flex; align-items: center; gap: 5px; position: relative;
 }
@@ -1368,7 +1383,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
   border-radius: 8px 8px 0 0; padding: 5px 12px;
   position: sticky; top: 0; z-index: 10;
 }
-.code-lang     { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); }
+.code-lang     { flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); }
 .code-copy-btn {
   background: none; border: 1px solid var(--border); color: var(--muted);
   font-family: 'IBM Plex Mono', monospace; font-size: 10px;
@@ -1376,6 +1391,14 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 .code-copy-btn:hover { color: var(--text); border-color: var(--accent); }
 .code-copy-btn.done  { color: var(--green); border-color: var(--green); }
+.code-collapse-btn {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  font-size: 11px; line-height: 1; padding: 2px 6px; margin-right: 6px;
+  border-radius: 5px; cursor: pointer; transition: all 0.15s;
+}
+.code-collapse-btn:hover { color: var(--text); border-color: var(--accent); }
+.code-block.collapsed .code-block-body { display: none; }
+.code-block.collapsed .code-block-header { border-radius: 8px; border-bottom: 1px solid var(--border); }
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface2); border: 1px solid var(--border);

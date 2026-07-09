@@ -67,8 +67,11 @@ function setLang(code) {
   localStorage.setItem('kic_lang', code);
   applyTranslations();
   if (typeof updateProfileBadge === 'function') updateProfileBadge();
+  
   retranslateBubbleButtons();
   retranslateSuggestionChips();
+  retranslateCodeBlockButtons();
+  
   if (typeof updateThinkingIntensityUI === 'function') updateThinkingIntensityUI();
   if (typeof configureThinkingSlider === 'function') {
     const { modelId } = (typeof splitModelId === 'function' && config?.model)
@@ -154,6 +157,27 @@ function retranslateBubbleButtons() {
     if (printCopy) printCopy.dataset.label = t('js.noteLabel');
   });
 }
+
+// Re-translate buttons above quoted code ``` x ``` into selected language
+function retranslateCodeBlockButtons(root = document) {
+  root.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
+    const isDone = btn.classList.contains('done');
+    btn.textContent = isDone ? t('js.copied') : t('js.codeCopy');
+  });
+
+  root.querySelectorAll('.code-collapse-btn').forEach(btn => {
+    const block = btn.closest('.code-block');
+    const collapsed = !!block?.classList.contains('collapsed');
+    const label = collapsed
+      ? (t('js.codeExpand') || 'Expand')
+      : (t('js.codeCollapse') || 'Collapse');
+
+    btn.title = label;
+    //btn.setAttribute('aria-label', label);
+  });
+}
+
+
 function retranslateSuggestionChips() {
   const suggestions = [
     { i18n: 'empty.quantum', msgKey: 'empty.quantumMsg' },
@@ -381,6 +405,15 @@ let attachments     = [];
 let isStreaming      = false;
 let abortController = null;
 let activeStreamSnapshot = null;
+
+// ── Auto-scroll behaviour ───────────────────────────────────────────
+// While a response is streaming in, the message list normally auto-scrolls
+// to the bottom on every chunk. Set this to false to keep your scroll
+// position (e.g. if you scrolled up to re-read something while a long
+// answer is still generating). This only affects the "keep pinned to
+// bottom while streaming" behaviour — sending a new message or opening a
+// chat always still scrolls to the bottom once.
+let AUTO_SCROLL_DURING_STREAM = false;
 let editingProfileId  = null;
 let editingProviderId = null;
 let draggedChatId   = null;
@@ -406,7 +439,7 @@ let _sessionPassphrase = null;
 // NO localStorage/sessionStorage -> no bypass by clearing cache.
 const _loginFailures = {}; // { accountId: { count, lockedUntil } }
 const BF_MAX_ATTEMPTS = 5;
-const BF_BASE_DELAY_MS = 30000; // 30 s nach 5 Fehlversuchen, dann exponentiell
+const BF_BASE_DELAY_MS = 30000; // 30 s after 5 failed attempts, then exponential
 
 function _recordLoginFailure(accountId) {
   if (!_loginFailures[accountId]) _loginFailures[accountId] = { count: 0, lockedUntil: 0 };
@@ -467,8 +500,8 @@ async function deriveKeyPBKDF2(passphrase, saltBytes) {
 }
 
 // == CryptoKey derived only from password + account salt ========================
-// No seed anymore in localStorage. Der PBKDF2-Salt (16 Byte, randomly,
-// per account) liegt im Account registry - er ist kein secret,
+// No seed anymore in localStorage. The PBKDF2 salt (16 bytes, randomly,
+// per account) lives in the account registry - it isn't a secret,
 // but prevents rainbow table attacks.
 // The password itself remains exclusively in RAM (_sessionPassphrase).
 async function getCryptoKey() {
@@ -481,9 +514,9 @@ async function getCryptoKey() {
     const saltBuf = crypto.getRandomValues(new Uint8Array(16));
     encSalt = btoa(String.fromCharCode(...saltBuf));
     acc.encSalt = encSalt;
-    // WICHTIG: await hier, damit der Salt garantiert persistiert ist
-    // bevor wir ihn zum Verschluesseln verwenden. Ohne await koennte
-    // ein Reload einen neuen Salt generieren -> falscher Key -> Datenverlust.
+    // IMPORTANT: await here, to guarantee the salt is persisted
+    // before we use it for encryption. Without await, a reload could
+    // generate a new salt -> wrong key -> data loss.
     await _registryPut(_accounts);
   }
   const saltBytes = Uint8Array.from(atob(encSalt), c => c.charCodeAt(0));
@@ -494,10 +527,10 @@ async function getCryptoKey() {
 
 // == Session token: F5 reload without password storage ==============
 // The password is NOT stored in sessionStorage.
-// Stattdessen: nach erfolgreichem Login wird ein mit dem CryptoKey
-// verschluesselter Token in sessionStorage abgelegt.
-// Bei F5/Reload: Token entschluesseln -> wenn OK -> weiter eingeloggt.
-// Ohne den RAM-CryptoKey (= anderer Tab, Browser-Neustart) kein Zugang.
+// Instead: after a successful login, a token encrypted with the
+// CryptoKey is stored in sessionStorage.
+// On F5/reload: decrypt token -> if OK -> still logged in.
+// Without the in-RAM CryptoKey (= different tab, browser restart) no access.
 const _SESSION_TOKEN_KEY = 'kic_st';
 
 async function _writeSessionToken() {
@@ -530,13 +563,13 @@ async function _validateSessionToken(accountId) {
 
 function setSessionPassphrase(pw) {
   _sessionPassphrase = pw || null;
-  _cryptoKey = null; // Key-Cache invalidieren
+  _cryptoKey = null; // invalidate key cache
   if (!pw) { try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch {} }
   // No password in sessionStorage anymore!
-  // _writeSessionToken() wird nach getCryptoKey() aufgerufen.
+  // _writeSessionToken() is called after getCryptoKey().
 }
 function restoreSessionPassphrase() {
-  // Prueft nur ob ein Token vorhanden ist; Validierung erfolgt async in checkLogin().
+  // Only checks whether a token is present; validation happens async in checkLogin().
   return !!sessionStorage.getItem(_SESSION_TOKEN_KEY);
 }
 
@@ -630,16 +663,16 @@ function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
 
 // ═══════════════════════════════════════════════════════════════
 // ======================================================================
-// PERSIST v5 - Server-Storage (./datas/) + localStorage-Fallback
+// PERSIST v5 - server storage (./datas/) + localStorage fallback
 // ======================================================================
-// Alle Account-Daten werden primaer auf dem lokalen Proxy-Server
-// unter ./datas/<accountId>/<key>.json gespeichert.
-// Dadurch sind sie browser-unabhaengig (Chrome, Firefox, Edge, ...).
-// Fallback auf localStorage wenn der Proxy nicht erreichbar ist.
+// All account data is primarily stored on the local proxy server
+// under ./datas/<accountId>/<key>.json.
+// This makes it browser-independent (Chrome, Firefox, Edge, ...).
+// Falls back to localStorage if the proxy is unreachable.
 // ======================================================================
 
 const _STORE_BASE = '/store';
-let _storeAvailable = true; // false wenn Server nicht reagiert
+let _storeAvailable = true; // false if the server doesn't respond
 
 async function _storeGet(accountId, key) {
   if (!_storeAvailable) return _lsGetRaw(accountId, key);
@@ -648,7 +681,7 @@ async function _storeGet(accountId, key) {
     if (!res.ok) { if (res.status === 404) return null; throw new Error(res.status); }
     const text = await res.text();
     if (!text || text === 'null') return null;
-    return JSON.parse(text); // verschluesselter String oder Wert
+    return JSON.parse(text); // encrypted string or value
   } catch (e) {
     console.warn('[store] GET failed, fallback to localStorage:', e.message);
     _storeAvailable = false;
@@ -716,9 +749,6 @@ function _lsSetRaw(accountId, key, rawStr) {
 }
 
 // Account registry Helfer
-function loadAccountRegistry() {
-  try { _accounts = JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { _accounts = []; }
-}
 async function loadAccountRegistryAsync() {
   try { _accounts = await _registryGet() || []; } catch { _accounts = []; }
 }
@@ -1559,9 +1589,6 @@ function isAnthropicThinkingModel(modelId) {
   return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
 }
 function usesTokenBudget(modelId) { return isAnthropicThinkingModel(modelId || ''); }
-function getThinkingBudget() { return config.thinkingBudget || 8000; }
-function getThinkingEffortStr() { return OAI_EFFORT[config.thinkingIntensity || 2]; }
-
 function updateThinkingUI() {
   const { modelId } = splitModelId(config.model);
   const capable = isThinkingCapable(modelId);
@@ -1667,11 +1694,6 @@ function onFolderDragStart(e, id) {
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('text/plain', 'folder:' + id);
 }
-function onFolderDragOver(e, targetId) {
-  if (!draggedFolderId || draggedFolderId === targetId) return;
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-}
 function onFolderDrop(e, targetId) {
   e.preventDefault();
   e.stopPropagation();
@@ -1735,14 +1757,6 @@ function startRenamingChat(id) {
   input.addEventListener('blur', () => { chat.title = input.value.trim()||chat.title; save(); renderSidebar(); });
   input.addEventListener('keydown', e => { if(e.key==='Enter') input.blur(); });
   titleEl.replaceWith(input); input.focus(); input.select();
-}
-function moveChat(chatId, folderId) {
-  const c = chats.find(x=>x.id===chatId);
-  if (c) {
-    c.folderId = folderId;
-    if (c.id === currentChatId) activeFolderId = folderId || null;
-    save(); renderSidebar();
-  }
 }
 function getMoveChatIds(chatId) {
   if (_selectedChatIds.has(chatId)) return [..._selectedChatIds].filter(id => chats.some(c => c.id === id));
@@ -2005,6 +2019,9 @@ function renderSidebar() {
     arrow.className = 'folder-arrow ' + (f.collapsed ? '' : 'open');
     arrow.textContent = '▶';
     arrow.addEventListener('click', e => { e.stopPropagation(); toggleFolder(f.id); });
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = f.collapsed ? '📁' : '📂';
     const nameSpan = document.createElement('span');
     nameSpan.className = 'folder-name';
     nameSpan.id = `fname_${f.id}`;
@@ -2028,7 +2045,7 @@ function renderSidebar() {
     delBtn.dataset.id = f.id;
     delBtn.addEventListener('click', e => { e.stopPropagation(); deleteFolder(delBtn.dataset.id); });
     actionsDiv.appendChild(addBtn); actionsDiv.appendChild(renameBtn); actionsDiv.appendChild(delBtn);
-    header.appendChild(arrow); header.appendChild(nameSpan); header.appendChild(countSpan); header.appendChild(actionsDiv);
+    header.appendChild(arrow); header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan); header.appendChild(actionsDiv);
     header.addEventListener('dragover', e => {
       if (draggedChatId) { e.preventDefault(); header.classList.add('drag-target'); }
     });
@@ -2052,13 +2069,14 @@ function renderSidebar() {
 
   if (unfiled.length > 0) {
     const folderDiv = document.createElement('div');
-    folderDiv.className = 'folder';
+    folderDiv.className = 'folder unfiled-group';
     const header = document.createElement('div');
     header.className = 'folder-header' + (targetFolderId === null ? ' active-folder' : '');
     const arrow = document.createElement('span'); arrow.className='folder-arrow open'; arrow.textContent='▶';
+    const icon = document.createElement('span'); icon.className='folder-icon'; icon.textContent='🗂️';
     const nameSpan = document.createElement('span'); nameSpan.className='folder-name'; nameSpan.textContent=t('js.noFolder');
     const countSpan = document.createElement('span'); countSpan.className='folder-count'; countSpan.textContent=unfiled.length;
-    header.appendChild(arrow); header.appendChild(nameSpan); header.appendChild(countSpan);
+    header.appendChild(arrow); header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan);
     header.addEventListener('dragover', e=>{if(draggedChatId){e.preventDefault();header.classList.add('drag-target');}});
     header.addEventListener('dragleave',()=>header.classList.remove('drag-target'));
     header.addEventListener('drop', e=>{ if(draggedChatId) onDropFolder(e,null); });
@@ -2172,11 +2190,17 @@ window.kicCurrentChat    = () => currentChat();
 // END public API ──────────────────────────────────────────────────────
 
 // renderMessages uses active branch path (tree-aware)
-function renderMessages(messages, _unused) {
+function renderMessages(messages, limitCount) {
   const chat = currentChat();
   const container = document.getElementById('messages');
   const empty     = document.getElementById('emptyState');
-  const path = chat ? getActivePath(chat) : (Array.isArray(messages) ? messages : []);
+  let path = chat ? getActivePath(chat) : (Array.isArray(messages) ? messages : []);
+  // limitCount: optionally render only the first N nodes of the active path.
+  // Used by regenerate() to render up to (and including) the user message only,
+  // leaving the about-to-be-replaced assistant bubble out of the DOM entirely
+  // instead of rendering it and relying on a later swap (which used to leave
+  // a stale duplicate bubble behind — see regenerate()).
+  if (typeof limitCount === 'number') path = path.slice(0, limitCount);
   if (!path.length) {
     Array.from(container.children).forEach(el => { if(el!==empty) el.remove(); });
     if (empty) empty.style.display = '';
@@ -2218,34 +2242,8 @@ function buildMsgEl(msg, idx) {
   const wrap = document.createElement('div');
   wrap.className = 'bubble-wrap';
 
-  // sibling navigator (< 1/3 >) for AI messages with variants
-  if (!isUser && msg._siblings && msg._siblings.length > 1) {
-    const nav = document.createElement('div');
-    nav.className = 'sibling-nav';
-    const total = msg._siblings.length;
-    const current = (msg._siblingIdx ?? 0) + 1;
-
-    const btnPrev = document.createElement('button');
-    btnPrev.className = 'sibling-btn';
-    btnPrev.textContent = '<';
-    btnPrev.disabled = current === 1;
-    btnPrev.addEventListener('click', () => navigateSibling(idx, -1));
-
-    const counter = document.createElement('span');
-    counter.className = 'sibling-counter';
-    counter.textContent = `${current} / ${total}`;
-
-    const btnNext = document.createElement('button');
-    btnNext.className = 'sibling-btn';
-    btnNext.textContent = '>';
-    btnNext.disabled = current === total;
-    btnNext.addEventListener('click', () => navigateSibling(idx, +1));
-
-    nav.appendChild(btnPrev);
-    nav.appendChild(counter);
-    nav.appendChild(btnNext);
-    wrap.appendChild(nav);
-  }
+  // Sibling navigator, bubble-actions, token badge and note section are all
+  // built later by _buildBubbleChrome() — shared with _finalizeAIRowInPlace().
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
@@ -2313,6 +2311,60 @@ function buildMsgEl(msg, idx) {
   if (!contentHtml && bubble.children.length === 0)
     bubble.innerHTML = `<em style="color:var(--muted)">${escHtml(t('js.empty'))}</em>`;
 
+  wrap.appendChild(bubble);
+  row.appendChild(avatarCol); row.appendChild(wrap);
+
+  _buildBubbleChrome(row, wrap, bubble, msg, idx);
+  return row;
+}
+
+/**
+ * _buildBubbleChrome: builds/attaches everything AROUND a bubble's already-
+ * rendered content — sibling navigator, action buttons (copy/edit/branch/
+ * regenerate/print/voice/delete), token badge, and the personal-note section
+ * — then wires up any code-copy/collapse buttons found inside `row`.
+ *
+ * Shared by buildMsgEl() (fresh row, `bubble` is empty-then-filled) and
+ * _finalizeAIRowInPlace() (existing streamed row, `bubble` already contains
+ * the fully rendered/typeset answer — this function must NOT touch its
+ * content or re-typeset it).
+ *
+ * Assumes `bubble` is already appended to `wrap`; inserts the nav before it
+ * and everything else after it, so the DOM order matches buildMsgEl's
+ * original wrap.appendChild() sequence exactly.
+ */
+function _buildBubbleChrome(row, wrap, bubble, msg, idx) {
+  const isUser = msg.role === 'user';
+
+  // sibling navigator (< 1/3 >) for AI messages with variants
+  if (!isUser && msg._siblings && msg._siblings.length > 1) {
+    const nav = document.createElement('div');
+    nav.className = 'sibling-nav';
+    const total = msg._siblings.length;
+    const current = (msg._siblingIdx ?? 0) + 1;
+
+    const btnPrev = document.createElement('button');
+    btnPrev.className = 'sibling-btn';
+    btnPrev.textContent = '<';
+    btnPrev.disabled = current === 1;
+    btnPrev.addEventListener('click', () => navigateSibling(idx, -1));
+
+    const counter = document.createElement('span');
+    counter.className = 'sibling-counter';
+    counter.textContent = `${current} / ${total}`;
+
+    const btnNext = document.createElement('button');
+    btnNext.className = 'sibling-btn';
+    btnNext.textContent = '>';
+    btnNext.disabled = current === total;
+    btnNext.addEventListener('click', () => navigateSibling(idx, +1));
+
+    nav.appendChild(btnPrev);
+    nav.appendChild(counter);
+    nav.appendChild(btnNext);
+    wrap.insertBefore(nav, bubble);
+  }
+
   // Bubble actions
   const actDiv = document.createElement('div');
   actDiv.className = 'bubble-actions';
@@ -2338,23 +2390,57 @@ function buildMsgEl(msg, idx) {
     actDiv.appendChild(vc);
   }
   actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
+  bubble.insertAdjacentElement('afterend', actDiv);
 
   if (!isUser && msg._usage) {
     const badge = buildTokenBadge(msg._usage);
-    wrap.appendChild(bubble); wrap.appendChild(actDiv); wrap.appendChild(badge);
-  } else {
-    wrap.appendChild(bubble); wrap.appendChild(actDiv);
+    actDiv.insertAdjacentElement('afterend', badge);
   }
 
   // Personal note per bubble (account-specific, encrypted with the rest of the chat)
   wrap.appendChild(buildNoteSection(msg));
 
-  row.appendChild(avatarCol); row.appendChild(wrap);
-
   row.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
-    btn.addEventListener('click', () => copyCodeFromBtn(btn));
+    if (!btn._wired) { btn._wired = true; btn.addEventListener('click', () => copyCodeFromBtn(btn)); }
   });
-  return row;
+  row.querySelectorAll('.code-collapse-btn').forEach(btn => {
+    if (!btn._wired) { btn._wired = true; btn.addEventListener('click', () => toggleCodeBlockCollapse(btn)); }
+  });
+}
+
+/**
+ * _finalizeAIRowInPlace: upgrades an already-streamed AI row (created by
+ * appendEmptyAI + filled incrementally by renderStreamingBubble/
+ * _finalizeStreamingBubble) into its final interactive form, WITHOUT
+ * discarding and rebuilding the bubble content.
+ *
+ * Previously _attachAIActions always called buildMsgEl() and replaced the
+ * whole row — which re-ran formatText() and typesetMath() over content that
+ * had just been carefully, incrementally rendered during streaming (see
+ * renderStreamingBubble's stable/tail split). That extra pass was pure
+ * redundant work: everything buildMsgEl would have parsed out of msg.content
+ * is already sitting on screen, correctly formatted and typeset. All that's
+ * actually missing on a freshly-streamed row is the chrome around it (action
+ * buttons, sibling nav, token badge, note section) and event wiring for any
+ * code-block buttons — so we attach only that, and leave the rendered
+ * content untouched.
+ *
+ * Returns true if it successfully upgraded `rowEl` in place; false if
+ * `rowEl` isn't usable (e.g. got removed from the DOM in the meantime, or
+ * doesn't have the expected .bubble), in which case the caller should fall
+ * back to a full buildMsgEl() render.
+ */
+function _finalizeAIRowInPlace(rowEl, msg, idx) {
+  if (!rowEl || !rowEl.isConnected) return false;
+  const wrap = rowEl.querySelector('.bubble-wrap');
+  const bubble = wrap && wrap.querySelector('.bubble');
+  if (!wrap || !bubble) return false;
+
+  rowEl.dataset.idx = idx;
+  bubble.classList.remove('streaming');
+
+  _buildBubbleChrome(rowEl, wrap, bubble, msg, idx);
+  return true;
 }
 
 // Personal per-bubble notes (account-specific)
@@ -2598,9 +2684,11 @@ function deleteBubble(idx) {
     msg._siblingIdx = Math.min(activeIdx, msg._siblings.length - 1);
     // Sync live fields from the newly active variant
     const active = msg._siblings[msg._siblingIdx];
-    msg.content = active.content;
-    msg._model  = active._model;
-    msg._usage  = active._usage;
+    msg.content   = active.content;
+    msg._model    = active._model;
+    msg._usage    = active._usage;
+    msg._note     = active._note;
+    msg._noteOpen = active._noteOpen;
     save(); renderMessages(chat.messages);
     return;
   }
@@ -2805,12 +2893,22 @@ function navigateSibling(idx, delta) {
   const newIdx = (msg._siblingIdx ?? 0) + delta;
   if (newIdx < 0 || newIdx >= msg._siblings.length) return;
 
+  // Notes are edited in place on msg._note (no explicit "commit" step), so before
+  // switching away from the currently active variant we must write its live note
+  // back into its own record — otherwise an edit made just before navigating
+  // away would be lost, and would then also incorrectly show up on the target
+  // variant since msg._note would still hold the old variant's value.
+  const oldVariant = msg._siblings[msg._siblingIdx ?? 0];
+  if (oldVariant) { oldVariant._note = msg._note; oldVariant._noteOpen = msg._noteOpen; }
+
   msg._siblingIdx = newIdx;
   const variant   = msg._siblings[newIdx];
   // Sync live fields (used by rerunFromUserMsg context-building)
-  msg.content = variant.content;
-  msg._model  = variant._model;
-  msg._usage  = variant._usage;
+  msg.content   = variant.content;
+  msg._model    = variant._model;
+  msg._usage    = variant._usage;
+  msg._note     = variant._note;
+  msg._noteOpen = variant._noteOpen;
 
   save();
   renderMessages(chat.messages); // getActivePath will now follow new _siblingIdx
@@ -2890,17 +2988,104 @@ function _applyPromptCache(msgs) {
 // being written, gets re-rendered frequently). This is what lets already
 // -typeset formulas in e.g. a growing table stay put instead of flickering.
 function _splitStableTail(text) {
-  let fence = false, dollarBlock = false, bracketBlock = false, lastSafe = -1;
+  let fence = false, dollarBlock = false, bracketBlock = false, parenBlock = false, lastSafe = -1;
+  const envStack = [];
   for (let i = 0; i < text.length; i++) {
     if (text.startsWith('```', i)) fence = !fence;
     else if (!fence && text.startsWith('$$', i)) dollarBlock = !dollarBlock;
-    else if (!fence && !dollarBlock && text.startsWith('\\[', i)) bracketBlock = true;
-    else if (!fence && !dollarBlock && text.startsWith('\\]', i)) bracketBlock = false;
+    else if (!fence && text.startsWith('\\[', i)) bracketBlock = true;
+    else if (!fence && text.startsWith('\\]', i)) bracketBlock = false;
+    else if (!fence && text.startsWith('\\(', i)) parenBlock = true;
+    else if (!fence && text.startsWith('\\)', i)) parenBlock = false;
+    else if (!fence && text.startsWith('\\begin{', i)) {
+      const end = text.indexOf('}', i);
+      if (end !== -1) envStack.push(text.slice(i + 7, end));
+    } else if (!fence && text.startsWith('\\end{', i)) {
+      const end = text.indexOf('}', i);
+      if (end !== -1) envStack.pop();
+    }
 
-    if (text[i] === '\n' && !fence && !dollarBlock && !bracketBlock) lastSafe = i;
+    if (text[i] === '\n' && !fence && !dollarBlock && !bracketBlock && !parenBlock && envStack.length === 0) lastSafe = i;
   }
   if (lastSafe === -1) return { stable: '', tail: text };
+
+  // Pull the boundary back to before any still-open multi-line block (GFM
+  // table or list) so we never commit a *partial* table/list to "stable".
+  // marked.js needs the whole block (e.g. the table header + separator
+  // row) in a single parse to render new rows/items correctly — splitting
+  // a growing table across several "stable" flushes turns later rows into
+  // orphaned plain text instead of appending them to the table, and
+  // splitting an ordered list resets the numbering. See _pullBackForOpenBlock.
+  lastSafe = _pullBackForOpenBlock(text, lastSafe);
+  if (lastSafe === -1) return { stable: '', tail: text };
+
   return { stable: text.slice(0, lastSafe + 1), tail: text.slice(lastSafe + 1) };
+}
+
+// _pullBackForOpenBlock: given a candidate split point `safeEnd` (index of
+// a \n that's already safe w.r.t. fences/math), checks whether the line
+// right before it belongs to a table or list. If the block hasn't been
+// closed off by a blank line yet, moves the split point back to just
+// before that block started, so the *entire* still-growing block stays in
+// "tail" (re-rendered each tick, same as any other in-progress line) until
+// it's actually finished — at which point it gets committed to "stable" in
+// one piece and is never touched again.
+function _pullBackForOpenBlock(text, safeEnd) {
+  const candidate = text.slice(0, safeEnd + 1);
+  const lines = candidate.split('\n');
+  lines.pop(); // candidate always ends in '\n' -> drop the trailing '' entry
+  if (!lines.length) return safeEnd;
+
+  const isBlank = (l) => l.trim() === '';
+  const isTableLine = (l) => {
+    if (!l.includes('|')) return false;
+    const t = l.trim();
+    return t.startsWith('|') || t.endsWith('|') || (l.match(/\|/g) || []).length >= 2;
+  };
+  const isListLine = (l) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(l);
+  const isListContinuation = (l) => isListLine(l) || (!isBlank(l) && /^[ \t]+\S/.test(l));
+
+  const lastLine = lines[lines.length - 1];
+  let blockType = null;
+  if (isTableLine(lastLine)) blockType = 'table';
+  else if (isListLine(lastLine)) blockType = 'list';
+  else return safeEnd; // plain prose line, or block already closed by a blank line
+
+  // Walk backward while lines keep belonging to the same open block.
+  let start = lines.length - 1;
+  while (start > 0) {
+    const prev = lines[start - 1];
+    if (isBlank(prev)) break;
+    if (blockType === 'table' && !isTableLine(prev)) break;
+    if (blockType === 'list' && !isListContinuation(prev)) break;
+    start--;
+  }
+  if (start === 0) return -1; // the whole candidate is one still-open block
+
+  const before = lines.slice(0, start).join('\n');
+  return before.length; // index of the \n right before the open block starts
+}
+
+// _hasOpenMathBlock: true while `text` contains a math delimiter or LaTeX
+// environment that hasn't been closed yet (open \(, \[, $$, or \begin{..}
+// without a matching \end{..} — this is exactly the "\begin{vmatrix}...\\..."
+// case that renders as raw LaTeX mid-stream). While something is open,
+// MathJax can't render the formula anyway — repeatedly asking it to try
+// just produces flicker between raw text and a failed/partial attempt. We
+// skip the throttled typeset call until the closing delimiter has actually
+// arrived, then it renders once, cleanly, in a single pass.
+function _hasOpenMathBlock(text) {
+  let dollar = false, bracket = false, paren = false, envDepth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith('$$', i)) dollar = !dollar;
+    else if (text.startsWith('\\[', i)) bracket = true;
+    else if (text.startsWith('\\]', i)) bracket = false;
+    else if (text.startsWith('\\(', i)) paren = true;
+    else if (text.startsWith('\\)', i)) paren = false;
+    else if (text.startsWith('\\begin{', i)) envDepth++;
+    else if (text.startsWith('\\end{', i)) envDepth--;
+  }
+  return dollar || bracket || paren || envDepth > 0;
 }
 
 // Tracks, per bubble element, how much of its content is already frozen —
@@ -2935,25 +3120,61 @@ function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   const cached = _streamStableCache.get(bubbleEl) || { len: 0 };
 
   if (stable.length > cached.len) {
-    // New finished line(s) — render once and typeset immediately (this fires
-    // per completed line, not per token, so it's cheap even for big tables).
-    stableEl.innerHTML = formatText(stable);
+    // New finished block(s) — append ONLY the new increment and typeset
+    // ONLY the newly-inserted nodes. Previously this did
+    // `stableEl.innerHTML = formatText(stable)`, re-parsing and replacing
+    // the ENTIRE stable container on every flush — which destroyed every
+    // already-typeset <mjx-container> in it and forced MathJax to redo
+    // them from scratch a moment later. That round-trip (rendered math ->
+    // briefly raw text -> rendered again) was the flicker. Appending only
+    // the new slice leaves already-settled content completely untouched.
+    const newStable = stable.slice(cached.len);
+    const prevLast = stableEl.lastChild;
+    stableEl.insertAdjacentHTML('beforeend', formatText(newStable));
     _streamStableCache.set(bubbleEl, { len: stable.length });
-    typesetMath(stableEl);
+    const newNodes = [];
+    for (let n = prevLast ? prevLast.nextSibling : stableEl.firstChild; n; n = n.nextSibling) newNodes.push(n);
+    if (newNodes.length) typesetMath(newNodes);
   }
   tailEl.innerHTML = formatText(tail);
-  typesetMathThrottled(tailEl);
+  const mathNodes = tailEl.querySelectorAll('.math-inline, .math-block');
+  if (mathNodes.length) {
+    // Don't hand a snapshot of the current nodes to the throttled call: tailEl
+    // gets fully overwritten (innerHTML =) on every subsequent chunk, so by
+    // the time the delayed call actually fires those nodes are very likely
+    // already detached from the document — MathJax then typesets nothing
+    // visible, which is why a still-growing table/list showed raw, unrendered
+    // LaTeX the entire time it was streaming and only rendered once it closed
+    // and got committed to .msg-stable. Passing just the container instead
+    // means the throttled call re-scans whatever is *currently* inside it at
+    // fire time, so it always operates on live nodes.
+    typesetMathThrottled(tailEl, 400);
+  }
+  // If still mid-formula (e.g. inside \begin{vmatrix}...\end{vmatrix}) —
+  // leave it as raw text for now rather than making MathJax repeatedly choke
+  // on a half-written block. It gets typeset correctly as soon as the
+  // closing delimiter arrives (next call above), or at the latest by
+  // _finalizeStreamingBubble once the whole response is done.
 }
 
-// _finalizeStreamingBubble: called once the stream is done — flushes any
-// remaining tail into stable and does one authoritative full typeset.
+// _finalizeStreamingBubble: called once the stream is done. Previously this
+// re-ran formatText() over the ENTIRE message again — redundant, since most
+// of it already sits in .msg-stable, correctly rendered, from the per-line
+// flushes during streaming. Now it only formats whatever text hasn't been
+// flushed yet (the still-open tail, e.g. the last line/formula that just
+// closed) and appends that — the already-rendered stable content is left
+// untouched. One typeset pass at the end still happens, so MathJax settles
+// on a fully consistent result.
 function _finalizeStreamingBubble(bubbleEl, assistantText) {
   const stableEl = bubbleEl.querySelector('.msg-stable');
   const tailEl = bubbleEl.querySelector('.msg-tail');
+  const full = assistantText || '';
   if (stableEl && tailEl) {
-    stableEl.innerHTML = formatText(assistantText || '');
+    const cached = _streamStableCache.get(bubbleEl) || { len: 0 };
+    const remaining = full.slice(cached.len);
+    if (remaining) stableEl.insertAdjacentHTML('beforeend', formatText(remaining));
     tailEl.innerHTML = '';
-    _streamStableCache.set(bubbleEl, { len: (assistantText || '').length });
+    _streamStableCache.set(bubbleEl, { len: full.length });
   }
   typesetMath(bubbleEl);
 }
@@ -2986,6 +3207,7 @@ function _finishLiveStreamUI() {
  */
 async function _streamAIResponse(messages, provider, typingId, documentIds) {
   let assistantText = '', usageData = null;
+  let aiRowEl = null; // the actual DOM row created for this streamed answer (see appendEmptyAI() below)
   activeStreamSnapshot = { text: '', usage: null };
 
   if (provider.type === 'anthropic') {
@@ -3032,6 +3254,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
     removeTyping(typingId);
     const aiEl = appendEmptyAI();
+    aiRowEl = aiEl;
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '', inThinkingBlock = false;
     while (true) {
@@ -3061,7 +3284,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
               assistantText += ev.delta.text;
               renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
-              scrollToBottom();
+              if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
             }
           }
         } catch {}
@@ -3110,6 +3333,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     removeTyping(typingId);
     const aiEl = appendEmptyAI();
+    aiRowEl = aiEl;
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '';
     const isGlm = provider.type === 'glm';
@@ -3133,12 +3357,12 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
             if (reasoningDelta || delta) {
               renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
-              scrollToBottom();
+              if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
             }
           } else if (delta) {
             renderStreamingBubble(aiEl.querySelector('.bubble'), '', assistantText);
             _rememberStreamSnapshot(assistantText, usageData);
-            scrollToBottom();
+            if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
           }
           if (chunk.usage) {
             const u = chunk.usage;
@@ -3155,7 +3379,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
   }
 
   _finishLiveStreamUI();
-  return { text: assistantText, usage: usageData };
+  return { text: assistantText, usage: usageData, el: aiRowEl };
 }
 
 /**
@@ -3163,17 +3387,21 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
  * Shared post-stream logic for both sendMessageCore and rerunFromUserMsg.
  */
 // _attachAIActions: tree-aware, writes into active sibling tail
-function _attachAIActions(chat, assistantText, usageData) {
+function _attachAIActions(chat, assistantText, usageData, streamEl) {
   if (chat._pendingRegenMsg) {
-    // Regeneration: push new sibling with empty tail onto the branch node
+    // Regeneration: push new sibling with empty tail onto the branch node.
+    // _note/_noteOpen start fresh (undefined/false) — a regenerated answer
+    // is new content and must not inherit the note from the previous variant.
     const msg = chat._pendingRegenMsg;
-    const newSibling = { content: assistantText, _model: config.model, _usage: usageData || undefined, tail: [] };
+    const newSibling = { content: assistantText, _model: config.model, _usage: usageData || undefined, _note: undefined, _noteOpen: false, tail: [] };
     msg._siblings.push(newSibling);
     msg._siblingIdx = msg._siblings.length - 1;
     // Sync live fields to the new active variant
-    msg.content = newSibling.content;
-    msg._model  = newSibling._model;
-    msg._usage  = newSibling._usage;
+    msg.content   = newSibling.content;
+    msg._model    = newSibling._model;
+    msg._usage    = newSibling._usage;
+    msg._note     = newSibling._note;
+    msg._noteOpen = newSibling._noteOpen;
     delete chat._pendingRegenMsg;
   } else {
     // Normal send: append to the active container (chat.messages or deepest active tail)
@@ -3183,7 +3411,40 @@ function _attachAIActions(chat, assistantText, usageData) {
     container.push(msgObj);
   }
 
-  renderMessages(chat.messages);
+  // Upgrade the just-finished bubble in place (action buttons, sibling nav,
+  // token badge, ...) instead of tearing down and rebuilding the whole chat
+  // history via renderMessages(). That used to remove every message row and
+  // rebuild all of them via buildMsgEl(), then call typesetMath() with no
+  // argument — which re-scans the ENTIRE #messages container, re-typesetting
+  // formulas in messages that were already rendered and untouched.
+  //
+  // Beyond that: even the narrower "replace just this one row" approach used
+  // until recently threw away the streamed bubble's content and rebuilt it
+  // from scratch via buildMsgEl() -> formatText() -> typesetMath(), even
+  // though renderStreamingBubble()/_finalizeStreamingBubble() had *just*
+  // finished incrementally rendering and typesetting that exact content a
+  // moment earlier. _finalizeAIRowInPlace() instead reuses `streamEl` as-is
+  // and only attaches what's actually missing from a freshly-streamed row —
+  // the surrounding chrome (actions/badge/nav/note) — leaving the rendered
+  // answer itself untouched. No redundant formatText()/typesetMath() pass.
+  const path = getActivePath(chat);
+  const idx = path.length - 1;
+  const messagesEl = document.getElementById('messages');
+  const emptyState = document.getElementById('emptyState');
+
+  if (!_finalizeAIRowInPlace(streamEl, path[idx], idx)) {
+    // Fallback: streamEl is missing/detached (e.g. chat was switched away
+    // from mid-stream) — build a fresh row the old way. We still avoid
+    // replacing an unrelated node: fall back to the last message row, never
+    // the #chatTokenTotal footer div appendToMessages() always keeps last.
+    const newRow = buildMsgEl(path[idx], idx);
+    const oldRow = (streamEl && streamEl.parentNode === messagesEl) ? streamEl : messagesEl.lastElementChild;
+    if (oldRow && oldRow !== emptyState) oldRow.replaceWith(newRow);
+    else messagesEl.appendChild(newRow);
+    typesetMath(newRow);
+  }
+
+  messagesEl.scrollTop = messagesEl.scrollHeight;
   updateChatTokenTotal();
   save();
 }
@@ -3205,17 +3466,31 @@ async function regenerate(idx) {
   if(!msg._siblings) {
     // Collect everything after this node in the active path as the original tail
     const originalTail = path.slice(idx+1).map(m => JSON.parse(JSON.stringify(m)));
-    msg._siblings=[{content:msg.content,_model:msg._model,_usage:msg._usage,tail:originalTail}];
+    // Note (_note/_noteOpen) is per-variant, just like content/_model/_usage —
+    // otherwise a note stays "stuck" to the node and shows up again on every
+    // regenerated version instead of only on the version it was written for.
+    msg._siblings=[{content:msg.content,_model:msg._model,_usage:msg._usage,_note:msg._note,_noteOpen:msg._noteOpen,tail:originalTail}];
     msg._siblingIdx=0;
     // Remove those messages from whichever container they live in — now owned by tail
     _pruneAfter(chat, msg);
+  } else {
+    // Persist any note edits made on the currently active variant before we
+    // move on to a brand-new (note-less) variant.
+    const activeVariant = msg._siblings[msg._siblingIdx ?? 0];
+    if (activeVariant) { activeVariant._note = msg._note; activeVariant._noteOpen = msg._noteOpen; }
   }
 
   // New sibling starts with an empty tail; _attachAIActions will write into it
   const newSibIdx = msg._siblings.length; // will be pushed by _attachAIActions
   chat._pendingRegenMsg = msg;
 
-  save(); renderMessages(chat.messages);
+  save();
+  // Render only up through the user message (idx nodes), NOT the assistant
+  // bubble we're about to regenerate. Previously this rendered the full path
+  // (including the old assistant bubble), and after the stream finished only
+  // the newly streamed bubble got swapped in — leaving the stale old bubble
+  // behind as a visible duplicate. See _attachAIActions() below.
+  renderMessages(chat.messages, idx);
   await rerunFromUserMsg(userMsg);
 }
 
@@ -3250,7 +3525,7 @@ async function rerunFromUserMsg(userMsg) {
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
-  let assistantText='', usageData=null;
+  let assistantText='', usageData=null, streamEl=null;
 
   try {
     // build history from active path up to (including) userMsg
@@ -3268,7 +3543,7 @@ async function rerunFromUserMsg(userMsg) {
         .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
     }
     const result = await _streamAIResponse(messages, provider, typingId, []);
-    assistantText = result.text; usageData = result.usage;
+    assistantText = result.text; usageData = result.usage; streamEl = result.el;
   } catch(e) {
     removeTyping(typingId);
     if(e.name==='AbortError'){
@@ -3280,7 +3555,7 @@ async function rerunFromUserMsg(userMsg) {
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
-  if(assistantText) _attachAIActions(chat, assistantText, usageData);
+  if(assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
   activeStreamSnapshot=null;
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
@@ -3973,6 +4248,35 @@ async function sendMessageCore(text, att) {
   const documentIds=[];
   let webSearch = null;
   let linkedPages = [];
+  const fileNames0 = att.map(a=>a.name);
+
+  // ── Instant render: show the user's bubble immediately, before any
+  // network round-trip (uploads / link fetch / web search). Those steps
+  // can take a second or more and used to leave the chat looking "stuck"
+  // until they finished. We build a minimal preview (text + images, files
+  // as chips) and push it into the chat tree right away; the full, possibly
+  // web-augmented content is written into this same message object afterwards
+  // — it never needs to touch the DOM again, since the bubble only ever
+  // displayed the text/image parts anyway.
+  const previewContent = (() => {
+    if (att.length) {
+      const arr=[];
+      if(text) arr.push({type:'text',text});
+      att.forEach(a=>{ if(a.type==='image') arr.push({type:'image_url',image_url:{url:a.data}}); });
+      return arr.length ? arr : (text || null);
+    }
+    return text;
+  })();
+  const chatEarly=currentChat();
+  const activeContainerEarly = getActiveContainer(chatEarly);
+  const userMsgForStorage={ role:'user', content: previewContent, _files: fileNames0.length?fileNames0:undefined };
+  activeContainerEarly.push(userMsgForStorage);
+  if(chatEarly.messages.length===1){chatEarly.title='…';renderSidebar();autoGenerateChatTitle(chatEarly,text);}
+  const previewIdx=getActivePath(chatEarly).length-1;
+  const previewMsgEl=buildMsgEl({role:'user',content:previewContent,_files:fileNames0},previewIdx);
+  appendToMessages(previewMsgEl);
+  typesetMath(previewMsgEl);
+  scrollToBottom();
 
   for(const a of att){
     if(a.type==='pdf-b64'&&a.pdfMode==='b64'&&isKiConnect&&a.rawBuf){
@@ -4055,10 +4359,13 @@ async function sendMessageCore(text, att) {
     ...(linkedPages || []).map((p, i) => ({ index:`L${i + 1}`, title:p.title || p.url, url:p.url, snippet:p.text?.slice(0, 280) || '' })),
     ...(webSearch?.results || [])
   ];
-  const userMsgForStorage={
-    role:'user',
-    content:Array.isArray(userContent)
-      ?userContent.map(p=>{
+  // The user's bubble is already on screen (instant preview from above).
+  // Now backfill the SAME message object with the fully augmented content
+  // (web search results, linked pages, resolved file blocks) — this is what
+  // actually gets sent to the model and saved, but it doesn't need to touch
+  // the DOM again for the text/image parts, since those already rendered.
+  userMsgForStorage.content = Array.isArray(userContent)
+    ? userContent.map(p=>{
         if(p._webSearch) return p;
         // pdf_base64: keep — _toAnthropicContent converts to {type:'document'} on send
         if(p.type==='pdf_base64') return p;
@@ -4067,35 +4374,42 @@ async function sendMessageCore(text, att) {
         if(p.type==='image_url'){const url=p.image_url?.url||'';if(url.startsWith('data:')&&url.length>maxBytes)return{type:'text',text:'['+t('js.imageNotSaved')+']'};}
         return p;
       })
-      :userContent,
-    _files:fileNames.length?fileNames:undefined,
-    _webSources:webSourceChips.length?webSourceChips:undefined
-  };
-  const chat=currentChat();
-  // push into active tail (tree-aware), not always top-level chat.messages
-  const activeContainer = getActiveContainer(chat);
-  activeContainer.push(userMsgForStorage);
-  if(chat.messages.length===1){chat.title='…';renderSidebar();autoGenerateChatTitle(chat,text);}
-
-  // Build display message: only text + images visible, files as chips
-  // Show only non-file-content text parts and images; file-content blocks ("--- ...") appear as chips
-  // also filter out pdf_text blocks (file content, shown as chips)
-  const displayContent = Array.isArray(userContent)
-    ? userContent.filter(p => !p._webSearch && ((p.type==='text' && !p.text?.startsWith('---')) || p.type==='image_url'))
     : userContent;
-  // Use active-path index so data-idx matches getActivePath(chat) — needed for edit/delete/copy
-  const idx=getActivePath(chat).length-1;
-  const msgEl=buildMsgEl({role:'user',content:displayContent||text||null,_files:fileNames,_webSources:webSourceChips.length?webSourceChips:undefined},idx);
-  appendToMessages(msgEl);
+  userMsgForStorage._files = fileNames.length?fileNames:undefined;
+  userMsgForStorage._webSources = webSourceChips.length?webSourceChips:undefined;
+  const chat=currentChat();
+
+  // Only the web-source chip row is new visual info the preview couldn't have
+  // shown yet (it depends on the search that just finished) — patch just that
+  // one row into the already-rendered bubble instead of rebuilding the whole
+  // message (which would re-typeset text/math that's already on screen).
+  if (webSourceChips.length) {
+    const bubbleEl = previewMsgEl.querySelector('.bubble');
+    if (bubbleEl && !bubbleEl.querySelector('.web-sources')) {
+      const sourceWrap = document.createElement('div');
+      sourceWrap.className = 'web-sources';
+      webSourceChips.slice(0, WEB_SEARCH_RESULT_MAX).forEach(src => {
+        const a = document.createElement('a');
+        a.className = 'web-source-chip';
+        a.href = src.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.title = src.snippet ? `${src.url}\n\n${src.snippet}` : src.url;
+        a.textContent = `[${src.index}] ${src.title || src.url}`;
+        sourceWrap.appendChild(a);
+      });
+      bubbleEl.appendChild(sourceWrap);
+    }
+  }
   selectedLinkUrls.clear();
   ignoredLinkUrls.clear();
   renderDetectedLinks();
-  scrollToBottom();
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
   let assistantText='';
   let usageData=null;
+  let streamEl=null;
 
   // build wire-format message list, then delegate to shared _streamAIResponse
   try {
@@ -4117,7 +4431,7 @@ async function sendMessageCore(text, att) {
       messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
     }
     const result=await _streamAIResponse(messages, provider, typingId, documentIds);
-    assistantText=result.text; usageData=result.usage;
+    assistantText=result.text; usageData=result.usage; streamEl=result.el;
   } catch(e) {
     removeTyping(typingId);
     if(e.name==='AbortError'){
@@ -4129,7 +4443,7 @@ async function sendMessageCore(text, att) {
     else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
   }
 
-  if(assistantText) _attachAIActions(chat, assistantText, usageData);
+  if(assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
   activeStreamSnapshot=null;
   isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
 }
@@ -4250,7 +4564,15 @@ function copyCodeFromBtn(btn) {
     setTimeout(()=>{btn.textContent=t('js.codeCopy');btn.classList.remove('done');},2000);
   }).catch(()=>toast(t('js.copyFailed')));
 }
-function copyCode(btn, b64){btn.dataset.b64=b64;copyCodeFromBtn(btn);}
+
+// Collapses/expands a fenced code block's body (keeps the header with
+// language label + copy button visible so it can be re-expanded).
+function toggleCodeBlockCollapse(btn) {
+  const block = btn.closest('.code-block'); if (!block) return;
+  const collapsed = block.classList.toggle('collapsed');
+  btn.textContent = collapsed ? '▶' : '▼';
+  btn.title = collapsed ? (t('js.codeExpand')||'Expand') : (t('js.codeCollapse')||'Collapse');
+}
 
 function copyBubble(btn, idx) {
   idx=safeIdx(idx); if(idx===null) return;
@@ -4282,31 +4604,6 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-function unescHtml(s){return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");}
-function inlineMarkdown(escapedText) {
-  let s=escapedText;
-  s=s.replace(/`([^`]+)`/g,(_,c)=>`<code>${escHtml(c)}</code>`);
-  // Bold+italic: ***text*** — content must not start/end with space
-  s=s.replace(/\*\*\*(\S(?:[^*\n]*\S)?)\*\*\*/g,'<strong><em>$1</em></strong>');
-  s=s.replace(/___(\S(?:[^_\n]*\S)?)___/g,'<strong><em>$1</em></strong>');
-  // Bold: **text** — content must not start/end with space
-  s=s.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g,'<strong>$1</strong>');
-  // Bold: __text__ — only between non-word characters (not inside identifiers)
-  s=s.replace(/(?<![a-zA-Z0-9])__(\S(?:[^_\n]*\S)?)__(?![a-zA-Z0-9])/g,'<strong>$1</strong>');
-  // Italic: *text* — opening * must not be preceded or followed by another *
-  s=s.replace(/(?<!\*)\*(?!\*)(\S[^*\n]*?\S|\S)\*(?!\*)/g,'<em>$1</em>');
-  // Italic: _text_ — only between non-word characters (avoids matching snake_case)
-  s=s.replace(/(?<![a-zA-Z0-9])_(\S[^_\n]*?\S|\S)_(?![a-zA-Z0-9])/g,'<em>$1</em>');
-  // Strikethrough
-  s=s.replace(/~~(.+?)~~/g,'<del>$1</del>');
-  // Images: ![alt](url) — must come before link regex
-  s=s.replace(/!\[([^\]]*)\]\(((?:https?:|\/)[^\)"\s]+)(?:\s+"[^"]*")?\)/g,
-    (_,alt,url)=>`<img src="${url}" alt="${escHtml(alt)}" style="max-width:100%;max-height:320px;border-radius:6px;vertical-align:middle;" loading="lazy">`);
-  // Links: [text](url) — url must start with http/https/mailto or be relative
-  s=s.replace(/\[([^\]]+)\]\(((?:https?:|mailto:|\/)[^\)]*)\)/g,
-    (_,text,url)=>`<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`);
-  return s;
-}
 
 function formatText(raw) {
   if (!raw) return '';
@@ -4323,7 +4620,7 @@ function formatText(raw) {
     const i = blocks.length;
     const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
     const ll = escHtml((lang || '').trim() || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
   });
 
@@ -4332,23 +4629,23 @@ function formatText(raw) {
     const i = blocks.length;
     const b64 = btoa(unescape(encodeURIComponent(code)));
     const ll = escHtml(lang || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
   });
 
-  // Nicht-geschlossene Fences (Fallback)
+  // Not-closed Fences (Fallback)
   s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => {
     const i = blocks.length;
     const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
     const ll = escHtml((lang || '').trim() || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
   });
   s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => {
     const i = blocks.length;
     const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
     const ll = escHtml(lang || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
   });
 
@@ -4423,7 +4720,7 @@ function formatText(raw) {
       const i = blocks.length;
       const b64 = btoa(unescape(encodeURIComponent(text)));
       const ll = escHtml(lang || 'code');
-      blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><pre><code>${escHtml(text)}</code></pre></div>`);
+      blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▾</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(text)}</code></pre></div></div>`);
       return PH(i);
     };
     try {
@@ -4467,38 +4764,66 @@ function formatText(raw) {
   return s;
 }
 
-
+// Translation for quote - window - button
 function wireCodeCopyButtons(container) {
   container.querySelectorAll('.code-copy-btn[data-b64]').forEach(btn => {
     if(!btn._wired){btn._wired=true;btn.addEventListener('click',()=>copyCodeFromBtn(btn));}
   });
+  container.querySelectorAll('.code-collapse-btn').forEach(btn => {
+    if(!btn._wired){btn._wired=true;btn.addEventListener('click',()=>toggleCodeBlockCollapse(btn));}
+  });
+  retranslateCodeBlockButtons(container);
 }
 
 // ── Math ──────────────────────────────────────────────────────────
+// `el` can be a single element (typeset everything inside it) or an array
+// of nodes (typeset exactly those, e.g. only the nodes just appended to a
+// stable container — lets a caller avoid re-scanning content that's
+// already settled).
 function typesetMath(el) {
   const target = el || document.getElementById('messages');
+  const targets = Array.isArray(target) ? target : [target];
+  if (!targets.length) return;
   if (window.MathJax && MathJax.typesetPromise) {
-    MathJax.typesetPromise([target]).catch(err => console.error('[MathJax typeset error]', err));
+    MathJax.typesetPromise(targets).catch(err => console.error('[MathJax typeset error]', err));
   }
 }
 
 // Throttled variant: used during streaming so LaTeX renders progressively
-// instead of only once at the very end. Scoped to a single element (the
-// currently streaming bubble) to avoid re-scanning the whole chat on every call.
-let _mjThrottle = { timer: null, last: 0 };
+// instead of only once at the very end.
+// Per-element throttle state (WeakMap keyed by the target element) rather
+// than one shared global timer/timestamp. A single global timer meant any
+// two elements sharing typesetMathThrottled would cancel/delay each
+// other's pending typeset — harmless today since only one bubble streams
+// at a time, but wrong in principle and would misbehave the moment
+// anything else (e.g. a second concurrent stream, or a tail + stable call
+// racing) starts using it. Each element now gets its own independent timer.
+const _mjThrottleState = new WeakMap();
 function typesetMathThrottled(el, delay = 400) {
-  clearTimeout(_mjThrottle.timer);
+  const target = el || document.getElementById('messages');
+  let state = _mjThrottleState.get(target);
+  if (!state) {
+    state = { timer: null, last: 0 };
+    _mjThrottleState.set(target, state);
+  }
+
+  clearTimeout(state.timer);
+
   const now = Date.now();
-  const wait = Math.max(0, delay - (now - _mjThrottle.last));
-  _mjThrottle.timer = setTimeout(() => {
-    _mjThrottle.last = Date.now();
-    typesetMath(el);
+  const wait = Math.max(0, delay - (now - state.last));
+
+  state.timer = setTimeout(() => {
+    state.last = Date.now();
+    // Re-target `target` itself (not a pre-captured node list) so this always
+    // typesets whatever is currently inside it, even if its innerHTML was
+    // rewritten one or more times while this call was pending.
+    typesetMath(target);
   }, wait);
 }
 
 // ── PDF Helpers ───────────────────────────────────────────────────
 async function extractPdfText(arrayBuffer) {
-  const lib=window._pdfjsLib||window.pdfjsLib; if(!lib) throw new Error('PDF.js nicht geladen');
+  const lib=window._pdfjsLib||window.pdfjsLib; if(!lib) throw new Error('PDF.js not loaded');
   const pdf=await lib.getDocument({data:arrayBuffer}).promise;
   let out='';
   for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const content=await page.getTextContent();out+=`${tf('js.pdfPage',{n:i})}\n${content.items.map(it=>it.str).join(' ')}\n`;}
@@ -4634,12 +4959,6 @@ function renderIntroPanel() {
   const withKeys = providers.filter(p => p.apiKey).length;
   const names = providers.map(p => p.name).join(', ');
   status.textContent = tf('intro.configuredProviders', { n: providers.length, keys: withKeys, names });
-}
-function openIntroPanel(){
-  renderIntroPanel();
-  document.getElementById('introPanel').classList.add('open');
-  document.getElementById('overlay').classList.add('show');
-  document.querySelector('[data-panel="introPanel"]')?.classList.add('active');
 }
 let _tourActive = false;
 let _tourStepIndex = 0;
@@ -5136,7 +5455,7 @@ async function doSetupPassword() {
   // Activate
   _activeAccountId = accountId;
   setSessionPassphrase(pw);
-  // CryptoKey build und Session token write
+  // Build CryptoKey and write session token
   await getCryptoKey();
   await _writeSessionToken();
   localStorage.setItem('kic_active_account', _activeAccountId);
@@ -5154,7 +5473,7 @@ async function doSetupPassword() {
 
 function forgotPassword() {
   if (!_selectedLoginAccountId) {
-    // Kein Account ausgewaehlt — einfach zur Account-Auswahl zurueck
+    // No account selected — just go back to account selection
     showView('accountSelectView');
     renderAccountGrid();
     return;
@@ -5325,19 +5644,19 @@ async function checkLogin() {
     showLoginScreen();
     return;
   }
-  // F5/Reload: Session token check (kein password in sessionStorage)
-  // Der Token wurde mit dem CryptoKey verschluesselt - ohne password kein Entschluesseln.
-  // Vorgehen: Account-ID aus localStorage lesen, Salt laden, Passphrase aus RAM check.
-  // Da nach F5 der RAM leer ist, muss der User sich kurz erneut authentifizieren -
-  // AUSSER der Token ist noch gueltig UND der CryptoKey ist noch im RAM (selbe Tab-Session).
+  // F5/reload: session token check (no password in sessionStorage)
+  // The token was encrypted with the CryptoKey - no decrypting without the password.
+  // Approach: read account ID from localStorage, load salt, check passphrase in RAM.
+  // Since RAM is empty after F5, the user must briefly re-authenticate -
+  // UNLESS the token is still valid AND the CryptoKey is still in RAM (same tab session).
   const lastAccountId = localStorage.getItem('kic_active_account');
   if (lastAccountId && getAccount(lastAccountId)) {
-    // Pruefen ob Session token im sessionStorage liegt (nur dann lohnt Versuch)
+    // Check whether a session token is present in sessionStorage (only then is it worth trying)
     if (restoreSessionPassphrase()) {
-      // Token validieren erfordert CryptoKey -> bei F5 ist _cryptoKey = null.
-      // Wir koennen keinen neuen Key ableiten ohne password.
-      // Daher: nur weiter eingeloggt bleiben wenn _cryptoKey noch im RAM ist
-      // (d.h. kein echter Reload, nur interne Navigation / Hot-Reload).
+      // Validating the token requires the CryptoKey -> on F5, _cryptoKey is null.
+      // We can't derive a new key without the password.
+      // So: stay logged in only if _cryptoKey is still in RAM
+      // (i.e. not a real reload, just internal navigation / hot-reload).
       if (_cryptoKey) {
         const tokenOk = await _validateSessionToken(lastAccountId);
         if (tokenOk) {
@@ -5635,7 +5954,7 @@ function printFullChat() {
   }
 }
 
-// _printSingleIdx: Index der Bubble die gerade gedruckt werden soll
+// _printSingleIdx: index of the bubble currently being printed
 let _printSingleIdx = null;
 
 function openPrintSingleOverlay(idx) {
@@ -5751,7 +6070,7 @@ function printSingleBubble() {
       } else {
         window.addEventListener('load', function() { setTimeout(doPrint, 300); });
       }
-      // Hard fallback: falls MathJax nach 4s noch nicht fertig
+      // Hard fallback: in case MathJax isn't done after 4s
       setTimeout(function() { if (!_printed) doPrint(); }, 4000);
     <\/script>
   </body></html>`);
@@ -5799,7 +6118,7 @@ async function bootApp() {
   if (!folders.length) { folders.push({ id:'default', name:'Default', collapsed:false }); save(); }
   if (!chats.length) { newChat(); }
   else {
-    // Falls der gespeicherte currentChatId nicht existiert, nutze den ersten Chat
+    // If the saved currentChatId doesn't exist, use the first chat
     if (!currentChatId || !chats.find(c => c.id === currentChatId)) {
       currentChatId = chats[0].id;
     }
