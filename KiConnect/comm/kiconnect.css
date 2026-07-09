@@ -575,7 +575,7 @@ header {
 
 /* profile-badge is no longer rendered in header – kept for compat */
 .profile-badge { display: none; }
-.profile-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }.settings-btn {
+.settings-btn {
   background: var(--surface2);
   border: 1px solid var(--border);
   color: var(--muted);

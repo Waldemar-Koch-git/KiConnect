@@ -200,23 +200,6 @@ def check_origin():
             return Response('{"error":"Host not allowed."}',
                             403, content_type='application/json')
 
-# ── Allowlist erlaubter Ziel-Domains ─────────────────────────────
-ALLOWED_DOMAINS = {
-    'chat.kiconnect.nrw', 'api.anthropic.com', 'api.openai.com',
-    'openrouter.ai', 'api.mistral.ai', 'generativelanguage.googleapis.com',
-    'api.x.ai', 'api.groq.com','api.deepseek.com','api.minimax.io',
-    'api.z.ai',
-    'api.search.brave.com', 'html.duckduckgo.com', 'lite.duckduckgo.com',
-    'api.qwant.com', 'search.yahoo.com', 'www.startpage.com',
-    'www.googleapis.com',
-    'api.bing.microsoft.com',
-    'api.mojeek.com',
-    'yandex.com',
-    'searx.be', 'searxng.world', 'search.bus-hit.me',
-    'searx.tiekoetter.com', 'search.sapti.me', 'searx.prvcy.eu',
-    'searx.fmac.xyz', 'search.ononoki.org',
-}
-
 # ── Private IP-Bereiche (SSRF-Schutz) ────────────────────────────
 PRIVATE_NETWORKS = [
     ipaddress.ip_network('10.0.0.0/8'),    ipaddress.ip_network('172.16.0.0/12'),
@@ -252,6 +235,14 @@ def is_private_ip(hostname):
     return False
 
 def is_allowed(target_url, method='GET'):
+    # ALLOWED_DOMAINS is only a recognition list for the built-in providers,
+    # not the actual security boundary. Users can configure their own
+    # OpenAI-compatible endpoint (self-hosted Ollama/vLLM, a company gateway,
+    # ...) in the Provider editor, so POST requests must be able to reach
+    # arbitrary public hosts too -- exactly like GET already could (used for
+    # web search / page fetching). The real protection against SSRF is
+    # below: only http/https, no literal IPs, and no private/loopback/
+    # link-local ranges, checked identically for every method.
     try: parsed = urlparse(target_url)
     except Exception: return False, 'Ungueltige URL'
     if parsed.scheme not in ('http', 'https'): return False, 'Nur HTTP/HTTPS'
@@ -259,8 +250,6 @@ def is_allowed(target_url, method='GET'):
     if not host: return False, 'Kein Hostname'
     try: ipaddress.ip_address(host); return False, 'Direkte IP nicht erlaubt'
     except ValueError: pass
-    if not any(host == d or host.endswith('.' + d) for d in ALLOWED_DOMAINS) and method.upper() != 'GET':
-        return False, 'Domain nicht erlaubt'
     if is_private_ip(host): return False, 'Privater Host nicht erlaubt'
     return True, ''
 

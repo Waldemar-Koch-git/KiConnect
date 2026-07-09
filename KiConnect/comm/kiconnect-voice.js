@@ -1,6 +1,6 @@
 // ================================================================
 // kiconnect-voice.js  –  Speech input & speech output (Web Speech API)
-// Version 2.0 – fully revised
+// Version 2.1 – fully revised
 // ================================================================
 
 (function () {
@@ -18,12 +18,12 @@
   }
 
   let vs = {
-    sttLang:     navigator.language || 'de-DE',
+    sttLang:     navigator.language || 'en',
     ttsRate:     1.0,
     ttsPitch:    1.0,
     ttsVoice:    '',
     sttAutoSend: false,
-    dialogMode:  false,   // Dialog: read AI response aloud → then listen again
+    dialogMode:  false,   // Dialog mode: read AI response aloud → then listen again
     ...loadSettings(),
   };
 
@@ -119,7 +119,7 @@
       '.vs-chip-name{font-weight:600;font-size:12px;}',
       '.vs-chip-sub{font-size:10px;opacity:.7;font-family:"IBM Plex Mono",monospace;}',
 
-      /* Dialog-Badge im Header */
+      /* Dialog badge in the header */
       '#voiceDialogBadge{display:none;background:rgba(61,126,255,.15);border:1px solid var(--accent,#3d7eff);color:var(--accent,#3d7eff);font-size:10px;font-family:"IBM Plex Mono",monospace;padding:2px 8px;border-radius:20px;animation:dialog-blink 1.8s ease-in-out infinite;cursor:pointer;flex-shrink:0;margin-right:6px;}',
       '#voiceDialogBadge.visible{display:inline-block;}',
       '@keyframes dialog-blink{0%,100%{opacity:1}50%{opacity:.5}}'
@@ -231,7 +231,7 @@
       '<div class="vs-body">',
 
         '<div class="vs-group">',
-          '<div class="vs-label" data-i18n="voice.sttLang">Erkennungssprache</div>',
+          '<div class="vs-label" data-i18n="voice.sttLang">Recognition Language</div>',
           '<select class="vs-select" id="vsSttLang">',
             '<option value="de-DE">Deutsch (DE)</option>',
             '<option value="de-AT">Deutsch (AT)</option>',
@@ -258,14 +258,14 @@
         '<hr class="vs-sep">',
 
         '<div class="vs-group">',
-          '<div class="vs-label" data-i18n="voice.ttsVoice">Stimme (Text → Sprache)</div>',
-          '<select class="vs-select" id="vsTtsVoice"><option value="">— <span data-i18n="voice.defaultVoice">Standard</span> —</option></select>',
+          '<div class="vs-label" data-i18n="voice.ttsVoice">Voice (Text → Speech)</div>',
+          '<select class="vs-select" id="vsTtsVoice"><option value="">— <span data-i18n="voice.defaultVoice">Default</span> —</option></select>',
         '</div>',
 
         '<div class="vs-group">',
-          '<div class="vs-label" data-i18n="voice.ttsRate">Sprechgeschwindigkeit</div>',
+          '<div class="vs-label" data-i18n="voice.ttsRate">Speech Rate</div>',
           '<div class="vs-slider-row">',
-            '<input type="range" id="vsTtsRate" min="0.5" max="2.0" step="0.1" value="' + vs.ttsRate + '">',
+            '<input type="range" id="vsTtsRate" min="0.5" max="5.0" step="0.1" value="' + vs.ttsRate + '">',
             '<span class="vs-slider-val" id="vsTtsRateVal">' + vs.ttsRate.toFixed(1) + '×</span>',
           '</div>',
         '</div>',
@@ -273,7 +273,7 @@
         '<div class="vs-group">',
           '<div class="vs-label" data-i18n="voice.ttsPitch">Pitch</div>',
           '<div class="vs-slider-row">',
-            '<input type="range" id="vsTtsPitch" min="0.5" max="2.0" step="0.1" value="' + vs.ttsPitch + '">',
+            '<input type="range" id="vsTtsPitch" min="0.5" max="5.0" step="0.1" value="' + vs.ttsPitch + '">',
             '<span class="vs-slider-val" id="vsTtsPitchVal">' + vs.ttsPitch.toFixed(1) + '</span>',
           '</div>',
         '</div>',
@@ -281,19 +281,19 @@
         '<hr class="vs-sep">',
 
         '<div class="vs-group">',
-          '<div class="vs-label" data-i18n="voice.options">Optionen</div>',
+          '<div class="vs-label" data-i18n="voice.options">Options</div>',
           '<div class="vs-toggle-row">',
             '<div class="vs-chip ' + (vs.sttAutoSend ? 'active' : '') + '" id="vsAutoSendChip">',
               '<span class="vs-chip-icon">⚡</span>',
               '<div class="vs-chip-desc">',
-                '<span class="vs-chip-name" data-i18n="voice.autoSend">Auto-Senden</span>',
-                '<span class="vs-chip-sub" data-i18n="voice.autoSendSub">Nachricht nach STT sofort senden</span>',
+                '<span class="vs-chip-name" data-i18n="voice.autoSend">Auto-Send</span>',
+                '<span class="vs-chip-sub" data-i18n="voice.autoSendSub">Send message immediately after STT</span>',
               '</div>',
             '</div>',
             '<div class="vs-chip ' + (vs.dialogMode ? 'active' : '') + '" id="vsDialogChip">',
               '<span class="vs-chip-icon">💬</span>',
               '<div class="vs-chip-desc">',
-                '<span class="vs-chip-name" data-i18n="voice.dialog">Dialog-Modus</span>',
+                '<span class="vs-chip-name" data-i18n="voice.dialog">Dialog Mode</span>',
                 '<span class="vs-chip-sub" data-i18n="voice.dialogSub">Read AI response aloud → then listen again</span>',
               '</div>',
             '</div>',

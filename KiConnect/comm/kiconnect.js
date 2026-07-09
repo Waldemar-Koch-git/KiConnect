@@ -6,6 +6,7 @@
 // ── Theme ─────────────────────────────────────────────────────────
 const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
+// Applies a theme by name to the document root and updates the active theme swatch; falls back to 'dark' if the name is unknown.
 function applyTheme(name) {
   if (!THEMES.includes(name)) name = 'dark';
   document.documentElement.setAttribute('data-theme', name);
@@ -15,6 +16,7 @@ function applyTheme(name) {
   });
 }
 
+// Applies a theme and persists the choice to localStorage.
 function setTheme(name) {
   applyTheme(name);
   localStorage.setItem('kic_theme', name);
@@ -29,15 +31,18 @@ function setTheme(name) {
 
 let currentLang = localStorage.getItem('kic_lang') || 'en';
 
+// Looks up a translation string for the current language, falling back to English then to the raw key.
 function t(key) {
   const lang = TRANSLATIONS[currentLang] || TRANSLATIONS['en'];
   return lang[key] ?? TRANSLATIONS['en'][key] ?? key;
 }
+// Like t(), but also substitutes {placeholder} variables in the translated string.
 function tf(key, vars) {
   let s = t(key);
   if (vars) Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll(`{${k}}`, v); });
   return s;
 }
+// Re-applies all data-i18n text/placeholder/title attributes on the page for the current language.
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
@@ -62,6 +67,7 @@ function applyTranslations() {
     if (hiddenSel && !hiddenSel.value) syncCustomDropdown();
   }
 }
+// Switches the active UI language, persists it, and refreshes every language-dependent UI part (bubbles, chips, tour, dropdown, sidebar).
 function setLang(code) {
   currentLang = code;
   localStorage.setItem('kic_lang', code);
@@ -103,6 +109,7 @@ function setLang(code) {
     closeLangDropdown();
   }
 }
+// (Re)builds the language dropdown list, marking the currently active language.
 function renderLangDropdown() {
   const dd = document.getElementById('langDropdown');
   if (!dd) return;
@@ -115,16 +122,19 @@ function renderLangDropdown() {
     dd.appendChild(div);
   });
 }
+// Opens/closes the language dropdown.
 function toggleLangDropdown() {
   const dd = document.getElementById('langDropdown');
   if (!dd) return;
   renderLangDropdown();
   dd.classList.toggle('open');
 }
+// Closes the language dropdown.
 function closeLangDropdown() {
   document.getElementById('langDropdown')?.classList.remove('open');
 }
 
+// Updates the text of existing bubble action buttons and personal-note UI in place after a language change, without a full re-render.
 function retranslateBubbleButtons() {
   document.querySelectorAll('.bubble-act-btn[data-action]').forEach(btn => {
     const action = btn.getAttribute('data-action');
@@ -178,6 +188,7 @@ function retranslateCodeBlockButtons(root = document) {
 }
 
 
+// Re-applies translated labels to the starter suggestion chips shown on an empty chat.
 function retranslateSuggestionChips() {
   const suggestions = [
     { i18n: 'empty.quantum', msgKey: 'empty.quantumMsg' },
@@ -292,10 +303,12 @@ const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith
 // ── Image storage limit (user-configurable, default 500 KB) ──────
 // Stored in localStorage as 'kic_max_img_bytes' (plain — not sensitive)
 const DEFAULT_MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
+// Returns the user-configured max size (bytes) an image may have to be kept in storage, or the default.
 function getMaxImageStorageBytes() {
   const v = parseInt(localStorage.getItem('kic_max_img_bytes') || '0');
   return v > 0 ? v : DEFAULT_MAX_IMAGE_STORAGE_BYTES;
 }
+// Persists the max image storage size (bytes) to localStorage.
 function setMaxImageStorageBytes(bytes) {
   localStorage.setItem('kic_max_img_bytes', String(bytes));
 }
@@ -310,6 +323,7 @@ let _orModelMeta = {};
     if (raw) _orModelMeta = JSON.parse(raw);
   } catch(e) { _orModelMeta = {}; }
 })();
+// Persists the cached OpenRouter model metadata to localStorage.
 function _saveOrCache() {
   try { localStorage.setItem('kic_or_model_meta', JSON.stringify(_orModelMeta)); } catch(e) {}
 }
@@ -325,6 +339,7 @@ let _anthropicModelCaps = {};
     if (raw) _anthropicModelCaps = JSON.parse(raw);
   } catch(e) { _anthropicModelCaps = {}; }
 })();
+// Persists the cached Anthropic model capability flags to localStorage.
 function _saveAnthropicCaps() {
   try { localStorage.setItem('kic_anthropic_model_caps', JSON.stringify(_anthropicModelCaps)); } catch(e) {}
 }
@@ -357,6 +372,7 @@ function isTemperatureSupported(modelId) {
   return !/^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(bare);
 }
 
+// Returns the built-in default max-output-tokens for a model ID, using known models, cached OpenRouter metadata, or name-based heuristics as fallback.
 function getModelDefaultMax(modelId) {
   if (!modelId) return 8096;
   const known = KNOWN_MODELS[modelId];
@@ -378,6 +394,7 @@ function getModelDefaultMax(modelId) {
   if (/^glm-4-32b/i.test(modelId)) return 16384;
   return 4096;
 }
+// Returns the effective max-output-tokens for a model: a user override if set, otherwise the default.
 function getModelMaxOutput(modelId) {
   if (!modelId) return 8096;
   const override = config.userModelMaxOverrides?.[modelId];
@@ -393,6 +410,7 @@ const DEFAULT_CONFIG = {
   webSearchMode: 'manual', webSearchEngine: 'free', webSearchApiKey: '', webSearchResultCount: 8,
   webSearchEnabled: false, webLinkEnabled: false,
 };
+// Returns a deep copy of DEFAULT_CONFIG, used to initialize or reset app configuration.
 function freshConfig() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
 let config = freshConfig();
 let providers = [];
@@ -441,6 +459,7 @@ const _loginFailures = {}; // { accountId: { count, lockedUntil } }
 const BF_MAX_ATTEMPTS = 5;
 const BF_BASE_DELAY_MS = 30000; // 30 s after 5 failed attempts, then exponential
 
+// Records a failed login attempt for an account and locks it out with exponential backoff once the attempt limit is reached.
 function _recordLoginFailure(accountId) {
   if (!_loginFailures[accountId]) _loginFailures[accountId] = { count: 0, lockedUntil: 0 };
   _loginFailures[accountId].count++;
@@ -451,7 +470,9 @@ function _recordLoginFailure(accountId) {
     _loginFailures[accountId].lockedUntil = Date.now() + Math.min(delay, 3600000);
   }
 }
+// Clears the recorded failed-login count/lock for an account (called after a successful login).
 function _resetLoginFailures(accountId) { delete _loginFailures[accountId]; }
+// Returns the remaining lockout time in ms for an account, or 0 if it isn't locked.
 function _loginLockRemaining(accountId) {
   const f = _loginFailures[accountId];
   if (!f || !f.lockedUntil) return 0;
@@ -460,6 +481,7 @@ function _loginLockRemaining(accountId) {
 }
 
 let _lockCountdownTimer = null;
+// Starts a 1s-interval UI countdown that disables the login form while an account is locked out, re-enabling it once the lock expires.
 function _startLockCountdown(accountId, errorEl, btn, input) {
   if (_lockCountdownTimer) clearInterval(_lockCountdownTimer);
   _lockCountdownTimer = setInterval(() => {
@@ -478,10 +500,12 @@ function _startLockCountdown(accountId, errorEl, btn, input) {
     }
   }, 1000);
 }
+// Stops the login lockout countdown timer, if one is running.
 function _stopLockCountdown() {
   if (_lockCountdownTimer) { clearInterval(_lockCountdownTimer); _lockCountdownTimer = null; }
 }
 
+// Derives an AES-GCM CryptoKey from a passphrase and salt using PBKDF2 (600k iterations, SHA-256).
 async function deriveKeyPBKDF2(passphrase, saltBytes) {
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -533,6 +557,7 @@ async function getCryptoKey() {
 // Without the in-RAM CryptoKey (= different tab, browser restart) no access.
 const _SESSION_TOKEN_KEY = 'kic_st';
 
+// Encrypts a short-lived session marker with the current CryptoKey and stores it in sessionStorage, so a page reload can restore the session without re-entering the password.
 async function _writeSessionToken() {
   if (!_cryptoKey || !_activeAccountId) return;
   try {
@@ -548,6 +573,7 @@ async function _writeSessionToken() {
   } catch {}
 }
 
+// Decrypts and validates the sessionStorage session token for an account; returns true only if it matches and is less than 24h old.
 async function _validateSessionToken(accountId) {
   if (!_cryptoKey) return false;
   try {
@@ -561,6 +587,7 @@ async function _validateSessionToken(accountId) {
   } catch { return false; }
 }
 
+// Sets (or clears) the in-memory session passphrase and invalidates the cached CryptoKey.
 function setSessionPassphrase(pw) {
   _sessionPassphrase = pw || null;
   _cryptoKey = null; // invalidate key cache
@@ -568,11 +595,13 @@ function setSessionPassphrase(pw) {
   // No password in sessionStorage anymore!
   // _writeSessionToken() is called after getCryptoKey().
 }
+// Returns whether a session token is present in sessionStorage (does not itself validate it).
 function restoreSessionPassphrase() {
   // Only checks whether a token is present; validation happens async in checkLogin().
   return !!sessionStorage.getItem(_SESSION_TOKEN_KEY);
 }
 
+// Encrypts a plaintext string with AES-GCM using the account's CryptoKey and returns it base64-encoded.
 async function encryptStr(plaintext) {
   if (!plaintext) return '';
   const key = await getCryptoKey();
@@ -591,6 +620,7 @@ async function encryptStr(plaintext) {
   return btoa(bin);
 }
 
+// Decrypts a base64-encoded AES-GCM string previously produced by encryptStr().
 async function decryptStr(b64) {
   if (!b64) return '';
   try {
@@ -607,6 +637,7 @@ async function decryptStr(b64) {
 async function encryptObj(obj) {
   return encryptStr(JSON.stringify(obj));
 }
+// Decrypts and JSON-parses an object previously encrypted with encryptObj(); returns the fallback on failure.
 async function decryptObj(b64, fallback) {
   if (!b64) return fallback;
   try {
@@ -616,11 +647,13 @@ async function decryptObj(b64, fallback) {
   } catch { return fallback; }
 }
 
+// Returns a copy of a provider object with its apiKey field encrypted, for storage.
 async function encryptProvider(p) {
   const out = {...p};
   if (p.apiKey) out.apiKey = await encryptStr(p.apiKey);
   return out;
 }
+// Returns a copy of a provider object with its apiKey field decrypted, after loading from storage.
 async function decryptProvider(p) {
   const out = {...p};
   if (p.apiKey) out.apiKey = await decryptStr(p.apiKey);
@@ -646,6 +679,7 @@ async function storeAccountPasswordHash(accountId, pw) {
   const acc = _accounts.find(a => a.id === accountId);
   if (acc) { acc.pwHash = hashB64; acc.pwSalt = saltB64; acc.pwVersion = 2; saveAccountRegistry(); }
 }
+// Verifies a password against an account's stored PBKDF2 hash.
 async function verifyAccountPassword(accountId, pw) {
   const acc = getAccount(accountId);
   if (!acc || !acc.pwHash || acc.pwVersion !== 2) return false;
@@ -659,6 +693,7 @@ async function verifyAccountPassword(accountId, pw) {
 // ── Multi-Account Registry ────────────────────────────────────────
 let _accounts = [];
 let _activeAccountId = null;
+// Looks up an account by ID in the in-memory account list.
 function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
 
 // ═══════════════════════════════════════════════════════════════
@@ -674,6 +709,7 @@ function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
 const _STORE_BASE = '/store';
 let _storeAvailable = true; // false if the server doesn't respond
 
+// Reads a single key's value for an account from the server-side storage backend.
 async function _storeGet(accountId, key) {
   if (!_storeAvailable) return _lsGetRaw(accountId, key);
   try {
@@ -689,6 +725,7 @@ async function _storeGet(accountId, key) {
   }
 }
 
+// Writes a single key's value for an account to the server-side storage backend.
 async function _storePut(accountId, key, value) {
   const payload = JSON.stringify(value);
   if (_storeAvailable) {
@@ -709,6 +746,7 @@ async function _storePut(accountId, key, value) {
   _lsSetRaw(accountId, key, payload);
 }
 
+// Deletes a single key's value for an account from the server-side storage backend.
 async function _storeDel(accountId, key) {
   if (_storeAvailable) {
     try { await fetch(`${_STORE_BASE}/${accountId}/${key}`, { method: 'DELETE' }); } catch {}
@@ -716,6 +754,7 @@ async function _storeDel(accountId, key) {
   localStorage.removeItem(`kic_${accountId}_${key}`);
 }
 
+// Reads the shared account registry (list of accounts) from the storage backend.
 async function _registryGet() {
   if (_storeAvailable) {
     try {
@@ -726,6 +765,7 @@ async function _registryGet() {
   try { return JSON.parse(localStorage.getItem('kic_accounts') || '[]'); } catch { return []; }
 }
 
+// Writes the account registry (list of accounts) to the storage backend.
 async function _registryPut(data) {
   const payload = JSON.stringify(data);
   if (_storeAvailable) {
@@ -739,11 +779,13 @@ async function _registryPut(data) {
   localStorage.setItem('kic_accounts', payload);
 }
 
+// Reads and JSON-parses a per-account localStorage entry (legacy fallback storage).
 function _lsGetRaw(accountId, key) {
   const v = localStorage.getItem(`kic_${accountId}_${key}`);
   if (v === null) return null;
   try { return JSON.parse(v); } catch { return v; }
 }
+// Writes a per-account localStorage entry (legacy fallback storage).
 function _lsSetRaw(accountId, key, rawStr) {
   try { localStorage.setItem(`kic_${accountId}_${key}`, rawStr); } catch {}
 }
@@ -752,10 +794,12 @@ function _lsSetRaw(accountId, key, rawStr) {
 async function loadAccountRegistryAsync() {
   try { _accounts = await _registryGet() || []; } catch { _accounts = []; }
 }
+// Persists the current in-memory account list to the registry (fire-and-forget).
 function saveAccountRegistry() {
   _registryPut(_accounts).catch(() => {});
 }
 
+// Returns a storage-safe copy of a message: strips large binary payloads (images over the size limit, PDFs, extracted text files) and replaces them with lightweight reference stubs plus file-name chips.
 function sanitizeMsgForStorage(msg) {
   if (!Array.isArray(msg.content)) return msg;
   const maxBytes = getMaxImageStorageBytes();
@@ -806,6 +850,7 @@ function sanitizeMsgForStorage(msg) {
   return result;
 }
 
+// Encrypts and persists the full app state (config, providers, profiles, folders, chats, UI prefs) for the active account.
 async function save() {
   if (!_activeAccountId) return;
   try {
@@ -843,6 +888,7 @@ async function save() {
   }
 }
 
+// Loads and decrypts the full app state for the active account, migrating from legacy localStorage entries where needed.
 async function load() {
   if (!_activeAccountId) return;
   async function loadKey(key, fallback) {
@@ -938,11 +984,14 @@ function splitModelId(fullId) {
   if (sep === -1) return { providerId: null, modelId: fullId };
   return { providerId: fullId.slice(0, sep), modelId: fullId.slice(sep + 2) };
 }
+// Combines a provider ID and a bare model ID into the app's internal 'providerId::modelId' identifier.
 function makeModelId(providerId, modelId) { return `${providerId}::${modelId}`; }
+// Resolves the provider object that a full (provider-prefixed) model ID belongs to.
 function providerForModel(fullModelId) {
   const { providerId } = splitModelId(fullModelId);
   return providers.find(p => p.id === providerId) || null;
 }
+// Returns the base API URL for a provider, either its configured custom server URL (openai-compat) or the well-known endpoint for its type.
 function getProviderEndpoint(provider) {
   if (!provider) return null;
   if (provider.type === 'openai-compat') return (provider.serverUrl || '').replace(/\/+$/, '');
@@ -959,6 +1008,7 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'glm')           return 'https://api.z.ai/api/paas/v4';
   return null;
 }
+// Returns the max-output-tokens to send with a request: the active profile's override if set, capped at the model's max.
 function effectiveMaxTokens() {
   const profile = activeProfile();
   const { modelId } = splitModelId(config.model);
@@ -978,22 +1028,37 @@ const ALLOWED_API_DOMAINS = [
   'searx.be','searxng.world','search.bus-hit.me','searx.tiekoetter.com',
   'search.sapti.me','searx.prvcy.eu','searx.fmac.xyz','search.ononoki.org',
 ];
+// A request is "safe" if its host is either one of the well-known,
+// built-in provider domains, OR the host of a custom server URL the user
+// themselves entered in the Provider editor (type "openai-compat" /
+// "kiconnect-nrw"). The latter is what makes self-hosted / third-party
+// OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, a company's own
+// gateway, ...) actually reachable — without it, any serverUrl outside the
+// fixed list below was silently rejected by proxyUrl(), even though the
+// Provider editor happily lets you save one.
 function isSafeApiUrl(url) {
   try {
     const h = new URL(url).hostname;
-    return ALLOWED_API_DOMAINS.some(d => h === d || h.endsWith('.' + d));
+    if (ALLOWED_API_DOMAINS.some(d => h === d || h.endsWith('.' + d))) return true;
+    return providers.some(p => {
+      if (p.type !== 'openai-compat' || !p.serverUrl) return false;
+      try { return new URL(p.serverUrl).hostname === h; } catch { return false; }
+    });
   } catch { return false; }
 }
+// Routes a request URL through the local dev proxy (if active) after checking it against isSafeApiUrl(); throws if the domain isn't allowed.
 function proxyUrl(url) {
   if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
   return USE_PROXY ? '/proxy/' + url : url;
 }
+// Routes a public (non-API-key) fetch such as page/search fetching through the local dev proxy; only checks the URL scheme, not a domain whitelist.
 function proxyPublicUrl(url) {
   const u = new URL(url);
   if (!/^https?:$/i.test(u.protocol)) throw new Error(t('js.apiDomainBlocked') || 'URL not allowed.');
   return USE_PROXY ? '/proxy/' + url : url;
 }
 
+// Refreshes the settings panel's provider status summary (name, type, key-present/valid state) for every configured provider.
 function updateActiveProviderInfo() {
   const hint = document.getElementById('proxyHint');
   if (hint) hint.style.display = USE_PROXY ? 'none' : 'block';
@@ -1033,6 +1098,7 @@ function openProviderPanel() {
   document.getElementById('overlay').classList.add('show');
   document.querySelector('[data-panel="providerPanel"]')?.classList.add('active');
 }
+// (Re)builds the list of configured providers in the Provider panel, with enable/disable, edit and delete controls.
 function renderProviderList() {
   const list = document.getElementById('providerList');
   list.innerHTML = '';
@@ -1097,6 +1163,7 @@ function toggleProviderEnabled(id) {
   save(); renderProviderList(); fetchModels();
 }
 
+// Resets and opens the provider editor for creating a new provider.
 function startNewProvider() {
   editingProviderId = null;
   document.getElementById('pvNameInput').value  = '';
@@ -1106,6 +1173,7 @@ function startNewProvider() {
   document.getElementById('providerEditorTitle').textContent = t('provider.new');
   document.getElementById('providerEditor').style.display = 'block';
 }
+// Opens the provider editor pre-filled with an existing provider's data.
 function editProvider(id) {
   const p = providers.find(x => x.id === id); if (!p) return;
   editingProviderId = id;
@@ -1116,6 +1184,7 @@ function editProvider(id) {
   document.getElementById('providerEditorTitle').textContent = t('provider.edit');
   document.getElementById('providerEditor').style.display = 'block';
 }
+// Marks a provider-type chip as selected and shows/hides the server-URL field and hint text accordingly.
 function selectProviderType(type) {
   document.querySelectorAll('.type-chip').forEach(el => el.classList.toggle('selected', el.dataset.type === type));
   document.getElementById('pvServerUrlGroup').style.display = (type === 'openai-compat') ? 'block' : 'none';
@@ -1127,8 +1196,10 @@ function selectProviderType(type) {
     else hint.style.display = 'none';
   }
 }
+// Returns the currently selected provider type chip's value.
 function getSelectedProviderType() { return document.querySelector('.type-chip.selected')?.dataset.type || 'openai-compat'; }
 
+// Validates and saves the provider editor form, creating or updating a provider, then refreshes the model list.
 async function saveProviderEditor() {
   const name = document.getElementById('pvNameInput').value.trim();
   if (!name) { toast(t('js.nameRequired')); return; }
@@ -1150,7 +1221,9 @@ async function saveProviderEditor() {
     setTimeout(nextTourStep, 250);
   }
 }
+// Closes the provider editor without saving.
 function cancelProviderEditor() { document.getElementById('providerEditor').style.display = 'none'; }
+// Removes a provider and refreshes the provider list and available models.
 function deleteProvider(id) {
   providers = providers.filter(p => p.id !== id);
   save(); renderProviderList(); fetchModels();
@@ -1158,6 +1231,7 @@ function deleteProvider(id) {
 
 // ── Profiles ──────────────────────────────────────────────────────
 function activeProfile() { return profiles.find(p => p.id === config.activeProfileId) || null; }
+// Applies a profile's system prompt, temperature and token settings to the active config and refreshes the badge/UI.
 function applyProfile(p) {
   if (!p) return;
   config.activeProfileId = p.id;
@@ -1172,6 +1246,7 @@ function applyProfile(p) {
   }
   save(); toast(`${t('js.profileActivated')}: „${p.name}"`);
 }
+// Updates the small profile-name/color badge shown near the model selector.
 function updateProfileBadge() {
   const p = activeProfile();
   // Update legacy badge name (hidden via CSS but keep for safety)
@@ -1203,6 +1278,7 @@ function updateProfileBadge() {
   }
 }
 
+// (Re)builds the list of saved profiles in the Profile panel, with select/edit/delete controls.
 function renderProfileList() {
   const list = document.getElementById('profileList');
   list.innerHTML = '';
@@ -1244,8 +1320,10 @@ function renderProfileList() {
   });
 }
 
+// Applies the chosen profile and re-renders the profile list to reflect the new selection.
 function selectProfile(id) { const p = profiles.find(x=>x.id===id); if(p) { applyProfile(p); renderProfileList(); } }
 
+// Resets and opens the profile editor for creating a new profile.
 function startNewProfile() {
   editingProfileId = null;
   document.getElementById('peNameInput').value  = '';
@@ -1257,6 +1335,7 @@ function startNewProfile() {
   renderColorRow(PROFILE_COLORS[profiles.length % PROFILE_COLORS.length]);
   document.getElementById('profileEditor').style.display = 'block';
 }
+// Opens the profile editor pre-filled with an existing profile's data.
 function editProfile(id) {
   const p = profiles.find(x=>x.id===id); if(!p) return;
   editingProfileId = id;
@@ -1275,6 +1354,7 @@ function editProfile(id) {
   document.getElementById('peMaxTokensNum').textContent = parseInt(slider.value).toLocaleString();
   document.getElementById('profileEditor').style.display = 'block';
 }
+// Syncs the profile editor's max-tokens slider/label with the currently selected model's limits.
 function updatePeMaxTokensUI() {
   const fullId = config.model;
   const { modelId } = splitModelId(fullId);
@@ -1292,6 +1372,7 @@ function updatePeMaxTokensUI() {
     if (numEl) numEl.textContent = parseInt(slider.value).toLocaleString();
   }
 }
+// (Re)builds the color-swatch picker, marking the given color as selected.
 function renderColorRow(sel) {
   const row = document.getElementById('colorRow');
   row.innerHTML = '';
@@ -1307,7 +1388,9 @@ function renderColorRow(sel) {
     row.appendChild(sw);
   });
 }
+// Returns the currently selected color swatch's value, or the first palette color as fallback.
 function getSelectedColor() { return document.querySelector('.color-swatch.selected')?.dataset.color || PROFILE_COLORS[0]; }
+// Validates and saves the profile editor form, creating or updating a profile.
 function saveProfileEditor() {
   const name = document.getElementById('peNameInput').value.trim();
   if (!name) { toast(t('js.nameRequired')); return; }
@@ -1327,7 +1410,9 @@ function saveProfileEditor() {
   }
   save(); renderProfileList(); document.getElementById('profileEditor').style.display = 'none'; toast(t('js.profileSaved'));
 }
+// Closes the profile editor without saving.
 function cancelProfileEditor() { document.getElementById('profileEditor').style.display = 'none'; }
+// Removes a profile; if it was active, resets to defaults or falls back to another profile.
 function deleteProfile(id) {
   profiles = profiles.filter(p=>p.id!==id);
   if (config.activeProfileId === id) {
@@ -1376,10 +1461,12 @@ function syncSettingsPanel() {
 // after the last change) so we don't hammer storage on every keystroke; selects/buttons
 // save right away since a click is already a discrete, deliberate action.
 let _tuningSaveTimer = null;
+// Debounces save() calls from the tuning panel's text/number/range inputs (fires 500ms after the last change).
 function scheduleTuningSave() {
   clearTimeout(_tuningSaveTimer);
   _tuningSaveTimer = setTimeout(() => save(), 500);
 }
+// Applies a chat max-width value (px) to the layout and syncs the tuning-panel slider/label.
 function applyChatWidth(val) {
   val = parseInt(val);
   document.documentElement.style.setProperty('--chat-max-w', val + 'px');
@@ -1393,6 +1480,7 @@ function applyChatWidth(val) {
 // ── Models ────────────────────────────────────────────────────────
 let providerStatus = {};
 
+// Queries every enabled provider's /models endpoint (or uses static lists for fixed providers), merges the results into the model selector, and updates each provider's status indicator.
 async function fetchModels() {
   if (!providers.length) { setStatus('yellow'); return; }
   let allGroups = [], anyOk = false, anyError = false;
@@ -1566,6 +1654,7 @@ async function fetchModels() {
   updateModelMaxInfo(); syncAllModelSelects(); updateThinkingUI();
   if (window.buildCustomDropdownData) buildCustomDropdownData();
 }
+// Refreshes the 'max output tokens' hint shown near the model selector for the currently selected model.
 function updateModelMaxInfo() {
   const { modelId } = splitModelId(config.model);
   const max = getModelMaxOutput(modelId);
@@ -1577,6 +1666,7 @@ function updateModelMaxInfo() {
 const OAI_EFFORT = { 1: 'low', 2: 'medium', 3: 'high' };
 const CLAUDE_BUDGET = { 1: 2000, 2: 8000, 3: 20000 };
 
+// Returns whether a model ID supports the extended-thinking / reasoning-effort feature.
 function isThinkingCapable(modelId) {
   if (!modelId) return false;
   const bare = modelId.split('/').pop().toLowerCase();
@@ -1585,10 +1675,13 @@ function isThinkingCapable(modelId) {
     /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare) ||
     /^glm-(5|4\.[567])/i.test(bare);
 }
+// Returns whether a model ID is an Anthropic Claude model with thinking support (legacy or adaptive).
 function isAnthropicThinkingModel(modelId) {
   return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
 }
+// Returns whether a model uses the legacy budget_tokens thinking format rather than adaptive effort.
 function usesTokenBudget(modelId) { return isAnthropicThinkingModel(modelId || ''); }
+// Shows/hides the thinking-mode controls depending on whether the selected model supports it.
 function updateThinkingUI() {
   const { modelId } = splitModelId(config.model);
   const capable = isThinkingCapable(modelId);
@@ -1602,6 +1695,7 @@ function updateThinkingUI() {
   configureThinkingSlider(modelId);
   updateThinkingIntensityUI();
 }
+// Configures the thinking-intensity slider's range/labels for the given model (adaptive effort levels vs legacy token budget).
 function configureThinkingSlider(modelId) {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityLabel');
@@ -1618,6 +1712,7 @@ function configureThinkingSlider(modelId) {
     if (label) label.textContent = t('thinking.intensity');
   }
 }
+// Refreshes the thinking-intensity slider's displayed label/value.
 function updateThinkingIntensityUI() {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityVal');
@@ -1634,6 +1729,7 @@ function updateThinkingIntensityUI() {
     label.textContent = t(ikeys[val]);
   }
 }
+// Toggles extended-thinking mode on/off for the current chat and persists the setting.
 function toggleThinking() {
   const { modelId } = splitModelId(config.model);
   if (!isThinkingCapable(modelId)) return;
@@ -1643,7 +1739,9 @@ function toggleThinking() {
   save();
   toast(config.thinkingEnabled ? t('js.thinkingEnabled') : t('js.thinkingDisabled'));
 }
+// No-op kept for backward compatibility; model selects are now synced individually where needed.
 function syncAllModelSelects() {}
+// Sets the connection-status indicator color (green/yellow/red).
 function setStatus(c) {
   const d = document.getElementById('statusDot');
   if (!d) return;
@@ -1663,16 +1761,19 @@ function newFolder() {
   folders.push({id, name: t('js.newFolder'), collapsed:false});
   save(); renderSidebar(); setTimeout(()=>startRenamingFolder(id), 50);
 }
+// Deletes a folder; chats inside it are moved out (not deleted) before removal.
 function deleteFolder(id) {
   chats.forEach(c=>{if(c.folderId===id)c.folderId=null;});
   folders = folders.filter(f=>f.id!==id);
   if (activeFolderId === id) activeFolderId = null;
   save(); renderSidebar();
 }
+// Expands/collapses a sidebar folder.
 function toggleFolder(id) {
   const f = folders.find(x=>x.id===id);
   if (f) { f.collapsed=!f.collapsed; save(); renderSidebar(); }
 }
+// Puts a folder's sidebar entry into inline rename-edit mode.
 function startRenamingFolder(id) {
   const el = document.getElementById(`fname_${id}`); if(!el) return;
   const f = folders.find(x=>x.id===id);
@@ -1682,6 +1783,7 @@ function startRenamingFolder(id) {
   input.addEventListener('keydown', e => { if(e.key==='Enter') input.blur(); });
   el.replaceWith(input); input.focus();
 }
+// Applies a new folder name from the inline rename input and saves it.
 function commitRenameFolder(id, newName) {
   const f = folders.find(x=>x.id===id);
   if (f) f.name = newName.trim() || f.name;
@@ -1694,6 +1796,7 @@ function onFolderDragStart(e, id) {
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('text/plain', 'folder:' + id);
 }
+// Handles a chat (or folder) being dropped onto a folder in the sidebar, moving it there.
 function onFolderDrop(e, targetId) {
   e.preventDefault();
   e.stopPropagation();
@@ -1710,16 +1813,19 @@ function onFolderDrop(e, targetId) {
 
 // ── Chats ─────────────────────────────────────────────────────────
 function currentChat() { return chats.find(c=>c.id===currentChatId); }
+// Returns the folder ID a newly created chat should be placed in, based on the currently active sidebar folder.
 function getSidebarTargetFolderId() {
   if (activeFolderId === null || folders.some(f=>f.id===activeFolderId)) return activeFolderId || null;
   const chat = currentChat();
   if (chat && (chat.folderId === null || folders.some(f=>f.id===chat.folderId))) return chat.folderId || null;
   return folders[0]?.id || null;
 }
+// Sets which sidebar folder is currently active/expanded for filtering the chat list.
 function setActiveFolder(folderId) {
   activeFolderId = folderId || null;
   renderSidebar();
 }
+// Creates and switches to a new empty chat, optionally inside a given folder.
 function newChat(folderId) {
   if (folderId === undefined) folderId = getSidebarTargetFolderId();
   const id = Date.now().toString();
@@ -1727,6 +1833,7 @@ function newChat(folderId) {
   activeFolderId = folderId || null;
   currentChatId = id; save(); renderSidebar(); renderMessages([]);
 }
+// Switches the active chat and re-renders the message list.
 function switchChat(id) {
   currentChatId = id;
   const c = chats.find(x=>x.id===id);
@@ -1738,6 +1845,7 @@ function switchChat(id) {
   renderSidebar();
   if (c) renderMessages(c.messages);
 }
+// Deletes a chat after confirmation and switches to another chat if the deleted one was active.
 function deleteChat(id) {
   chats = chats.filter(c=>c.id!==id);
   if (currentChatId === id) {
@@ -1748,6 +1856,7 @@ function deleteChat(id) {
   }
   save(); renderSidebar();
 }
+// Puts a chat's sidebar entry into inline rename-edit mode.
 function startRenamingChat(id) {
   const titleEl = document.getElementById(`ctitle_${id}`); if(!titleEl) return;
   const chat = chats.find(c=>c.id===id); if(!chat) return;
@@ -1758,10 +1867,12 @@ function startRenamingChat(id) {
   input.addEventListener('keydown', e => { if(e.key==='Enter') input.blur(); });
   titleEl.replaceWith(input); input.focus(); input.select();
 }
+// Returns the set of chat IDs a drag/move/delete action should apply to (the multi-selection if active, otherwise just the given chat).
 function getMoveChatIds(chatId) {
   if (_selectedChatIds.has(chatId)) return [..._selectedChatIds].filter(id => chats.some(c => c.id === id));
   return [chatId];
 }
+// Moves one or more chats into a different folder (or out of all folders).
 function moveChats(chatIds, folderId) {
   const ids = [...new Set(chatIds || [])];
   if (!ids.length) return;
@@ -1774,6 +1885,7 @@ function moveChats(chatIds, folderId) {
   toast(tf(ids.length > 1 ? 'js.chatsMoved' : 'js.chatMoved', { n: ids.length }));
 }
 
+// Opens the right-click context menu for a chat sidebar item at the cursor position.
 function showChatCtxMenu(e, chatId) {
   e.preventDefault(); e.stopPropagation();
   const menu = document.getElementById('ctxMenu');
@@ -1835,6 +1947,7 @@ function showChatCtxMenu(e, chatId) {
   menu.style.left = x+'px';
   menu.style.top  = y+'px';
 }
+// Hides the chat context menu.
 function hideCtx() { document.getElementById('ctxMenu').style.display='none'; }
 document.addEventListener('click', hideCtx);
 
@@ -1845,18 +1958,21 @@ function toggleChatSelect(id) {
   if (_selectedChatIds.size === 0) _multiSelectMode = false;
   renderSidebar();
 }
+// Switches the sidebar into multi-select mode for bulk chat actions.
 function enterMultiSelectMode() {
   _multiSelectMode = true;
   _selectedChatIds.clear();
   document.body.classList.add('multiselect-active');
   renderSidebar();
 }
+// Leaves multi-select mode and clears the current chat selection.
 function exitMultiSelectMode() {
   _multiSelectMode = false;
   _selectedChatIds.clear();
   document.body.classList.remove('multiselect-active');
   renderSidebar();
 }
+// Deletes all currently multi-selected chats after confirmation.
 function deleteSelectedChats() {
   if (_selectedChatIds.size === 0) return;
   const ids = [..._selectedChatIds];
@@ -1878,11 +1994,13 @@ function deleteSelectedChats() {
   document.body.classList.remove('multiselect-active');
   save(); renderSidebar();
 }
+// Marks a chat as the one currently being dragged in the sidebar.
 function onDragStart(e, id) {
   draggedChatId = id;
   e.dataTransfer.effectAllowed = 'move';
   if (e.dataTransfer) e.dataTransfer.setData('text/plain', 'chat:' + id);
 }
+// Handles a chat being dropped directly onto (or out of) a folder target.
 function onDropFolder(e, folderId) {
   e.preventDefault();
   document.querySelectorAll('.drag-target').forEach(el=>el.classList.remove('drag-target'));
@@ -2091,6 +2209,7 @@ function renderSidebar() {
   }
 }
 
+// Builds the DOM element for a single chat entry in the sidebar (title, menu, drag handlers, selection checkbox).
 function buildChatItem(c) {
   const div = document.createElement('div');
   const isSelected = _selectedChatIds.has(c.id);
@@ -2214,6 +2333,7 @@ function renderMessages(messages, limitCount) {
   updateChatTokenTotal();
 }
 
+// Builds the full DOM row for a single chat message: avatar, bubble content (text/images/files/web sources), and surrounding chrome.
 function buildMsgEl(msg, idx) {
   const isUser = msg.role === 'user';
   const cls = isUser ? 'user' : 'ai';
@@ -2293,19 +2413,7 @@ function buildMsgEl(msg, idx) {
   }
 
   if (msg._webSources && msg._webSources.length) {
-    const sourceWrap = document.createElement('div');
-    sourceWrap.className = 'web-sources';
-    msg._webSources.slice(0, WEB_SEARCH_RESULT_MAX).forEach(src => {
-      const a = document.createElement('a');
-      a.className = 'web-source-chip';
-      a.href = src.url;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      a.title = src.snippet ? `${src.url}\n\n${src.snippet}` : src.url;
-      a.textContent = `[${src.index}] ${src.title || src.url}`;
-      sourceWrap.appendChild(a);
-    });
-    bubble.appendChild(sourceWrap);
+    bubble.appendChild(buildWebSourcesRow(msg._webSources));
   }
 
   if (!contentHtml && bubble.children.length === 0)
@@ -2414,16 +2522,12 @@ function _buildBubbleChrome(row, wrap, bubble, msg, idx) {
  * _finalizeStreamingBubble) into its final interactive form, WITHOUT
  * discarding and rebuilding the bubble content.
  *
- * Previously _attachAIActions always called buildMsgEl() and replaced the
- * whole row — which re-ran formatText() and typesetMath() over content that
- * had just been carefully, incrementally rendered during streaming (see
- * renderStreamingBubble's stable/tail split). That extra pass was pure
- * redundant work: everything buildMsgEl would have parsed out of msg.content
- * is already sitting on screen, correctly formatted and typeset. All that's
- * actually missing on a freshly-streamed row is the chrome around it (action
- * buttons, sibling nav, token badge, note section) and event wiring for any
- * code-block buttons — so we attach only that, and leave the rendered
- * content untouched.
+ * Everything buildMsgEl() would parse out of msg.content is already sitting
+ * on screen, correctly formatted and typeset. All that's actually missing on
+ * a freshly-streamed row is the chrome around it (action buttons, sibling
+ * nav, token badge, note section) and event wiring for any code-block
+ * buttons — so this attaches only that, leaving the rendered content itself
+ * untouched (no redundant formatText()/typesetMath() pass).
  *
  * Returns true if it successfully upgraded `rowEl` in place; false if
  * `rowEl` isn't usable (e.g. got removed from the DOM in the meantime, or
@@ -2451,6 +2555,7 @@ function _finalizeAIRowInPlace(rowEl, msg, idx) {
 // builder never reads.
 const _noteSaveTimers = new WeakMap();
 
+// Builds the collapsible personal-note UI attached to a message bubble (edit/preview toggle, autosave, delete).
 function buildNoteSection(msg) {
   const holder = document.createElement('div');
   holder.className = 'note-holder';
@@ -2602,6 +2707,26 @@ function openImageLightbox(url) {
   document.body.appendChild(lb);
 }
 
+// Builds the row of clickable "[1] title" source chips shown under a message
+// that used web search. Shared by buildMsgEl (full render) and
+// sendMessageCore (patching a live preview bubble after search completes) —
+// previously duplicated verbatim in both places.
+function buildWebSourcesRow(webSources) {
+  const sourceWrap = document.createElement('div');
+  sourceWrap.className = 'web-sources';
+  webSources.slice(0, WEB_SEARCH_RESULT_MAX).forEach(src => {
+    const a = document.createElement('a');
+    a.className = 'web-source-chip';
+    a.href = src.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = src.snippet ? `${src.url}\n\n${src.snippet}` : src.url;
+    a.textContent = `[${src.index}] ${src.title || src.url}`;
+    sourceWrap.appendChild(a);
+  });
+  return sourceWrap;
+}
+
 // ── Bubble Edit / Delete / Branch ─────────────────────────────────
 function getBubbleRow(idx) { return document.querySelector(`.message-row[data-idx="${parseInt(idx,10)}"]`); }
 
@@ -2635,6 +2760,7 @@ function buildTokenBadge(usage) {
   return badge;
 }
 
+// Recomputes and displays the running token-usage total for the active chat.
 function updateChatTokenTotal() {
   const chat=currentChat();
   let total=document.getElementById('chatTokenTotal');
@@ -2663,12 +2789,14 @@ function updateChatTokenTotal() {
   total.textContent=tf('js.chatTotalTokens',{n:sum.toLocaleString()});
 }
 
+// Parses and validates a message index, returning null if it isn't a valid non-negative integer.
 function safeIdx(idx) {
   const n=parseInt(idx,10);
   if(!Number.isFinite(n)||n<0) return null;
   return n;
 }
 
+// Deletes a single message bubble from the active chat branch after confirmation.
 function deleteBubble(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
@@ -2707,6 +2835,7 @@ function deleteBubble(idx) {
 let _editAttachments = [];
 let _editMsgIdx = null;
 
+// Switches a message bubble into inline edit mode, loading its current text/attachments into the editor.
 function startEditBubble(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
@@ -2776,6 +2905,7 @@ function startEditBubble(idx) {
   renderEditFileChips();
 }
 
+// (Re)renders the attachment chips shown while editing a message.
 function renderEditFileChips() {
   const chipsRow = document.getElementById('editFileChips'); if (!chipsRow) return;
   chipsRow.innerHTML = '';
@@ -2797,6 +2927,7 @@ function renderEditFileChips() {
   });
 }
 
+// Applies the edited text/attachments back onto the message and saves.
 function confirmEditBubble() {
   const idx = _editMsgIdx; if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
@@ -2854,6 +2985,7 @@ function confirmEditBubble() {
   save(); renderMessages(chat.messages);
 }
 
+// Reads a file chosen while editing a message and adds it to the edit-attachment list.
 function handleEditFileAttach(e) {
   const file = e.target.files[0]; if (!file) return; e.target.value = '';
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -2873,6 +3005,7 @@ function handleEditFileAttach(e) {
   isPdf ? reader.readAsDataURL(file) : reader.readAsText(file, 'UTF-8');
 }
 
+// Reads an image chosen while editing a message and adds it to the edit-attachment list.
 function handleEditImageAttach(e) {
   const file = e.target.files[0]; if (!file) return; e.target.value = '';
   const reader = new FileReader();
@@ -2914,6 +3047,7 @@ function navigateSibling(idx, delta) {
   renderMessages(chat.messages); // getActivePath will now follow new _siblingIdx
 }
 
+// Creates a new chat containing a copy of the conversation up to (and including) the given message, then switches to it.
 function branchFromHere(idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
@@ -3120,14 +3254,10 @@ function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   const cached = _streamStableCache.get(bubbleEl) || { len: 0 };
 
   if (stable.length > cached.len) {
-    // New finished block(s) — append ONLY the new increment and typeset
-    // ONLY the newly-inserted nodes. Previously this did
-    // `stableEl.innerHTML = formatText(stable)`, re-parsing and replacing
-    // the ENTIRE stable container on every flush — which destroyed every
-    // already-typeset <mjx-container> in it and forced MathJax to redo
-    // them from scratch a moment later. That round-trip (rendered math ->
-    // briefly raw text -> rendered again) was the flicker. Appending only
-    // the new slice leaves already-settled content completely untouched.
+    // Append only the newly finished increment and typeset only the newly
+    // inserted nodes — never overwrite stableEl's full innerHTML, or every
+    // already-typeset <mjx-container> in it would be destroyed and MathJax
+    // would have to redo them, causing visible flicker.
     const newStable = stable.slice(cached.len);
     const prevLast = stableEl.lastChild;
     stableEl.insertAdjacentHTML('beforeend', formatText(newStable));
@@ -3139,15 +3269,10 @@ function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   tailEl.innerHTML = formatText(tail);
   const mathNodes = tailEl.querySelectorAll('.math-inline, .math-block');
   if (mathNodes.length) {
-    // Don't hand a snapshot of the current nodes to the throttled call: tailEl
-    // gets fully overwritten (innerHTML =) on every subsequent chunk, so by
-    // the time the delayed call actually fires those nodes are very likely
-    // already detached from the document — MathJax then typesets nothing
-    // visible, which is why a still-growing table/list showed raw, unrendered
-    // LaTeX the entire time it was streaming and only rendered once it closed
-    // and got committed to .msg-stable. Passing just the container instead
-    // means the throttled call re-scans whatever is *currently* inside it at
-    // fire time, so it always operates on live nodes.
+    // Pass the container itself, not a snapshot of its current child nodes:
+    // tailEl's innerHTML is fully overwritten on every subsequent chunk, so a
+    // captured node list would likely be detached by the time this fires.
+    // Re-scanning the live container instead always typesets current content.
     typesetMathThrottled(tailEl, 400);
   }
   // If still mid-formula (e.g. inside \begin{vmatrix}...\end{vmatrix}) —
@@ -3157,14 +3282,10 @@ function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   // _finalizeStreamingBubble once the whole response is done.
 }
 
-// _finalizeStreamingBubble: called once the stream is done. Previously this
-// re-ran formatText() over the ENTIRE message again — redundant, since most
-// of it already sits in .msg-stable, correctly rendered, from the per-line
-// flushes during streaming. Now it only formats whatever text hasn't been
-// flushed yet (the still-open tail, e.g. the last line/formula that just
-// closed) and appends that — the already-rendered stable content is left
-// untouched. One typeset pass at the end still happens, so MathJax settles
-// on a fully consistent result.
+// _finalizeStreamingBubble: called once the stream is done. Formats and
+// appends only the still-open tail (e.g. the last line/formula that just
+// closed) — .msg-stable's already-rendered content is left untouched — then
+// runs one final typeset pass so MathJax settles on a consistent result.
 function _finalizeStreamingBubble(bubbleEl, assistantText) {
   const stableEl = bubbleEl.querySelector('.msg-stable');
   const tailEl = bubbleEl.querySelector('.msg-tail');
@@ -3181,16 +3302,19 @@ function _finalizeStreamingBubble(bubbleEl, assistantText) {
 
 
 
+// Combines a thinking trace and the assistant answer into the single string format used for storage/history.
 function _streamStoredText(thinkingText, assistantText) {
   return (thinkingText ? `<thinking>\n${thinkingText}\n</thinking>\n\n` : '') + (assistantText || '');
 }
 
+// Records the latest streamed text/usage so an aborted stream can still be saved with whatever was generated so far.
 function _rememberStreamSnapshot(text, usageData) {
   if (!activeStreamSnapshot) activeStreamSnapshot = { text: '', usage: null };
   activeStreamSnapshot.text = text || '';
   activeStreamSnapshot.usage = usageData || null;
 }
 
+// Removes the 'streaming' animation class from any bubble still marked as live.
 function _finishLiveStreamUI() {
   document.querySelectorAll('.bubble.streaming').forEach(b => b.classList.remove('streaming'));
 }
@@ -3383,6 +3507,38 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
 }
 
 /**
+ * _runStreamAndAttach: shared "call _streamAIResponse, handle abort/errors,
+ * then attach the finished bubble's chrome" logic used by both
+ * sendMessageCore (new message) and rerunFromUserMsg (regenerate from an
+ * earlier point). Assumes the caller has already set isStreaming=true,
+ * setSendMode('stop') and created abortController.
+ * Resets isStreaming/abortController/send-mode/status when done.
+ */
+async function _runStreamAndAttach(chat, messages, provider, typingId, documentIds) {
+  let assistantText = '', usageData = null, streamEl = null;
+  try {
+    const result = await _streamAIResponse(messages, provider, typingId, documentIds);
+    assistantText = result.text; usageData = result.usage; streamEl = result.el;
+  } catch (e) {
+    removeTyping(typingId);
+    if (e.name === 'AbortError') {
+      const partialText = activeStreamSnapshot?.text || assistantText;
+      assistantText = partialText || t('js.generationStopped');
+      usageData = activeStreamSnapshot?.usage || usageData;
+      _finishLiveStreamUI();
+    } else {
+      assistantText = tf('js.errorPrefix', { e: escHtml(e.message) });
+      const errEl = buildMsgEl({ role: 'assistant', content: assistantText }, undefined);
+      appendToMessages(errEl); scrollToBottom(); setStatus('red');
+    }
+  }
+
+  if (assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
+  activeStreamSnapshot = null;
+  isStreaming = false; abortController = null; setSendMode('send'); setStatus('green');
+}
+
+/**
  * _attachAIActions: Appends action buttons and token badge to the last AI bubble.
  * Shared post-stream logic for both sendMessageCore and rerunFromUserMsg.
  */
@@ -3413,20 +3569,11 @@ function _attachAIActions(chat, assistantText, usageData, streamEl) {
 
   // Upgrade the just-finished bubble in place (action buttons, sibling nav,
   // token badge, ...) instead of tearing down and rebuilding the whole chat
-  // history via renderMessages(). That used to remove every message row and
-  // rebuild all of them via buildMsgEl(), then call typesetMath() with no
-  // argument — which re-scans the ENTIRE #messages container, re-typesetting
-  // formulas in messages that were already rendered and untouched.
-  //
-  // Beyond that: even the narrower "replace just this one row" approach used
-  // until recently threw away the streamed bubble's content and rebuilt it
-  // from scratch via buildMsgEl() -> formatText() -> typesetMath(), even
-  // though renderStreamingBubble()/_finalizeStreamingBubble() had *just*
-  // finished incrementally rendering and typesetting that exact content a
-  // moment earlier. _finalizeAIRowInPlace() instead reuses `streamEl` as-is
-  // and only attaches what's actually missing from a freshly-streamed row —
-  // the surrounding chrome (actions/badge/nav/note) — leaving the rendered
-  // answer itself untouched. No redundant formatText()/typesetMath() pass.
+  // history via renderMessages() or re-running formatText()/typesetMath()
+  // on content that renderStreamingBubble() already rendered and typeset
+  // incrementally during streaming. _finalizeAIRowInPlace() reuses `streamEl`
+  // as-is and only attaches what's missing — the chrome around it
+  // (actions/badge/nav/note) — leaving the rendered answer itself untouched.
   const path = getActivePath(chat);
   const idx = path.length - 1;
   const messagesEl = document.getElementById('messages');
@@ -3515,7 +3662,7 @@ function _pruneAfter(chat, targetMsg) {
 }
 
 // Fires a new AI completion using the current chat.messages state (no user-msg rebuild).
-// Uses _streamAIResponse + _attachAIActions (removed ~80 lines of duplicated stream code)
+// Shares its streaming/error-handling logic with sendMessageCore via _runStreamAndAttach.
 async function rerunFromUserMsg(userMsg) {
   if(!currentChatId) newChat();
   const chat=currentChat(); if(!chat) return;
@@ -3525,45 +3672,30 @@ async function rerunFromUserMsg(userMsg) {
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
-  let assistantText='', usageData=null, streamEl=null;
 
-  try {
-    // build history from active path up to (including) userMsg
-    const activePath = getActivePath(chat);
-    const userMsgIdx = activePath.indexOf(userMsg);
-    const histSlice  = userMsgIdx >= 0 ? activePath.slice(0, userMsgIdx + 1) : activePath;
+  // build history from active path up to (including) userMsg
+  const activePath = getActivePath(chat);
+  const userMsgIdx = activePath.indexOf(userMsg);
+  const histSlice  = userMsgIdx >= 0 ? activePath.slice(0, userMsgIdx + 1) : activePath;
 
-    let messages;
-    if(provider.type==='anthropic'){
-      messages=[];
-      histSlice.forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
-      _applyPromptCache(messages);
-    } else {
-      messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
-        .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
-    }
-    const result = await _streamAIResponse(messages, provider, typingId, []);
-    assistantText = result.text; usageData = result.usage; streamEl = result.el;
-  } catch(e) {
-    removeTyping(typingId);
-    if(e.name==='AbortError'){
-      const partialText = activeStreamSnapshot?.text || assistantText;
-      assistantText = partialText || t('js.generationStopped');
-      usageData = activeStreamSnapshot?.usage || usageData;
-      _finishLiveStreamUI();
-    }
-    else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
+  let messages;
+  if(provider.type==='anthropic'){
+    messages=[];
+    histSlice.forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
+    _applyPromptCache(messages);
+  } else {
+    messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
+      .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
   }
-
-  if(assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
-  activeStreamSnapshot=null;
-  isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
+  await _runStreamAndAttach(chat, messages, provider, typingId, []);
 }
 
 
 // ── Send / Stop ───────────────────────────────────────────────────
 function handleSendStop() { isStreaming ? stopStreaming() : sendMessage(); }
+// Aborts the in-progress AI response stream, if any.
 function stopStreaming() { if(abortController){abortController.abort();abortController=null;} }
+// Switches the send button between its 'send' and 'stop' (streaming) appearance/behaviour.
 function setSendMode(mode) {
   const btn=document.getElementById('sendBtn');
   btn.classList.toggle('stop-mode', mode==='stop');
@@ -3572,6 +3704,7 @@ function setSendMode(mode) {
   document.getElementById('stopIcon').style.display  = mode==='stop' ? '' : 'none';
 }
 
+// Updates the web-search toggle button's active/searching visual state.
 function updateWebSearchButton(searching=false) {
   const btn = document.getElementById('webSearchBtn');
   if (!btn) return;
@@ -3585,6 +3718,7 @@ function updateWebSearchButton(searching=false) {
   syncWebContextPopover();
 }
 
+// Toggles manual web search on/off for the next message.
 function toggleWebSearch() {
   if ((config.webSearchMode || 'manual') === 'off') {
     toast(t('web.offToast'));
@@ -3596,6 +3730,7 @@ function toggleWebSearch() {
   toast(config.webSearchEnabled ? t('web.enabledToast') : t('web.disabledToast'));
 }
 
+// Opens/closes the popover listing detected links and web-search options for the current draft message.
 function toggleWebContextPopover(force) {
   const pop = document.getElementById('webContextPopover');
   if (!pop) return;
@@ -3603,12 +3738,14 @@ function toggleWebContextPopover(force) {
   if (!pop.hidden) syncWebContextPopover();
 }
 
+// Sets the active/inactive visual state of a small toggle button.
 function setMiniToggle(btn, active) {
   if (!btn) return;
   btn.classList.toggle('active', !!active);
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
+// Refreshes the web-context popover's toggles to match the current config.
 function syncWebContextPopover() {
   setMiniToggle(document.getElementById('webSearchToggle'), shouldUseWebSearch(document.getElementById('messageInput')?.value || ''));
   setMiniToggle(document.getElementById('webLinkToggle'), !!config.webLinkEnabled);
@@ -3620,10 +3757,12 @@ function syncWebContextPopover() {
   renderDetectedLinks();
 }
 
+// Returns a short, human-readable hostname label for a URL (used on detected-link chips).
 function hostLabel(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }
 
+// (Re)renders the chips for HTTP(S) links detected in the current draft message, so the user can include/exclude each from the request.
 function renderDetectedLinks() {
   const wrap = document.getElementById('webDetectedLinks');
   const input = document.getElementById('messageInput');
@@ -3658,6 +3797,7 @@ function renderDetectedLinks() {
   });
 }
 
+// Returns whether the draft text looks like it warrants an automatic web search (when auto mode is enabled).
 function shouldAutoWebSearch(text) {
   const s = (text || '').toLowerCase();
   if (!s.trim()) return false;
@@ -3671,6 +3811,7 @@ function shouldAutoWebSearch(text) {
     || /^(suche|recherchiere|search|research)\b/.test(s);
 }
 
+// Returns whether web search should run for the given message, combining the manual toggle and auto-detection.
 function shouldUseWebSearch(text) {
   const mode = config.webSearchMode || 'manual';
   if (mode === 'off') return false;
@@ -3679,6 +3820,7 @@ function shouldUseWebSearch(text) {
   return mode === 'auto' && shouldAutoWebSearch(text);
 }
 
+// Strips formatting/noise from a message so it can be used as a plain web-search query.
 function cleanSearchQuery(text) {
   return (text || '')
     .replace(/^(suche|recherchiere|search|research)\s+(nach|zu|for|about)?\s*/i, '')
@@ -3688,8 +3830,10 @@ function cleanSearchQuery(text) {
 }
 
 const ENGINES_NEEDING_KEY = new Set(['brave','google','bing','mojeek','yandex']);
+// Returns whether the given search engine requires an API key.
 function webEngineNeedsKey(engine) { return ENGINES_NEEDING_KEY.has(engine); }
 
+// Shows/hides the web-search API key field depending on the selected engine.
 function updateWebSearchKeyUI(engine) {
   const group  = document.getElementById('webSearchApiKeyGroup');
   const label  = document.getElementById('webSearchApiKeyLabel');
@@ -3736,20 +3880,24 @@ const WEB_SEARCH_LOCALES = {
   ur: { ddg:'pk-ur', searx:'ur-PK', qwant:'en_US', startpage:'urdu', bing:'ur-PK', braveCountry:'PK', braveLang:'ur', googleLr:'lang_ur', yandex:'en' },
 };
 
+// Returns the locale string to bias web-search results with, derived from the current UI language.
 function getWebSearchLocale() {
   return WEB_SEARCH_LOCALES[currentLang] || WEB_SEARCH_LOCALES.en;
 }
 
+// Builds an Accept-Language header value from the current UI language.
 function getAcceptLanguage() {
   const primary = getWebSearchLocale().searx || 'en-US';
   const short = primary.split('-')[0];
   return `${primary},${short};q=0.9,en;q=0.7`;
 }
 
+// Returns a headers object with Accept-Language added, merged with any extra headers passed in.
 function localizedHeaders(extra = {}) {
   return { 'Accept-Language': getAcceptLanguage(), ...extra };
 }
 
+// Performs a proxied (API-key) fetch with an abort timeout.
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -3760,6 +3908,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   }
 }
 
+// Performs a proxied public (no API key) fetch with an abort timeout, used for search/page fetching.
 async function fetchPublicWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -3770,6 +3919,7 @@ async function fetchPublicWithTimeout(url, options = {}, timeoutMs = 12000) {
   }
 }
 
+// Resolves a search-result link (which may be relative or a redirect wrapper) to a clean absolute URL.
 function normalizeSearchUrl(href, base) {
   if (!href) return '';
   try {
@@ -3786,6 +3936,7 @@ function normalizeSearchUrl(href, base) {
   }
 }
 
+// Deduplicates a list of search results by URL and caps it at the requested count.
 function uniqueSearchResults(results, count) {
   const seen = new Set();
   return (results || []).filter(r => {
@@ -3799,6 +3950,7 @@ function uniqueSearchResults(results, count) {
   }).slice(0, count).map((r, i) => ({ ...r, index: i + 1 }));
 }
 
+// Extracts title/url/snippet search results from DuckDuckGo's HTML results page.
 function parseDuckDuckGoHtml(html, count, base) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   let results = [...doc.querySelectorAll('a.result-link')].map(a => {
@@ -3825,6 +3977,7 @@ function parseDuckDuckGoHtml(html, count, base) {
   return uniqueSearchResults(results, count);
 }
 
+// Runs a web search against DuckDuckGo's HTML endpoint (no API key required).
 async function searchDuckDuckGo(q, count) {
   const locale = getWebSearchLocale();
   const headers = localizedHeaders({ 'Accept': 'text/html', 'HTTP-Referer': 'https://duckduckgo.com/' });
@@ -3841,6 +3994,7 @@ async function searchDuckDuckGo(q, count) {
   return [];
 }
 
+// Runs a web search against a SearXNG instance.
 async function searchSearxng(q, count, instanceUrl = '') {
   const locale = getWebSearchLocale();
   const instances = instanceUrl ? [instanceUrl.replace(/\/$/, '')] : SEARXNG_PUBLIC_INSTANCES;
@@ -3872,6 +4026,7 @@ async function searchSearxng(q, count, instanceUrl = '') {
   return [];
 }
 
+// Runs a web search against Qwant.
 async function searchQwant(q, count) {
   const locale = getWebSearchLocale();
   const url = `https://api.qwant.com/v3/search/web?q=${encodeURIComponent(q)}&count=${count}&locale=${encodeURIComponent(locale.qwant)}&offset=0&device=desktop&safesearch=1`;
@@ -3898,6 +4053,7 @@ async function searchQwant(q, count) {
   })), count);
 }
 
+// Runs a web search against Yahoo.
 async function searchYahoo(q, count) {
   const url = `https://search.yahoo.com/search?p=${encodeURIComponent(q)}`;
   const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'text/html', 'HTTP-Referer': 'https://search.yahoo.com/' }) }, 10000);
@@ -3914,6 +4070,7 @@ async function searchYahoo(q, count) {
   return uniqueSearchResults(results, count);
 }
 
+// Runs a web search against Startpage.
 async function searchStartpage(q, count) {
   const locale = getWebSearchLocale();
   const url = `https://www.startpage.com/sp/search?query=${encodeURIComponent(q)}&language=${encodeURIComponent(locale.startpage)}`;
@@ -3928,6 +4085,7 @@ async function searchStartpage(q, count) {
   return uniqueSearchResults(results, count);
 }
 
+// Tries the free (no-API-key) search engines in order until one returns results.
 async function searchFreeFallback(q, count) {
   const engines = [
     ['DuckDuckGo', () => searchDuckDuckGo(q, count)],
@@ -3953,6 +4111,7 @@ async function searchFreeFallback(q, count) {
   return [];
 }
 
+// Tops up a partial search-result list with results from the free fallback engines, skipping an already-tried engine.
 async function fillWithFreeFallback(q, count, initialResults, excludedEngine = '') {
   let combined = [...(initialResults || [])];
   if (uniqueSearchResults(combined, count).length >= count) return uniqueSearchResults(combined, count);
@@ -3973,6 +4132,7 @@ async function fillWithFreeFallback(q, count, initialResults, excludedEngine = '
   return uniqueSearchResults(combined, count);
 }
 
+// Runs a web search with the configured engine (falling back to free engines on failure/empty results) and returns formatted results.
 async function performWebSearch(query) {
   const engine = config.webSearchEngine || 'free';
   const key = (config.webSearchApiKey || '').trim();
@@ -4110,6 +4270,7 @@ async function performWebSearch(query) {
   return value;
 }
 
+// Formats web-search results into the text block appended to the model's context.
 function formatWebSearchBlock(search) {
   if (!search?.results?.length) return '';
   const lines = [
@@ -4126,6 +4287,7 @@ function formatWebSearchBlock(search) {
   return lines.join('\n').trim();
 }
 
+// Prepends a formatted web-search block to a message's content before sending it to the model.
 function buildWebAugmentedContent(originalContent, search) {
   const block = formatWebSearchBlock(search);
   if (!block) return originalContent;
@@ -4134,11 +4296,13 @@ function buildWebAugmentedContent(originalContent, search) {
   return [webPart, { type: 'text', text: originalContent || '' }];
 }
 
+// Extracts all http(s) URLs found in a text string.
 function extractHttpUrls(text) {
   const matches = (text || '').match(/https?:\/\/[^\s<>"')\]]+/gi) || [];
   return [...new Set(matches.map(u => u.replace(/[.,;:!?]+$/g, '')))].slice(0, 3);
 }
 
+// Removes quoted (>) lines and fenced code blocks from text before scanning it for links (avoids picking up example/quoted URLs).
 function stripQuotedAndCodeBlocks(text) {
   let inFence = false;
   return (text || '').split(/\r?\n/).map(line => {
@@ -4148,22 +4312,26 @@ function stripQuotedAndCodeBlocks(text) {
   }).join('\n');
 }
 
+// Extracts http(s) URLs from the readable (non-quoted, non-code) parts of a text.
 function extractReadableHttpUrls(text) {
   return extractHttpUrls(stripQuotedAndCodeBlocks(text));
 }
 
+// Returns the URLs the user has selected (not ignored) from the detected-links popover.
 function getSelectedReadableUrls() {
   const input = document.getElementById('messageInput');
   const urls = extractReadableHttpUrls(input?.value || '');
   return urls.filter(url => selectedLinkUrls.has(url));
 }
 
+// Extracts a cleaned, readable text approximation from a fetched HTML document.
 function readablePageText(doc) {
   doc.querySelectorAll('script,style,noscript,svg,nav,footer,header,form,aside').forEach(el => el.remove());
   const main = doc.querySelector('main, article, [role="main"]') || doc.body || doc;
   return (main.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
+// Fetches a URL and extracts readable text from it, for inclusion in the model's context.
 async function fetchLinkedPage(url) {
   const res = await fetchPublicWithTimeout(url, {
     headers: localizedHeaders({ 'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5' }),
@@ -4182,6 +4350,7 @@ async function fetchLinkedPage(url) {
   return { title: title.replace(/\s+/g, ' ').trim().slice(0, 240), url, text: text.slice(0, 12000) };
 }
 
+// Fetches and extracts readable text for every (selected) link found in a text.
 async function fetchLinkedPagesFromText(text, urls = null) {
   const pages = [];
   for (const url of (urls || extractReadableHttpUrls(text))) {
@@ -4195,6 +4364,7 @@ async function fetchLinkedPagesFromText(text, urls = null) {
   return pages;
 }
 
+// Formats fetched page contents into the text block appended to the model's context.
 function formatLinkedPagesBlock(pages) {
   if (!pages?.length) return '';
   const lines = [
@@ -4211,6 +4381,7 @@ function formatLinkedPagesBlock(pages) {
   return lines.join('\n').trim();
 }
 
+// Prepends a formatted linked-pages block to a message's content before sending it to the model.
 function buildLinkedPageAugmentedContent(originalContent, pages) {
   const block = formatLinkedPagesBlock(pages);
   if (!block) return originalContent;
@@ -4219,6 +4390,7 @@ function buildLinkedPageAugmentedContent(originalContent, pages) {
   return [linkPart, { type: 'text', text: originalContent || '' }];
 }
 
+// Entry point for sending the current draft message: validates state and delegates to sendMessageCore.
 async function sendMessage() {
   if(isStreaming) return;
   const input=document.getElementById('messageInput');
@@ -4239,6 +4411,7 @@ async function sendMessage() {
   await sendMessageCore(text, att);
 }
 
+// Builds the outgoing message (with attachments, web search and linked-page augmentation), renders the user bubble, and starts the AI response stream.
 async function sendMessageCore(text, att) {
   if(!currentChatId) newChat();
   const empty=document.getElementById('emptyState');
@@ -4386,19 +4559,7 @@ async function sendMessageCore(text, att) {
   if (webSourceChips.length) {
     const bubbleEl = previewMsgEl.querySelector('.bubble');
     if (bubbleEl && !bubbleEl.querySelector('.web-sources')) {
-      const sourceWrap = document.createElement('div');
-      sourceWrap.className = 'web-sources';
-      webSourceChips.slice(0, WEB_SEARCH_RESULT_MAX).forEach(src => {
-        const a = document.createElement('a');
-        a.className = 'web-source-chip';
-        a.href = src.url;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-        a.title = src.snippet ? `${src.url}\n\n${src.snippet}` : src.url;
-        a.textContent = `[${src.index}] ${src.title || src.url}`;
-        sourceWrap.appendChild(a);
-      });
-      bubbleEl.appendChild(sourceWrap);
+      bubbleEl.appendChild(buildWebSourcesRow(webSourceChips));
     }
   }
   selectedLinkUrls.clear();
@@ -4407,45 +4568,26 @@ async function sendMessageCore(text, att) {
 
   const typingId=showTyping();
   isStreaming=true; setSendMode('stop'); abortController=new AbortController();
-  let assistantText='';
-  let usageData=null;
-  let streamEl=null;
 
   // build wire-format message list, then delegate to shared _streamAIResponse
-  try {
-    let messages;
-    // Use getActivePath so the API receives the correct branch history, not the raw tree array.
-    // chat.messages is a tree (sibling nodes with tails); only getActivePath() flattens it
-    // along the currently selected branch — essential for regenerate / sibling navigation.
-    const activePath = getActivePath(chat);
-    if(provider.type==='anthropic'){
-      messages=[];
-      activePath.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
-      messages.push({role:'user',content:_toAnthropicContent(userContent)});
-      _applyPromptCache(messages);
-    } else {
-      // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
-      // expand pdf_text/pdf_base64 for OpenAI-compat too
-      const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
-        .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
-      messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
-    }
-    const result=await _streamAIResponse(messages, provider, typingId, documentIds);
-    assistantText=result.text; usageData=result.usage; streamEl=result.el;
-  } catch(e) {
-    removeTyping(typingId);
-    if(e.name==='AbortError'){
-      const partialText = activeStreamSnapshot?.text || assistantText;
-      assistantText = partialText || t('js.generationStopped');
-      usageData = activeStreamSnapshot?.usage || usageData;
-      _finishLiveStreamUI();
-    }
-    else{assistantText=tf('js.errorPrefix',{e:escHtml(e.message)});const errEl=buildMsgEl({role:'assistant',content:assistantText},undefined);appendToMessages(errEl);scrollToBottom();setStatus('red');}
+  let messages;
+  // Use getActivePath so the API receives the correct branch history, not the raw tree array.
+  // chat.messages is a tree (sibling nodes with tails); only getActivePath() flattens it
+  // along the currently selected branch — essential for regenerate / sibling navigation.
+  const activePath = getActivePath(chat);
+  if(provider.type==='anthropic'){
+    messages=[];
+    activePath.slice(0,-1).forEach(m=>{if(m.role==='user'||m.role==='assistant')messages.push({role:m.role,content:_toAnthropicContent(m.content)});});
+    messages.push({role:'user',content:_toAnthropicContent(userContent)});
+    _applyPromptCache(messages);
+  } else {
+    // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
+    // expand pdf_text/pdf_base64 for OpenAI-compat too
+    const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
+      .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
+    messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
   }
-
-  if(assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
-  activeStreamSnapshot=null;
-  isStreaming=false; abortController=null; setSendMode('send'); setStatus('green');
+  await _runStreamAndAttach(chat, messages, provider, typingId, documentIds);
 }
 
 // ── Auto-Title Generation ─────────────────────────────────────────
@@ -4524,6 +4666,7 @@ function appendToMessages(el) {
   const total=c.querySelector('#chatTokenTotal');
   if(total){c.insertBefore(el,total);}else{c.appendChild(el);}
 }
+// Appends a new, empty assistant bubble to the message list (filled in as the stream arrives).
 function appendEmptyAI() {
   const mid=config.model||'';
   const pureModelId=splitModelId(mid).modelId||mid;
@@ -4538,6 +4681,7 @@ function appendEmptyAI() {
   wrap.appendChild(bubble);div.appendChild(avatarCol);div.appendChild(wrap);
   appendToMessages(div);scrollToBottom();return div;
 }
+// Shows the 'typing...' indicator while waiting for the first response chunk.
 function showTyping() {
   const id='typing_'+Date.now();
   const div=document.createElement('div');div.className='message-row ai typing';div.id=id;
@@ -4550,8 +4694,11 @@ function showTyping() {
   bl.appendChild(dots);bw.appendChild(bl);div.appendChild(ac);div.appendChild(bw);
   appendToMessages(div);scrollToBottom();return id;
 }
+// Removes a previously shown typing indicator by its element ID.
 function removeTyping(id){document.getElementById(id)?.remove();}
+// Scrolls the message list to the bottom.
 function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;}
+// Fills the message input with a suggestion chip's text and sends it immediately.
 function sendSuggestion(txt){document.getElementById('messageInput').value=txt;sendMessage();}
 
 // ── Copy ──────────────────────────────────────────────────────────
@@ -4574,6 +4721,7 @@ function toggleCodeBlockCollapse(btn) {
   btn.title = collapsed ? (t('js.codeExpand')||'Expand') : (t('js.codeCollapse')||'Collapse');
 }
 
+// Copies a message bubble's plain-text content to the clipboard.
 function copyBubble(btn, idx) {
   idx=safeIdx(idx); if(idx===null) return;
   const chat=currentChat(); if(!chat) return;
@@ -4585,6 +4733,7 @@ function copyBubble(btn, idx) {
     if(btn){btn.textContent=t('js.copied');btn.classList.add('copy-done');setTimeout(()=>{btn.textContent=t('js.copy');btn.classList.remove('copy-done');},2000);}
   }).catch(()=>toast(t('js.copyFailed')));
 }
+// Copies the entire active chat's conversation as plain text to the clipboard.
 function copyFullChat() {
   const chat=currentChat(); if(!chat||!chat.messages.length){toast(t('js.noChatToCopy'));return;}
   // Use getActivePath so only the currently visible branch is copied, not the raw sibling tree.
@@ -4605,6 +4754,7 @@ function escHtml(s) {
 }
 
 
+// Converts raw model/markdown text into sanitized, syntax-highlighted, math-aware HTML for display.
 function formatText(raw) {
   if (!raw) return '';
   const blocks = [];
@@ -4799,6 +4949,7 @@ function typesetMath(el) {
 // anything else (e.g. a second concurrent stream, or a tail + stable call
 // racing) starts using it. Each element now gets its own independent timer.
 const _mjThrottleState = new WeakMap();
+// Schedules a MathJax typeset pass for an element, throttled per-element so rapid successive calls collapse into one.
 function typesetMathThrottled(el, delay = 400) {
   const target = el || document.getElementById('messages');
   let state = _mjThrottleState.get(target);
@@ -4829,13 +4980,16 @@ async function extractPdfText(arrayBuffer) {
   for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);const content=await page.getTextContent();out+=`${tf('js.pdfPage',{n:i})}\n${content.items.map(it=>it.str).join(' ')}\n`;}
   return out;
 }
+// Converts an ArrayBuffer to a base64 string.
 function arrayBufferToBase64(buf){const bytes=new Uint8Array(buf);let bin='';for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);return btoa(bin);}
+// Returns whether a model ID supports receiving raw PDF bytes (as opposed to extracted text only).
 function modelSupportsPdfBase64(mid){return /claude|gemini|gpt-4o/i.test(mid||'');}
 
 // ════════════════════════════════════════════════════════════════
 // FILE / IMAGE HANDLING — including Ctrl+V paste
 // ════════════════════════════════════════════════════════════════
 
+// Reads a dropped/selected file (image, PDF, or text) and adds it to the pending attachments.
 async function processFile(file) {
   const isImage=file.type.startsWith('image/');
   const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
@@ -4852,6 +5006,7 @@ async function processFile(file) {
   isPdf||isImage?reader.readAsDataURL(file):reader.readAsText(file,'UTF-8');
 }
 
+// Reads an image blob (e.g. from clipboard paste), warns and offers to raise the storage limit if it's too large, then adds it as an attachment.
 async function processImageBlob(blob, name) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -4890,9 +5045,12 @@ async function handlePaste(e) {
   // No image found — let default paste behavior happen (text)
 }
 
+// Handles the file-input 'change' event for the generic file-attach button.
 function handleFileAttach(e){const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file);}
+// Handles the file-input 'change' event for the image-attach button.
 function handleImageAttach(e){const file=e.target.files[0];if(!file)return;e.target.value='';processFile(file);}
 
+// (Re)renders the row of pending attachment chips above the message input, including the PDF mode toggle.
 function renderAttachments() {
   const row=document.getElementById('attachmentRow');
   row.innerHTML='';
@@ -4925,6 +5083,7 @@ function renderAttachments() {
   });
 }
 
+// Switches a pending PDF attachment between 'document' (base64) and 'extracted text' mode, extracting text on demand.
 async function togglePdfMode(i,mode){
   const a=attachments[i];if(!a||a.pdfMode===mode)return;
   a.pdfMode=mode;
@@ -4936,7 +5095,9 @@ async function togglePdfMode(i,mode){
   if(mode==='b64'&&!a.data&&a.rawBuf){try{a.data=`data:application/pdf;base64,${arrayBufferToBase64(a.rawBuf)}`;}catch(err){toast(tf('js.b64Failed',{e:err.message}));a.pdfMode='text';}}
   renderAttachments();
 }
+// Removes a pending attachment by index.
 function removeAttachment(i){attachments.splice(i,1);renderAttachments();}
+// Clears all pending attachments.
 function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
@@ -4945,10 +5106,15 @@ function closePanels(){
   document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
 }
+// Shows a temporary toast notification with the given message.
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+// Opens the Settings panel.
 function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
+// Opens the Tuning panel.
 function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');}
+// Opens the Profiles panel.
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
+// Updates the intro/welcome panel's provider-status summary text.
 function renderIntroPanel() {
   const status = document.getElementById('introProviderStatus');
   if (!status) return;
@@ -4977,16 +5143,19 @@ const TOUR_STEPS = [
   { target: '#cmTrigger', title: 'tour.modelTitle', text: 'tour.modelText', prep: 'chat' },
   { target: '#messageInput', title: 'tour.firstChatTitle', text: 'tour.firstChatText', prep: 'chat', focus: true },
 ];
+// Marks the guided intro/tour as completed so it won't auto-start again.
 function markGuidedIntroDone() {
   if (!_activeAccountId) return;
   localStorage.setItem(accountKey('guided_intro_done'), '1');
   localStorage.removeItem(accountKey('guided_intro_pending'));
 }
+// Returns whether the guided tour should start automatically (first visit, not yet completed).
 function shouldAutoStartGuidedIntro() {
   if (!_activeAccountId) return false;
   return localStorage.getItem(accountKey('guided_intro_pending')) === '1' &&
          localStorage.getItem(accountKey('guided_intro_done')) !== '1';
 }
+// Starts (or resumes) the guided product tour at the given step.
 function startGuidedIntro(stepIndex = 0) {
   _tourActive = true;
   _tourStepIndex = Math.max(0, Math.min(stepIndex, TOUR_STEPS.length - 1));
@@ -4996,6 +5165,7 @@ function startGuidedIntro(stepIndex = 0) {
   layer?.setAttribute('aria-hidden', 'false');
   showTourStep();
 }
+// Ends the guided tour and cleans up its highlight/overlay UI.
 function endGuidedIntro() {
   _tourActive = false;
   markGuidedIntroDone();
@@ -5005,6 +5175,7 @@ function endGuidedIntro() {
   layer?.setAttribute('aria-hidden', 'true');
   clearTourHighlight();
 }
+// Removes the tour's spotlight/highlight overlay from the page.
 function clearTourHighlight() {
   if (_tourTargetEl) _tourTargetEl.classList.remove('tour-highlight');
   _tourTargetEl = null;
@@ -5013,6 +5184,7 @@ function clearTourHighlight() {
     _tourPlacementTimer = null;
   }
 }
+// Performs any setup a tour step needs before it can be shown (e.g. opening the panel it points at).
 function prepareTourStep(step) {
   if (step.prep === 'language') {
     closePanels();
@@ -5031,6 +5203,7 @@ function prepareTourStep(step) {
   }
   if (step.prep === 'chat') closePanels();
 }
+// Resolves a tour step's DOM target element.
 function getTourTarget(step) {
   let el = document.querySelector(step.target);
   if (step.prep === 'language') {
@@ -5041,6 +5214,7 @@ function getTourTarget(step) {
   }
   return el;
 }
+// Returns the bounding rect of a tour step's target element, accounting for scroll/visibility.
 function getTourTargetRect(target) {
   if (!target) return null;
   const rects = [target.getBoundingClientRect()];
@@ -5054,6 +5228,7 @@ function getTourTargetRect(target) {
   const bottom = Math.max(...rects.map(r => r.bottom));
   return { left, top, right, bottom, width: right - left, height: bottom - top };
 }
+// Renders the current tour step's card, spotlight and target highlight.
 function showTourStep() {
   if (!_tourActive) return;
   const step = TOUR_STEPS[_tourStepIndex];
@@ -5083,6 +5258,7 @@ function showTourStep() {
   }
   scheduleTourPlacement(target, step);
 }
+// Defers positioning the tour card/spotlight until the target element has settled (e.g. after a panel-open animation).
 function scheduleTourPlacement(target, step) {
   if (_tourPlacementTimer) clearTimeout(_tourPlacementTimer);
   const focusTarget = step.focus === true ? target : (step.focus ? document.querySelector(step.focus) : null);
@@ -5099,6 +5275,7 @@ function scheduleTourPlacement(target, step) {
   };
   _tourPlacementTimer = setTimeout(() => run(0), delays[0]);
 }
+// Positions the tour card near its target, choosing among candidate placements to minimize overlap and stay on-screen.
 function positionTourCard(target) {
   const card = document.getElementById('tourCard');
   if (!card) return;
@@ -5137,6 +5314,7 @@ function positionTourCard(target) {
   card.style.left = `${left}px`;
   card.style.top = `${top}px`;
 }
+// Positions the tour's highlight/spotlight rectangle over its target element.
 function positionTourSpotlight(target) {
   const spot = document.getElementById('tourSpotlight');
   if (!spot) return;
@@ -5157,6 +5335,7 @@ function positionTourSpotlight(target) {
   spot.style.width = `${width}px`;
   spot.style.height = `${height}px`;
 }
+// Advances the guided tour to the next step, skipping steps whose target is currently hidden.
 function nextTourStep() {
   if (_tourStepIndex >= TOUR_STEPS.length - 1) { endGuidedIntro(); return; }
   _tourStepIndex++;
@@ -5170,6 +5349,7 @@ function nextTourStep() {
   }
   showTourStep();
 }
+// Moves the guided tour back to the previous step, skipping steps whose target is currently hidden.
 function prevTourStep() {
   if (_tourStepIndex <= 0) return;
   _tourStepIndex--;
@@ -5183,6 +5363,7 @@ function prevTourStep() {
   }
   showTourStep();
 }
+// Intercepts clicks on links inside rendered content and opens external http(s) links in a new tab.
 function handleExternalLinkClick(e) {
   const a = e.target.closest?.('a[href]');
   if (!a) return;
@@ -5192,13 +5373,19 @@ function handleExternalLinkClick(e) {
   e.preventDefault();
   window.open(url.href, '_blank', 'noopener,noreferrer');
 }
+// Sends the message on Enter (without Shift) in the message input.
 function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}}
+// Grows/shrinks a textarea's height to fit its content, up to a max height.
 function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
 
 let _dragCounter=0;
+// Allows dropping files onto the drop zone by preventing the default dragover behaviour.
 function handleDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='copy';}
+// Shows the file-drop overlay when a drag enters the window.
 function handleDragEnter(e){e.preventDefault();_dragCounter++;document.getElementById('dropOverlay').classList.add('active');}
+// Hides the file-drop overlay once the drag leaves the window.
 function handleDragLeave(){_dragCounter--;if(_dragCounter<=0){_dragCounter=0;document.getElementById('dropOverlay').classList.remove('active');}}
+// Handles files dropped onto the window by attaching each of them, ignoring internal chat/folder drag operations.
 async function handleDrop(e){
   e.preventDefault();_dragCounter=0;document.getElementById('dropOverlay').classList.remove('active');
   // Only handle external file drops (not internal chat/folder drags)
@@ -5210,6 +5397,7 @@ async function handleDrop(e){
 // ── Modell-Limits Panel ───────────────────────────────────────────
 function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="modelMaxPanel"]')?.classList.add('active');}
 
+// (Re)builds the list of models with editable max-output-token limits.
 function renderModelMaxList(){
   const list=document.getElementById('modelMaxList');
   list.innerHTML='';
@@ -5234,6 +5422,7 @@ function renderModelMaxList(){
   });
 }
 
+// Validates and saves a user override for a model's max-output-tokens.
 function setModelMax(modelId,inputEl){
   const val=parseInt(inputEl.value);const defaultMax=getModelDefaultMax(modelId);
   if(!val||val<256){inputEl.value=defaultMax;return;}
@@ -5243,12 +5432,14 @@ function setModelMax(modelId,inputEl){
   const row=document.getElementById('mmrow_'+safeId);if(row)row.classList.toggle('model-max-modified',val!==defaultMax);
   save();updateModelMaxInfo();toast(tf('js.limitSet',{id:modelId.split('/').pop().slice(0,20),n:val.toLocaleString()}));
 }
+// Clears a user override for a model's max-output-tokens, reverting to the default.
 function resetModelMax(modelId){
   if(!config.userModelMaxOverrides)return;delete config.userModelMaxOverrides[modelId];
   const defaultMax=getModelDefaultMax(modelId);const safeId=modelId.replace(/[^a-zA-Z0-9_-]/g,'_');
   const row=document.getElementById('mmrow_'+safeId);if(row){const inp=row.querySelector('.model-max-input');if(inp)inp.value=defaultMax;row.classList.remove('model-max-modified');}
   save();updateModelMaxInfo();toast(tf('js.resetTo',{id:modelId.split('/').pop().slice(0,20),n:defaultMax.toLocaleString()}));
 }
+// Clears all user max-output-token overrides.
 function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMaxList();updateModelMaxInfo();toast(t('js.allLimitsReset'));}
 
 // ═══════════════════════════════════════════════════════════════
@@ -5258,10 +5449,10 @@ function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMa
 const ACCOUNT_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35','#00bcd4','#9c27b0'];
 let _selectedLoginAccountId = null; // account selected on grid before pw entry
 
-async function showLoginScreen() {
-  const ls = document.getElementById('loginScreen');
-  if (ls) { ls.style.display = 'flex'; ls.classList.add('visible'); }
-  await loadAccountRegistryAsync();
+// Shows the "create first account" view if there are no accounts left,
+// otherwise the account-selection grid. Shared by showLoginScreen() and
+// deleteAccount() (deleting the last account should fall back to signup).
+function _showAccountViewAfterChange() {
   if (_accounts.length === 0) {
     renderNewAccountColorRow();
     showView('newAccountView');
@@ -5270,12 +5461,22 @@ async function showLoginScreen() {
     showView('accountSelectView');
     renderAccountGrid();
   }
+}
+
+// Shows the login/account screen, loading the account registry first.
+async function showLoginScreen() {
+  const ls = document.getElementById('loginScreen');
+  if (ls) { ls.style.display = 'flex'; ls.classList.add('visible'); }
+  await loadAccountRegistryAsync();
+  _showAccountViewAfterChange();
   applyTranslations();
 }
+// Hides the login/account screen.
 function hideLoginScreen() {
   const ls = document.getElementById('loginScreen');
   if (ls) { ls.style.display = 'none'; ls.classList.remove('visible'); }
 }
+// Switches which login-flow sub-view (account grid, password entry, new-account form, ...) is visible.
 function showView(viewId) {
   ['accountSelectView','accountLoginView','newAccountView'].forEach(id => {
     const el = document.getElementById(id);
@@ -5283,6 +5484,7 @@ function showView(viewId) {
   });
 }
 
+// (Re)builds the grid of selectable accounts on the login screen.
 function renderAccountGrid() {
   const grid = document.getElementById('accountGrid');
   if (!grid) return;
@@ -5315,6 +5517,7 @@ function renderAccountGrid() {
   });
 }
 
+// Selects an account on the login grid and shows its password-entry view.
 function selectAccountForLogin(accountId) {
   _stopLockCountdown();
   _selectedLoginAccountId = accountId;
@@ -5331,6 +5534,7 @@ function selectAccountForLogin(accountId) {
   setTimeout(() => document.getElementById('loginInput')?.focus(), 80);
 }
 
+// Verifies the entered password, derives the session key, and logs into the selected account.
 async function doLogin() {
   const input = document.getElementById('loginInput');
   const errorEl = document.getElementById('loginError');
@@ -5391,6 +5595,7 @@ async function doLogin() {
   }
 }
 
+// Updates the password-strength indicator shown while setting a new account password.
 function updatePwdStrength(pw) {
   const bar = document.getElementById('pwdStrengthBar'); if (!bar) return;
   let score = 0;
@@ -5404,6 +5609,7 @@ function updatePwdStrength(pw) {
   bar.style.width = pct + '%'; bar.style.background = cols[score] || '#e74c3c';
 }
 
+// (Re)builds the color picker shown when creating a new account.
 function renderNewAccountColorRow() {
   const row = document.getElementById('accountColorRow'); if (!row) return;
   row.innerHTML = '';
@@ -5432,6 +5638,7 @@ function renderNewAccountColorRow() {
   });
 }
 
+// Creates a new account with the entered name/color/password and logs into it.
 async function doSetupPassword() {
   const nameEl   = document.getElementById('newAccountName');
   const pwdEl    = document.getElementById('setupPwdInput');
@@ -5471,6 +5678,7 @@ async function doSetupPassword() {
   toast(t('js.pwdSetupDone') || '🔐 Account created — welcome!');
 }
 
+// Explains (or triggers) the recovery flow for a forgotten account password.
 function forgotPassword() {
   if (!_selectedLoginAccountId) {
     // No account selected — just go back to account selection
@@ -5483,16 +5691,10 @@ function forgotPassword() {
   deleteAccount(_selectedLoginAccountId);
   _selectedLoginAccountId = null;
   _stopLockCountdown();
-  if (_accounts.length === 0) {
-    renderNewAccountColorRow();
-    showView('newAccountView');
-    setTimeout(() => document.getElementById('newAccountName')?.focus(), 80);
-  } else {
-    showView('accountSelectView');
-    renderAccountGrid();
-  }
+  _showAccountViewAfterChange();
 }
 
+// Permanently deletes an account and its stored data after confirmation.
 async function deleteAccount(accountId) {
   // Remove all data from server store and localStorage
   if (_storeAvailable) {
@@ -5516,6 +5718,7 @@ async function deleteAccount(accountId) {
   toast(t('account.deleted'));
 }
 
+// Updates the active account's display name.
 function changeAccountName() {
   const input = document.getElementById('accountNameInput');
   if (!input) return;
@@ -5528,6 +5731,7 @@ function changeAccountName() {
   toast('✅ ' + newName);
 }
 
+// Changes the active account's login password, re-deriving and re-encrypting stored data under the new key.
 async function changeLoginPassword() {
   const currentPw  = document.getElementById('currentPwdInput')?.value || '';
   const newPw      = document.getElementById('newPwdInput')?.value || '';
@@ -5555,6 +5759,7 @@ async function changeLoginPassword() {
   toast(t('js.pwdChanged'));
 }
 
+// Logs out of the current account, clearing the in-memory session key and returning to the login screen.
 function logoutNow() {
   closePanels();
   if (_activeAccountId) localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
@@ -5572,11 +5777,13 @@ function logoutNow() {
   showLoginScreen();
 }
 
+// Returns the configured auto-logout session duration in milliseconds.
 function getSessionDurationMs() {
   const h = parseInt(document.getElementById('sessionHoursInput')?.value || '12');
   const m = parseInt(document.getElementById('sessionMinutesInput')?.value || '0');
   return (h * 60 + m) * 60 * 1000;
 }
+// Loads the saved session-timeout setting into the UI.
 function loadSessionSettings() {
   const saved = localStorage.getItem('kic_session_duration_ms');
   if (saved) {
@@ -5588,12 +5795,14 @@ function loadSessionSettings() {
     if (hi) hi.value = h; if (mi) mi.value = m2;
   }
 }
+// Persists a new auto-logout session duration.
 function applySessionDuration() {
   const durMs = getSessionDurationMs();
   localStorage.setItem('kic_session_duration_ms', String(durMs));
   if (durMs > 0 && _activeAccountId) localStorage.setItem(`kic_${_activeAccountId}_session_expiry`, String(Date.now() + durMs));
   startSessionCountdown(); toast(t('settings.sessionApply') || '⏱ Applied');
 }
+// Resets the session inactivity timer, postponing auto-logout.
 function resetSessionNow() {
   if (!_activeAccountId) { toast(t('js.noActiveAccount')); return; }
   localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
@@ -5613,11 +5822,13 @@ function resetMathJaxSettings() {
 }
 
 let _countdownTimer = null;
+// Starts the UI countdown showing time remaining before auto-logout.
 function startSessionCountdown() {
   if (_countdownTimer) clearInterval(_countdownTimer);
   _countdownTimer = setInterval(updateSessionCountdown, 1000);
   updateSessionCountdown();
 }
+// Updates the displayed auto-logout countdown, styling it as urgent once time is running low.
 function updateSessionCountdown() {
   const el = document.getElementById('sessionCountdown'); if (!el) return;
   if (!_activeAccountId) { el.textContent = '—'; el.style.color = 'var(--muted)'; return; }
@@ -5637,6 +5848,7 @@ function updateSessionCountdown() {
   el.style.color = remaining < 5 * 60 * 1000 ? 'var(--red)' : 'var(--accent)';
 }
 
+// Runs on startup: shows the login screen if there are no accounts, otherwise tries to restore the session from a valid token.
 async function checkLogin() {
   await loadAccountRegistryAsync();
   // No accounts at all → create first account
@@ -5674,6 +5886,7 @@ async function checkLogin() {
   showLoginScreen();
 }
 
+// Deletes all locally stored app data after confirmation (used for a full reset).
 function clearAllData() {
   if (!confirm(t('js.clearConfirm'))) return;
   // Delete only this account's data
@@ -5937,6 +6150,7 @@ function setupEventListeners(){
 // PRINT — Full chat & single bubble
 // ═══════════════════════════════════════════════════════════════
 
+// Opens the browser print dialog for the entire active chat.
 function printFullChat() {
   const chat = currentChat();
   if (!chat || !chat.messages.length) { toast(t('js.noChatToPrint')); return; }
@@ -5957,6 +6171,7 @@ function printFullChat() {
 // _printSingleIdx: index of the bubble currently being printed
 let _printSingleIdx = null;
 
+// Opens the single-message print preview overlay for one bubble.
 function openPrintSingleOverlay(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
@@ -5980,11 +6195,13 @@ function openPrintSingleOverlay(idx) {
   document.getElementById('printSingleOverlay')?.classList.add('show');
 }
 
+// Closes the single-message print preview overlay.
 function closePrintSingleOverlay() {
   _printSingleIdx = null;
   document.getElementById('printSingleOverlay')?.classList.remove('show');
 }
 
+// Opens the browser print dialog for a single message.
 function printSingleBubble() {
   if (_printSingleIdx === null) return;
   const chat = currentChat(); if (!chat) return;
