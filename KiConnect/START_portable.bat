@@ -4,8 +4,8 @@ cd /d "%~dp0"
 
 set PYTHON=%~dp0python\python.exe
 set PIP=%~dp0python\python.exe -m pip
-set PACKAGES=flask requests waitress
-set MIN_VERSIONS="flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0"
+set PACKAGES=flask requests waitress cryptography
+set MIN_VERSIONS="flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" "cryptography>=42.0.0"
 
 echo.
 echo  ==========================================

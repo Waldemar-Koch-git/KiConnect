@@ -59,6 +59,7 @@ Ki-Connect is a locally-run, client-side-encrypted chat client for various AI pr
 - Responsive design with adjustable chat width and a resizable sidebar
 - Agent profiles with individual system prompts, temperatures, and model limits
 - Branching & regeneration: branch from any message; regenerated replies are stored as siblings with full history preserved
+- **Coding agent** (`kiconnect-agent.js`): any sidebar folder can be linked to a real folder on disk and focused as a "project." The focused chat's messages then run through an agentic tool loop (read/write/edit/search/move files, list/browse folders, optional shell execution) using the same model/provider/thinking settings already selected in the header - see "Coding agent" below
 
 ---
 
@@ -75,6 +76,8 @@ Ki-Connect no longer loads its JS libraries from a CDN. All required libraries a
 
 An internet connection is still required once, to download `_render.zip` on first launch (or when the `_render` folder is empty). After that, the application can run fully offline with respect to these libraries.
 
+On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (for server-side AES-GCM encryption/decryption of the agent project registry under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config). `START.bat`/`START_portable.bat` install all four automatically; manual installs must include `cryptography` explicitly.
+
 ---
 
 ## File structure
@@ -89,11 +92,15 @@ kiconnect/
     ├── kiconnect.html
     ├── kiconnect.css
     ├── kiconnect.js
+    ├── kiconnect-agent.js           (coding-agent module, bolt-on like kiconnect-voice.js)
+    ├── kiconnect-mathjax-config.js  (MathJax config, must load before _render/latex/tex-chtml.js)
     ├── kiconnect-proxy.py
     ├── kiconnect-languages-i18n.js
     ├── kiconnect-voice.js
     └── _render/              (bundled local libraries: MathJax, marked.js, DOMPurify, PDF.js)
 ```
+
+The old standalone PDF.js worker-init script has been folded directly into `kiconnect.js` (it doesn't need to run before anything else, unlike the MathJax config).
 
 ---
 
@@ -142,7 +149,7 @@ git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect
 
 # 2. Install dependencies
-pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0
+pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0
 
 # 3. Start the proxy
 python kiconnect-proxy.py
@@ -202,6 +209,49 @@ Web search is **off by default**. Ki-Connect can optionally augment messages wit
 
 ### URL fetching
 If the user's message contains `http://` or `https://` links, Ki-Connect automatically fetches those pages and includes the extracted text as additional context (up to 12,000 characters per page, max 3 URLs). This happens independently of the web-search toggle, since it's triggered by a link the user pasted, not by a search.
+
+---
+
+## Coding agent
+
+A sidebar folder becomes a "project" by linking it (via `agentProject`) to a real folder on disk, registered through the proxy's Agent-API. Focusing a chat on that folder runs each message through an agentic tool loop instead of a plain completion; there is only one model picker in the app (the header's), used for both normal chat and agent turns.
+
+### Access modes (per project)
+- **Simulate** – reports what it would do; no file is changed and no command runs
+- **Confirm** – asks for confirmation before every file change or command
+- **Auto** – applies changes without asking
+
+Shell command execution is a separate, explicit opt-in per project and is off by default regardless of access mode.
+
+### Agent-API (proxy, requires an unlocked session)
+| Endpoint | Method(s) | Purpose |
+|---|---|---|
+| `/agent/session/unlock` | POST | Unlock the per-account encrypted project registry |
+| `/agent/session/rekey` | POST | Re-encrypt the registry under a new key (password change) |
+| `/agent/session/lock` | POST | Drop the session |
+| `/agent/browse` | GET | Browse real OS folders (for the folder picker) |
+| `/agent/projects` | GET/POST | List / register a project folder |
+| `/agent/projects/<id>` | DELETE | Unregister a project (files on disk are left untouched) |
+| `/agent/projects/<id>/shell` | PUT | Enable/disable shell execution for a project |
+| `/agent/projects/<id>/path` | PUT | Re-point a project at a different folder |
+| `/agent/exec/<id>` | POST | Run a shell command inside the project folder (only if shell is enabled) |
+| `/agent/tree/<id>` | GET | Recursive file listing |
+| `/agent/search/<id>` | GET | grep-style text search across the project |
+| `/agent/file/<id>/<path>` | GET/PUT/DELETE | Read / write / delete a file |
+| `/agent/dir/<id>/<path>` | POST/DELETE | Create / delete a folder |
+| `/agent/move/<id>` | POST | Move or rename a file/folder |
+
+Project registries are encrypted with a key derived client-side from the account password and a dedicated salt, separate from the config/providers/chats encryption key, so a leak of one does not expose the other.
+
+### Shell execution sandboxing
+`/agent/exec` is not a hard security boundary (no container or VM) - the command runs as the same OS user as the proxy, confined to the project folder only by convention (`cd ..` or an absolute path can still escape it). Best-effort hardening applied on top:
+- Minimal, secret-free environment (does not inherit the proxy's own environment variables)
+- POSIX resource limits (CPU time, memory, process count, open files, no core dumps) on Linux/macOS
+- Runs in its own process group so a timeout can kill the whole subtree
+- Best-effort network isolation via `unshare --net` where available (Linux only); reported back to the client as `networkIsolated` rather than assumed on
+- Output capped at 200,000 characters per stream, 45-second execution timeout
+
+Registering a folder outside a safe path (drive/system root, or the app's own installation folder) is rejected outright.
 
 ---
 
@@ -277,11 +327,12 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 
 | Feature | Implementation | Protects against |
 |---|---|---|
-| Data storage | AES-GCM-256 in browser, stored in `./datas/` | Data access without password |
+| Data storage | AES-GCM-256 in browser (chats, config, providers, profiles, folders), stored in `./datas/` | Data access without password |
+| Agent project registry | AES-GCM-256 server-side (`cryptography`/AESGCM), key derived from account password + a dedicated salt, separate from the browser-side key | Data access without password, cross-key exposure |
 | Login / password | PBKDF2-HMAC-SHA256, 600k iterations, random salt per account | Brute-force, rainbow tables |
 | Brute-force (login) | Exponential lockout from the 5th failed attempt, RAM-only | Offline and online password guessing |
 | Session | Encrypted token in sessionStorage (no plaintext password) | Password theft from browser storage |
-| XSS | DOMPurify (bundled locally, with CSP hardening), strict CSP | Reflected & stored XSS |
+| XSS | DOMPurify (bundled locally), strict CSP with no `'unsafe-inline'` in `script-src` (all former inline scripts, e.g. the MathJax config, now live in their own files) | Reflected & stored XSS |
 | SSRF | Domain allowlist + private IP filter in the proxy | Server-side request forgery |
 | CORS | Strict origin/host check, localhost-only | Unwanted cross-origin requests |
 | Rate limiting | Thread-safe (lock), 120 requests/60s per IP | DoS, brute-force |
@@ -304,11 +355,13 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 ```mermaid
 flowchart LR
     B["<b>Browser</b><br/>━━━━━━━━━━<br/>AES-GCM-256<br><i>(encryption in browser)</i><br/>PBKDF2 (600k)<br/>DOMPurify <i>(local)</i><br/>marked.js <i>(local)<br/>MathJax <i>(local)<br/>PDF.js <i>(local)<br/>Brute-Force Lock"]
-    P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O"]
+    P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API + Agent-API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O<br/>AES-GCM-256 <i>(cryptography, server-side)</i>"]
     A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i>"]
+    F["<b>Local filesystem</b><br/>project folder(s)<br/>━━━━━━━━━━<br/>read / write / search / move<br/>optional shell exec <i>(sandboxed, opt-in)</i>"]
 
     B <--> P
     P <--> A
+    P <-- unlocked agent session --> F
 
     N["🔒 Password-protected<br/>PBKDF2 + session token<br/>No plaintext in storage"]
     B <-.- N
@@ -316,6 +369,7 @@ flowchart LR
     style B fill:#e0f2fe,stroke:#0284c7,color:#000000
     style P fill:#fef9c3,stroke:#ca8a04,color:#000000
     style A fill:#dcfce7,stroke:#16a34a,color:#000000
+    style F fill:#ede9fe,stroke:#7c3aed,color:#000000
     style N fill:#fee2e2,stroke:#dc2626,color:#000000,stroke-dasharray: 3 3
 ```
 

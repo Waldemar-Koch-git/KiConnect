@@ -29,7 +29,7 @@ echo       KI Connect - Checking Python Libs..
 echo  ==========================================
 echo.
 echo Installing / updating dependencies...
-pip install "flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" --quiet --upgrade
+pip install "flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" "cryptography>=42.0.0" --quiet --upgrade
 
 :skip
 

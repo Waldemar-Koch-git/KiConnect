@@ -28,6 +28,28 @@ if errorlevel 1 (
     goto :end
 )
 
+REM -- Self-update: fetch the newest update.bat FIRST and relaunch it ----
+REM Older local copies of this script don't know about files added in later
+REM releases (e.g. kiconnect-agent.js, kiconnect-mathjax-config.js). By
+REM downloading update.bat first and re-launching the freshly downloaded
+REM copy, the rest of this run always uses the CURRENT file list below -
+REM not whatever list happened to be baked into the copy already on disk.
+REM KICONNECT_UPDATE_RELAUNCHED guards against looping forever (e.g. if the
+REM download itself fails) and %1=="_child" lets the relaunched copy skip
+REM straight past this block instead of downloading update.bat twice.
+if /i "%~1"=="_child" goto :after_selfupdate
+
+echo  Checking update.bat itself...
+call :download "update.bat"
+echo.
+
+if not "%KICONNECT_UPDATE_RELAUNCHED%"=="1" (
+    set KICONNECT_UPDATE_RELAUNCHED=1
+    call "%~f0" _child
+    exit /b %errorlevel%
+)
+
+:after_selfupdate
 echo  Downloading latest files from GitHub...
 echo.
 
@@ -35,10 +57,11 @@ REM -- List of all files to be updated --------------------------
 call :download "comm\kiconnect.css"
 call :download "comm\kiconnect.html"
 call :download "comm\kiconnect.js"
+call :download "comm\kiconnect-agent.js"
 call :download "comm\kiconnect-languages-i18n.js"
+call :download "comm\kiconnect-mathjax-config.js"
 call :download "comm\kiconnect-proxy.py"
 call :download "comm\kiconnect-voice.js"
-call :download "update.bat"
 
 echo.
 call :ensure_render

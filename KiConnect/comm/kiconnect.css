@@ -730,6 +730,7 @@ header {
   border-radius: 8px; padding: 4px 10px;
 }
 .thinking-intensity.visible { display: flex; }
+.thinking-intensity.fixed-hidden { display: none !important; }
 .thinking-intensity label   { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent2); white-space: nowrap; }
 .thinking-intensity input[type=range] { width: 120px; accent-color: var(--accent2); cursor: pointer; }
 .thinking-intensity .intensity-val {
@@ -850,6 +851,18 @@ header {
   margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .provider-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.provider-drag-handle {
+  flex-shrink: 0; cursor: grab; color: var(--muted); font-size: 14px;
+  line-height: 1; padding: 0 2px; user-select: none;
+}
+.provider-drag-handle:active { cursor: grabbing; }
+.provider-reorder-col { display: flex; flex-direction: column; gap: 1px; flex-shrink: 0; }
+.provider-reorder-btn {
+  font-size: 9px; padding: 1px 4px; line-height: 1.4; color: var(--muted);
+}
+.provider-reorder-btn:disabled { opacity: 0.25; cursor: default; }
+.provider-item.provider-dragging { opacity: 0.4; }
+.provider-item.provider-drag-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .provider-badge {
   font-size: 10px; padding: 2px 7px;
   border-radius: 20px; border: 1px solid var(--border);
@@ -906,6 +919,7 @@ header {
   margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .profile-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.profile-item.profile-drag-over { box-shadow: inset 0 -2px 0 var(--accent); }
 .profile-editor {
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: 10px; padding: 14px; margin-top: 12px;
@@ -1001,6 +1015,7 @@ header {
 }
 .folder-header.active-folder .folder-count { opacity: 0.8; color: var(--accent); }
 .folder-header.drag-target { background: rgba(61, 126, 255, 0.12); border: 1px dashed var(--accent); }
+.chat-item.chat-drag-over { box-shadow: inset 0 -2px 0 var(--accent); }
 .folder-arrow {
   font-size: 9px; transition: transform 0.2s; display: inline-block;
   color: var(--muted); flex-shrink: 0;
@@ -1509,7 +1524,7 @@ textarea::placeholder { color: var(--muted); }
 .input-actions::before {
   content: '';
   flex: 1;
-  order: 2;
+  order: 5;
 }
 .action-btn {
   background: none; border: none; color: var(--muted);
@@ -1517,6 +1532,11 @@ textarea::placeholder { color: var(--muted); }
   transition: all 0.2s; line-height: 1;
 }
 .action-btn:hover { color: var(--text); background: var(--surface2); }
+.asset-btn-group {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 3px 4px; flex-shrink: 0;
+}
 .web-context-wrap {
   position: relative;
   display: inline-flex;
@@ -1680,13 +1700,17 @@ textarea::placeholder { color: var(--muted); }
   transition: opacity 0.2s;
   display: flex; align-items: center; gap: 6px; white-space: nowrap;
   margin-left: 8px;
-  order: 3;
+  order: 6;
 }
-.input-actions .action-btn,
-.input-actions .web-context-wrap,
-.input-actions .voice-sep,
-.input-actions .voice-btn,
-.input-actions .voice-gear-btn { order: 1; }
+/* Composer group order: 1 Assets, 2 Web, 3 Voice settings, 4 Agentic
+   Coding/Project — explicit order values instead of one flat `order:1`
+   for everything, which left the actual left-to-right order to depend on
+   incidental DOM/script-load order (voice.js vs agent.js injecting
+   themselves) rather than a deliberate sequence. */
+.input-actions .asset-btn-group        { order: 1; }
+.input-actions .web-context-wrap       { order: 2; }
+.input-actions .voice-btn-group        { order: 3; }
+.input-actions .agent-context-bar      { order: 4; }
 .send-btn:hover     { opacity: 0.85; }
 .send-btn:disabled  { opacity: 0.4; cursor: not-allowed; }
 .send-btn.stop-mode { background: linear-gradient(135deg, var(--red), #c0392b); }

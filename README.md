@@ -1,6 +1,6 @@
 # Ki-Connect
 
-Ki-Connect is a chat program that gives you access to several AI providers – for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and  others (*[list](TECHNICAL.md#configuration)*). The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
+Ki-Connect is a chat program that gives you access to several AI providers – for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and others (*[list](TECHNICAL.md#configuration)*). The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
 
 Ki-Connect supports multiple local accounts on the same installation, but it is still designed as a personal tool for one household or one trusted group of people sharing a computer – not as a multi-tenant solution for a company with many independent, mutually untrusted users.
 
@@ -14,10 +14,11 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 - **Stored encrypted.** Everything that's saved is encrypted and only accessible with your password.
 - **Several accounts on one installation.** Multiple people who share the same computer can each keep their own password-protected, separately encrypted account.
 - **Many AI providers in one place.** Switch between providers and models without needing several different programs.
+- **Built-in coding agent.** Turn any chat into an agent working on a real folder on your computer – it can read, write, search, and move files, and (only if you switch it on) run shell commands, with a choice of autonomy levels from "ask before every step" to "just do it."
 - **Optional web search.** If you turn it on, the AI can look things up on the internet before answering.
 - **Images and PDFs.** You can paste images or upload PDF files so the AI can read them.
 - **Speak instead of type.** There's voice input as well as a read-aloud function for replies.
-- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Indian ( Hindi, Tamil, Bengali, Punjabi, Urdu).
+- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Indian (Hindi, Tamil, Bengali, Punjabi, Urdu).
 - **Several color themes.** From light to dark, including pure-black variants for OLED screens.
 
 ---
@@ -46,7 +47,7 @@ Double-click **`START_portable.bat`**. This variant brings its own self-containe
 ```bash
 git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect
-pip install flask requests waitress
+pip install flask requests waitress cryptography
 python kiconnect-proxy.py
 ```
 
@@ -85,9 +86,25 @@ On startup, Ki-Connect automatically checks (via `update.bat`) whether newer ver
 
 ---
 
+## Coding agent
+
+Any sidebar folder can be turned into a **project**: point it at a real folder on your computer (an existing one or a new one you create on the spot), then focus a chat on it via the toggle next to the model picker. From then on, that chat isn't just talking – it can look at, edit, search, and reorganize the files in that folder, using whichever provider/model you already have selected in the header.
+
+- **One access mode per project**, chosen up front:
+  - **Simulate** – describes what it would do, changes nothing
+  - **Confirm** – asks before every file change or command
+  - **Auto** – makes changes on its own
+- **Shell commands are off by default** for every new project and must be explicitly switched on per project – even in Auto mode, this is a separate opt-in.
+- Every tool call (read, write, search, move, run command, etc.) is shown as a collapsible step in the chat, so you can always see what happened.
+- Deleting a project only removes it from Ki-Connect – the files on disk are left untouched.
+
+> Shell execution runs commands with best-effort sandboxing (resource limits, its own process group, optional network isolation where supported), but it is not a hard security boundary. Only enable it for projects and folders you trust, ideally on a machine you don't mind an errant command touching.
+
+---
+
 ## Important note
 
-Ki-Connect is a tool for personal use, or use by a small trusted group, on your own computer. It does not replace a professional IT security solution for a company with many independent users. Further technical details, for example on encryption and security mechanisms, can be found in [TECHNICAL.md](TECHNICAL.md).
+Ki-Connect is a tool for personal use, or use by a small trusted group, on your own computer. It does not replace a professional IT security solution for a company with many independent users. Further technical details, for example on encryption, security mechanisms, and the coding agent, can be found in [TECHNICAL.md](TECHNICAL.md).
 
 ---
 

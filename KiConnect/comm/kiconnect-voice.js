@@ -86,13 +86,16 @@
     var s = document.createElement('style');
     s.id = 'kiconnect-voice-styles';
     s.textContent = [
-      '.voice-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);padding:8px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;flex-shrink:0;}',
-      '.voice-btn:hover{background:var(--surface2,rgba(128,128,128,.12));color:var(--text,#eee);}',
+      /* Grouped like .panel-toolbar in the header: a bordered "frame" around
+         the mic/TTS/settings trio so they read as one unit, distinct from
+         the other input-actions icons (attach, image, web, …). */
+      '.voice-btn-group{display:flex;align-items:center;gap:2px;background:var(--surface2,rgba(128,128,128,.08));border:1px solid var(--border,#2a2d3a);border-radius:10px;padding:3px 4px;flex-shrink:0;}',
+      '.voice-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);padding:7px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;flex-shrink:0;}',
+      '.voice-btn:hover{background:var(--surface,rgba(128,128,128,.18));color:var(--text,#eee);}',
       '.voice-btn.voice-active{color:var(--red,#e74c3c);background:rgba(231,76,60,.12);animation:voice-pulse 1.2s ease-in-out infinite;}',
       '@keyframes voice-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,76,60,.4)}50%{box-shadow:0 0 0 5px rgba(231,76,60,0)}}',
-      '.voice-gear-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);padding:8px 6px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;flex-shrink:0;opacity:.75;}',
-      '.voice-gear-btn:hover{background:var(--surface2,rgba(128,128,128,.12));color:var(--text,#eee);opacity:1;}',
-      '.voice-sep{width:1px;height:18px;background:var(--border,#333);margin:0 2px;flex-shrink:0;align-self:center;}',
+      '.voice-gear-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);padding:7px 6px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;flex-shrink:0;opacity:.75;}',
+      '.voice-gear-btn:hover{background:var(--surface,rgba(128,128,128,.18));color:var(--text,#eee);opacity:1;}',
 
       /* Panel */
       '#voiceSettingsPanel{position:fixed;bottom:80px;right:16px;width:310px;max-width:calc(100vw - 32px);background:var(--surface,#16181f);border:1px solid var(--border,#2a2d3a);border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);padding:0;z-index:2000;display:none;flex-direction:column;overflow:hidden;font-size:13px;color:var(--text,#e8eaf0);font-family:"Syne",sans-serif;}',
@@ -151,8 +154,9 @@
     var sendBtn = document.getElementById('sendBtn');
     if (!sendBtn) return;
 
-    var sep = document.createElement('div');
-    sep.className = 'voice-sep';
+    var group = document.createElement('div');
+    group.className = 'voice-btn-group';
+    group.id = 'voiceBtnGroup';
 
     btnMic = document.createElement('button');
     btnMic.type      = 'button';
@@ -178,11 +182,13 @@
     btnVoiceSettings.innerHTML = SVG_GEAR;
     btnVoiceSettings.addEventListener('click', toggleVoiceSettingsPanel);
 
-    // Order: sep | 🎤 | 🔊 | ⚙ | [Send]
-    actions.insertBefore(sep,              sendBtn);
-    actions.insertBefore(btnMic,           sendBtn);
-    actions.insertBefore(btnTts,           sendBtn);
-    actions.insertBefore(btnVoiceSettings, sendBtn);
+    // Order: sep | [🎤 | 🔊 | ⚙] | [Send] — the trio sits inside one bordered
+    // frame (like the header's .panel-toolbar) so it reads as a single
+    // "voice" group, visually distinct from the other input-actions icons.
+    group.appendChild(btnMic);
+    group.appendChild(btnTts);
+    group.appendChild(btnVoiceSettings);
+    actions.insertBefore(group, sendBtn);
 
     // Dialog badge in header
     var dialogBadge = document.createElement('span');
@@ -399,15 +405,31 @@
     var panel = document.getElementById('voiceSettingsPanel');
     if (!panel) return;
     panel.classList.toggle('open');
-    if (panel.classList.contains('open')) {
-      // Positioning relative to send button
-      var sendBtn = document.getElementById('sendBtn');
-      if (sendBtn) {
-        var rect = sendBtn.getBoundingClientRect();
-        panel.style.right  = Math.max(8, window.innerWidth  - rect.right)  + 'px';
-        panel.style.bottom = Math.max(8, window.innerHeight - rect.top + 8) + 'px';
-        panel.style.left   = 'auto';
-      }
+    if (panel.classList.contains('open')) positionVoiceSettingsPanel();
+  }
+
+  // Positions the panel directly above its own gear button (with viewport
+  // clamping on both axes) instead of anchoring to the send button — the
+  // old anchor meant the popup could land far from the voice group itself
+  // whenever the composer groups were reordered or wrapped onto a second
+  // line on narrow viewports.
+  function positionVoiceSettingsPanel() {
+    var panel = document.getElementById('voiceSettingsPanel');
+    if (!panel || !btnVoiceSettings) return;
+    var rect = btnVoiceSettings.getBoundingClientRect();
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var panelW = panel.offsetWidth || 310;
+    var left = rect.right - panelW;
+    left = Math.max(8, Math.min(left, vw - panelW - 8));
+    panel.style.left = left + 'px';
+    panel.style.right = 'auto';
+    var spaceAbove = rect.top - 8, spaceBelow = vh - rect.bottom - 8;
+    if (spaceAbove >= 200 || spaceAbove >= spaceBelow) {
+      panel.style.bottom = (vh - rect.top + 8) + 'px';
+      panel.style.top = 'auto';
+    } else {
+      panel.style.top = (rect.bottom + 8) + 'px';
+      panel.style.bottom = 'auto';
     }
   }
 
@@ -745,6 +767,11 @@
   } else {
     setTimeout(init, 300);
   }
+
+  window.addEventListener('resize', function () {
+    var panel = document.getElementById('voiceSettingsPanel');
+    if (panel && panel.classList.contains('open')) positionVoiceSettingsPanel();
+  });
 
   // Language change hook — no panel rebuild, DOM update only via data-i18n
   window._kicVoiceRetranslate = function () {

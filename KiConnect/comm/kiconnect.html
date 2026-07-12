@@ -8,32 +8,36 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src  'self' 'unsafe-inline';
+    script-src  'self';
     style-src   'self' 'unsafe-inline';
     connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
     img-src     'self' data: blob:;
     font-src    'self';
     worker-src  blob:;
-    frame-src   'self';
-    object-src  'self';
+    frame-src   'none';
+    object-src  'none';
     base-uri    'self';
     form-action 'self';
     upgrade-insecure-requests;
   ">
-  <title>AI Chat 2.18</title>
+  <!-- script-src no longer needs 'unsafe-inline': the former inline
+       MathJax-config <script> block now lives in kiconnect-mathjax-config.js
+       (must run before tex-chtml.js below, so it stays its own early-loading
+       file); the former inline PDF.js-worker <script> block was folded into
+       the top of kiconnect.js, loaded like any other same-origin script.
+       This closes the one remaining gap through which an injected <script>
+       tag could ever have executed, in the (unlikely, since DOMPurify
+       sanitizes all rendered content) case that sanitization was ever
+       bypassed. frame-src/object-src now match the stricter values the
+       server already sends in kiconnect-proxy.py's SECURITY_HEADERS —
+       previously the two disagreed
+       (meta said 'self', header said 'none'); the header always won in
+       practice, this just removes the confusing mismatch. -->
+  <title>AI Chat 3.0</title>
   <link rel="stylesheet" href="kiconnect.css">
-  <script>
-	window.MathJax = {
-	  tex: { inlineMath:[['$','$'],['\\(','\\)']], displayMath:[['$$','$$'],['\\[','\\]']], processEscapes:true },
-	  options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
-	  chtml: {
-		fontURL: new URL('_render/newcm-font/chtml/woff2', document.baseURI).href,
-		dynamicPrefix: new URL('_render/newcm-font/chtml/dynamic', document.baseURI).href
-	  },
-	  startup: { typeset:false },
-	};
-  </script>
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
+  <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
+  <script src="kiconnect-mathjax-config.js"></script>
   <!-- MathJax 4.1.2 (LaTeX rendering) -->
   <script src="_render/latex/tex-chtml.js"></script>
   
@@ -45,12 +49,10 @@
 
   <!-- PDF.js local (pdf.js + pdf.worker.js must have exactly the same version) -->
   <script src="_render/pdf.js"></script>
-  <script>
-    if (typeof pdfjsLib !== 'undefined') {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
-      window._pdfjsLib = pdfjsLib;
-    }
-  </script>
+  <!-- PDF.js worker wiring now lives at the top of kiconnect.js (loaded
+       at the bottom of <body>) — it only needs to run before the first
+       PDF is opened, not immediately after this tag, so the extra
+       standalone file was removed. -->
 </head>
 <body>
 
@@ -152,7 +154,7 @@
   <div class="section-header" data-i18n="tuning.theme">🎨 Theme</div>
   <div class="theme-switcher" id="themeSwitcher">
     <div>
-      <div class="theme-swatch active" data-theme="dark" title="Dark" onclick="setTheme('dark')">
+      <div class="theme-swatch active" data-theme="dark" title="Dark">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -161,7 +163,7 @@
       <div class="theme-swatch-label">Dark</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="white" title="White" onclick="setTheme('white')">
+      <div class="theme-swatch" data-theme="white" title="White">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -170,7 +172,7 @@
       <div class="theme-swatch-label">White</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="nord" title="Nord" onclick="setTheme('nord')">
+      <div class="theme-swatch" data-theme="nord" title="Nord">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -179,7 +181,7 @@
       <div class="theme-swatch-label">Nord</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="dracula" title="Dracula" onclick="setTheme('dracula')">
+      <div class="theme-swatch" data-theme="dracula" title="Dracula">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -188,7 +190,7 @@
       <div class="theme-swatch-label">Dracula</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="forest" title="Forest" onclick="setTheme('forest')">
+      <div class="theme-swatch" data-theme="forest" title="Forest">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -197,7 +199,7 @@
       <div class="theme-swatch-label">Forest</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="mocha" title="Mocha" onclick="setTheme('mocha')">
+      <div class="theme-swatch" data-theme="mocha" title="Mocha">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -206,7 +208,7 @@
       <div class="theme-swatch-label">Mocha</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="rose" title="Rose" onclick="setTheme('rose')">
+      <div class="theme-swatch" data-theme="rose" title="Rose">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -215,7 +217,7 @@
       <div class="theme-swatch-label">Rose</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="solarized" title="Solarized" onclick="setTheme('solarized')">
+      <div class="theme-swatch" data-theme="solarized" title="Solarized">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -238,7 +240,7 @@
   <!-- OLED themes -->
   <div class="theme-switcher" id="themeSwitcherOled">
     <div>
-      <div class="theme-swatch" data-theme="dark_oled" title="Dark (OLED)" onclick="setTheme('dark_oled')">
+      <div class="theme-swatch" data-theme="dark_oled" title="Dark (OLED)">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -247,7 +249,7 @@
       <div class="theme-swatch-label">Dark</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="gold_oled" title="Gold (OLED)" onclick="setTheme('gold_oled')">
+      <div class="theme-swatch" data-theme="gold_oled" title="Gold (OLED)">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -256,7 +258,7 @@
       <div class="theme-swatch-label">Gold</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="emerald_oled" title="Emerald (OLED)" onclick="setTheme('emerald_oled')">
+      <div class="theme-swatch" data-theme="emerald_oled" title="Emerald (OLED)">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -265,7 +267,7 @@
       <div class="theme-swatch-label">Emerald</div>
     </div>
     <div>
-      <div class="theme-swatch" data-theme="red_oled" title="Red (OLED)" onclick="setTheme('red_oled')">
+      <div class="theme-swatch" data-theme="red_oled" title="Red (OLED)">
         <div class="theme-swatch-inner">
           <div class="theme-swatch-top"></div>
           <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
@@ -513,7 +515,10 @@
   <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5;"
     data-i18n="profile.desc" data-i18n-html="true">Profiles define roles or personas.</p>
   <div class="profile-list" id="profileList"></div>
-  <button class="ghost-btn" id="addProfileBtn" data-i18n="profile.addNew">＋ Create new profile</button>
+  <div style="display:flex;gap:8px;">
+    <button class="ghost-btn" style="flex:1;" id="addProfileBtn" data-i18n="profile.addNew">＋ Create new profile</button>
+    <button class="ghost-btn" style="flex:0 0 auto;width:40px;padding-left:0;padding-right:0;" id="addProfileFolderBtn">📁</button>
+  </div>
   <div class="profile-editor" id="profileEditor" style="display:none">
     <div style="font-size:14px;font-weight:700;margin-bottom:12px;" id="profileEditorTitle" data-i18n="profile.new">New Profile</div>
     <div class="setting-label" data-i18n="profile.name">Name</div>
@@ -750,9 +755,11 @@
           data-i18n="input.placeholder" data-i18n-attr="placeholder"></textarea>
       </div>
       <div class="input-actions">
-        <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
-        <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
-        <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
+        <div class="asset-btn-group" id="assetBtnGroup">
+          <button class="action-btn" id="attachFileBtn"  title="" data-i18n="input.attachFile" data-i18n-attr="title">📎</button>
+          <button class="action-btn" id="attachImageBtn" title="" data-i18n="input.attachImage" data-i18n-attr="title">🖼️</button>
+          <button class="action-btn" id="clearAttachBtn" title="" data-i18n="input.clearAttach" data-i18n-attr="title">🗑️</button>
+        </div>
         <div class="web-context-wrap" id="webContextWrap">
           <button class="action-btn web-search-btn" id="webSearchBtn" title="" data-i18n="web.buttonTitle" data-i18n-attr="title">Web</button>
           <div class="web-context-popover" id="webContextPopover" hidden>
@@ -827,5 +834,6 @@
 <script src="kiconnect-languages-i18n.js"></script>
 <script src="kiconnect.js"></script>
 <script src="kiconnect-voice.js"></script>
+<script src="kiconnect-agent.js"></script>
 </body>
 </html>

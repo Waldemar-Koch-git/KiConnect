@@ -3,6 +3,20 @@
 // Requires: kiconnect-languages-i18n.js (loaded before this file)
 // ================================================================
 
+// ── PDF.js worker wiring ─────────────────────────────────────────
+// Formerly kiconnect-pdf-init.js, a separate file loaded right after
+// _render/pdf.js so it could run "immediately after pdf.js" like the
+// inline <script> it replaced. That ordering was never actually
+// required: GlobalWorkerOptions.workerSrc only has to be set before the
+// first getDocument() call, which happens lazily inside extractPdfText()
+// further down this file — long after this script tag runs (kiconnect.js
+// itself loads after _render/pdf.js in kiconnect.html). Folded in here to
+// cut down on the number of tiny standalone files in the project.
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
+  window._pdfjsLib = pdfjsLib;
+}
+
 // ── Theme ─────────────────────────────────────────────────────────
 const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
@@ -27,6 +41,19 @@ function setTheme(name) {
   const saved = localStorage.getItem('kic_theme') || 'dark';
   document.documentElement.setAttribute('data-theme', saved);
 })();
+
+// Theme swatches used to carry inline onclick="setTheme('...')" attributes, but the
+// CSP's script-src is 'self' with no 'unsafe-inline', which silently blocks inline
+// event-handler attributes (this is what broke theme switching - the CSS itself was
+// always fine, data-theme on <html> just never changed). Bound here instead, via a
+// single delegated listener on <body> so it covers both #themeSwitcher (regular
+// themes) and #themeSwitcherOled (OLED themes) without depending on either id.
+document.addEventListener('DOMContentLoaded', () => {
+  document.body.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.theme-swatch');
+    if (swatch) setTheme(swatch.getAttribute('data-theme'));
+  });
+});
 
 
 let currentLang = localStorage.getItem('kic_lang') || 'en';
@@ -86,6 +113,7 @@ function setLang(code) {
   }
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   if (typeof window._kicVoiceRetranslate === 'function') window._kicVoiceRetranslate();
+  if (typeof window._kicAgentRetranslate === 'function') window._kicAgentRetranslate();
   if (typeof renderSidebar === 'function') renderSidebar();
   renderLangDropdown();
   // During the tour language step: re-render the tour card in the new language,
@@ -345,6 +373,28 @@ function _saveAnthropicCaps() {
 }
 
 /**
+ * Claude generations that PREDATE extended-thinking support at all.
+ * Kept as an opt-OUT list (rather than an opt-in list of every supported
+ * model) so that new Claude releases — new version numbers (4.7, 4.8, 5, ...)
+ * or entirely new family names (e.g. "fable", "mythos") — are recognized as
+ * thinking-capable automatically, without this code needing to be updated
+ * for every model launch. Anthropic's convention is that new model
+ * generations keep or extend thinking support rather than drop it, so
+ * treating "unknown new model" as "modern" is the safer default.
+ */
+const CLAUDE_NO_THINKING_RE = /^claude-(instant|2(\.\d+)?(-|$)|3-(opus|sonnet|haiku)(-|$)|3-5-(sonnet|haiku))/i;
+// Claude 3.7 Sonnet: has extended thinking, but via the legacy
+// type:"enabled" + budget_tokens format rather than adaptive effort.
+const CLAUDE_LEGACY_THINKING_RE = /^claude-3-7-sonnet/i;
+
+// Returns true for any Claude model from the "modern" (Claude 4 and later)
+// generation — i.e. a Claude model that isn't in the legacy opt-out lists
+// above. This is the single source of truth the functions below build on.
+function _isModernClaudeGen(bare) {
+  return /^claude-/i.test(bare) && !CLAUDE_NO_THINKING_RE.test(bare) && !CLAUDE_LEGACY_THINKING_RE.test(bare);
+}
+
+/**
  * Returns true when a Claude model uses the new adaptive thinking API
  * (type:"adaptive" + output_config.effort) instead of the legacy
  * type:"enabled" + budget_tokens format.
@@ -354,9 +404,9 @@ function isAdaptiveThinkingModel(modelId) {
   if (!modelId) return false;
   const bare = modelId.split('/').pop();
   if (_anthropicModelCaps[bare]?.adaptiveThinking != null) return _anthropicModelCaps[bare].adaptiveThinking;
-  // Regex fallback: claude-opus-4.x / claude-sonnet-4.x and later use adaptive
-  // claude-3-7-sonnet and earlier use the legacy budget_tokens format.
-  return /^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(bare);
+  // Regex fallback: Claude 4+ (any family, any version number) uses adaptive;
+  // Claude 3.7 Sonnet and earlier use the legacy budget_tokens format.
+  return _isModernClaudeGen(bare);
 }
 
 /**
@@ -369,7 +419,7 @@ function isTemperatureSupported(modelId) {
   const bare = modelId.split('/').pop();
   if (_anthropicModelCaps[bare]?.noTemperature != null) return !_anthropicModelCaps[bare].noTemperature;
   // All current Claude 4+ models drop temperature support
-  return !/^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(bare);
+  return !_isModernClaudeGen(bare);
 }
 
 // Returns the built-in default max-output-tokens for a model ID, using known models, cached OpenRouter metadata, or name-based heuristics as fallback.
@@ -416,6 +466,7 @@ let config = freshConfig();
 let providers = [];
 let profiles  = [];
 let folders   = [];
+let profileFolders = [];   // NEW: folders for organizing agent profiles (separate from chat folders)
 let chats     = [];
 let currentChatId   = null;
 let activeFolderId  = undefined;
@@ -436,6 +487,8 @@ let editingProfileId  = null;
 let editingProviderId = null;
 let draggedChatId   = null;
 let draggedFolderId = null;   // NEW: folder drag state
+let draggedProfileId = null;         // NEW: profile drag state (moving/reordering profiles)
+let draggedProfileFolderId = null;   // NEW: profile-folder drag state (reordering folders)
 let sidebarCollapsed = false;
 let webSearchCache = new Map();
 let selectedLinkUrls = new Set();
@@ -660,6 +713,110 @@ async function decryptProvider(p) {
   return out;
 }
 
+// ══════════════════════════════════════════════════════════════════
+// AGENT SESSION — lets the local proxy decrypt this account's project
+// registry (id -> real folder path) for the duration of a login.
+//
+// Reuses the exact same primitives as everything else above (PBKDF2 +
+// AES-GCM) — just a SECOND, independent key, derived with its own salt
+// and context string, so a leak of this key never exposes config/
+// providers/chats and vice versa. The raw key bytes are handed to the
+// proxy once, right after login; the proxy keeps them in RAM only,
+// never on disk (see /agent/session/unlock in kiconnect-proxy.py) —
+// the project registry itself stays encrypted at rest in exactly the
+// same per-account storage slot as everything else (datas/<id>/agent_projects.json).
+// ══════════════════════════════════════════════════════════════════
+let _agentSessionToken = null;
+let _agentProjects = [];
+
+// Derives raw AES-256 key bytes (not a CryptoKey) via PBKDF2, so they can
+// be base64-encoded and sent to the proxy once at unlock time.
+async function deriveRawBitsPBKDF2(passphrase, saltBytes) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBytes, iterations: 600000 },
+    keyMaterial, 256
+  );
+  return new Uint8Array(bits);
+}
+
+// Unlocks the agent (project-registry) session for the active account.
+// Call right after getCryptoKey()/_writeSessionToken() on login, account
+// creation, and password change. Silently no-ops the agent feature if it
+// fails (e.g. proxy unreachable) — the rest of the app keeps working.
+async function unlockAgentSession() {
+  const acc = getAccount(_activeAccountId);
+  if (!acc || !_sessionPassphrase) return;
+  let agentSalt = acc.agentSalt;
+  if (!agentSalt) {
+    const saltBuf = crypto.getRandomValues(new Uint8Array(16));
+    agentSalt = btoa(String.fromCharCode(...saltBuf));
+    acc.agentSalt = agentSalt;
+    await _registryPut(_accounts); // persist before first use, same reasoning as encSalt
+  }
+  const saltBytes = Uint8Array.from(atob(agentSalt), c => c.charCodeAt(0));
+  const passphrase = 'kic-agent-v1|' + _sessionPassphrase;
+  try {
+    const rawKey = await deriveRawBitsPBKDF2(passphrase, saltBytes);
+    const keyB64 = btoa(String.fromCharCode(...rawKey));
+    const res = await fetch('/agent/session/unlock', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: _activeAccountId, key: keyB64 }),
+    });
+    if (!res.ok) { _agentSessionToken = null; _agentProjects = []; return; }
+    const data = await res.json();
+    _agentSessionToken = data.token || null;
+    _agentProjects = Array.isArray(data.projects) ? data.projects : [];
+  } catch {
+    _agentSessionToken = null; _agentProjects = [];
+  }
+}
+
+// Re-encrypts the agent registry under a new key after a password change.
+// Uses the still-valid OLD session token to authorize the swap — never
+// re-derives from scratch (which would fail to decrypt the old ciphertext).
+// Falls back to a fresh unlockAgentSession() if there was no old session
+// to rekey (e.g. agent feature was never unlocked this session).
+async function rekeyAgentSession() {
+  const acc = getAccount(_activeAccountId);
+  if (!_agentSessionToken || !acc?.agentSalt || !_sessionPassphrase) {
+    return unlockAgentSession();
+  }
+  try {
+    const saltBytes = Uint8Array.from(atob(acc.agentSalt), c => c.charCodeAt(0));
+    const newRawKey = await deriveRawBitsPBKDF2('kic-agent-v1|' + _sessionPassphrase, saltBytes);
+    const newKeyB64 = btoa(String.fromCharCode(...newRawKey));
+    const res = await fetch('/agent/session/rekey', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...agentSessionHeader() },
+      body: JSON.stringify({ newKey: newKeyB64 }),
+    });
+    if (!res.ok) { _agentSessionToken = null; _agentProjects = []; return; }
+    const data = await res.json();
+    _agentSessionToken = data.token || null;
+    _agentProjects = Array.isArray(data.projects) ? data.projects : [];
+  } catch {
+    _agentSessionToken = null; _agentProjects = [];
+  }
+}
+
+// Tells the proxy to drop the in-RAM agent session (best-effort — the
+// server-side TTL would clean it up anyway, this just makes logout tidy).
+function lockAgentSession() {
+  if (_agentSessionToken) {
+    fetch('/agent/session/lock', { method: 'POST', headers: { 'X-Agent-Session': _agentSessionToken } }).catch(() => {});
+  }
+  _agentSessionToken = null;
+  _agentProjects = [];
+}
+
+// Header to attach to every /agent/* request (see kiconnect-agent.js agentFetch()).
+function agentSessionHeader() {
+  return _agentSessionToken ? { 'X-Agent-Session': _agentSessionToken } : {};
+}
+
 // ── Login password hash (PBKDF2 v2, per-account) ─────────────────
 async function hashPasswordPBKDF2(pw, saltBytes) {
   const key = await deriveKeyPBKDF2(pw + '|kic-login-v2', saltBytes);
@@ -859,10 +1016,11 @@ async function save() {
       ...c,
       messages: c.messages.map(sanitizeMsgForStorage),
     }));
-    const [encConfig, encProvidersStr, encProfiles, encFolders, encChats] = await Promise.all([
+    const [encConfig, encProvidersStr, encProfiles, encProfileFolders, encFolders, encChats] = await Promise.all([
       encryptObj(config),
       encryptObj(encProviders),
       encryptObj(profiles),
+      encryptObj(profileFolders),
       encryptObj(folders),
       encryptObj(chatsToStore),
     ]);
@@ -870,6 +1028,7 @@ async function save() {
       _storePut(_activeAccountId, 'config',    encConfig),
       _storePut(_activeAccountId, 'providers', encProvidersStr),
       _storePut(_activeAccountId, 'profiles',  encProfiles),
+      _storePut(_activeAccountId, 'profileFolders', encProfileFolders),
       _storePut(_activeAccountId, 'folders',   encFolders),
       _storePut(_activeAccountId, 'chats',     encChats),
     ]);
@@ -913,6 +1072,7 @@ async function load() {
     providers = await Promise.all(rawProviders.map(decryptProvider));
   } catch{}
   try { profiles = await loadKey('profiles', []); } catch{}
+  try { profileFolders = await loadKey('profileFolders', []); } catch{}
   try { folders  = await loadKey('folders',  []); } catch{}
   try { chats    = await loadKey('chats',    []); } catch{}
 
@@ -1109,7 +1269,7 @@ function renderProviderList() {
     list.appendChild(msg);
     return;
   }
-  providers.forEach(p => {
+  providers.forEach((p, idx) => {
     const ptype = PROVIDER_TYPES[p.type] || {};
     const st = providerStatus[p.id];
     const enabled = p.enabled !== false;
@@ -1122,6 +1282,49 @@ function renderProviderList() {
 
     const item = document.createElement('div');
     item.className = 'provider-item' + (enabled ? '' : ' disabled');
+    item.draggable = true;
+    item.dataset.id = p.id;
+    item.addEventListener('dragstart', e => {
+      e.stopPropagation();
+      _draggedProviderId = p.id;
+      item.classList.add('provider-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('provider-dragging');
+      document.querySelectorAll('.provider-drag-over').forEach(el => el.classList.remove('provider-drag-over'));
+      _draggedProviderId = null;
+    });
+    item.addEventListener('dragover', e => {
+      if (!_draggedProviderId || _draggedProviderId === p.id) return;
+      e.preventDefault();
+      item.classList.add('provider-drag-over');
+    });
+    item.addEventListener('dragleave', () => item.classList.remove('provider-drag-over'));
+    item.addEventListener('drop', e => {
+      e.preventDefault();
+      item.classList.remove('provider-drag-over');
+      if (_draggedProviderId && _draggedProviderId !== p.id) reorderProviderTo(_draggedProviderId, p.id);
+      _draggedProviderId = null;
+    });
+
+    const reorderCol = document.createElement('div');
+    reorderCol.className = 'provider-reorder-col';
+    const upBtn = document.createElement('button');
+    upBtn.className = 'icon-btn provider-reorder-btn'; upBtn.textContent = '▲'; upBtn.title = t('js.moveUp') || 'Move up';
+    upBtn.disabled = idx === 0;
+    upBtn.addEventListener('click', (e) => { e.stopPropagation(); moveProvider(p.id, -1); });
+    const downBtn = document.createElement('button');
+    downBtn.className = 'icon-btn provider-reorder-btn'; downBtn.textContent = '▼'; downBtn.title = t('js.moveDown') || 'Move down';
+    downBtn.disabled = idx === providers.length - 1;
+    downBtn.addEventListener('click', (e) => { e.stopPropagation(); moveProvider(p.id, 1); });
+    reorderCol.appendChild(upBtn); reorderCol.appendChild(downBtn);
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'provider-drag-handle';
+    dragHandle.textContent = '⠿';
+    dragHandle.title = t('js.dragToReorder') || 'Drag to reorder';
+
     const info = document.createElement('div');
     info.className = 'provider-item-info';
     const nameEl = document.createElement('div');
@@ -1150,10 +1353,11 @@ function renderProviderList() {
     delBtn.dataset.id = p.id;
     delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteProvider(delBtn.dataset.id); });
     actions.appendChild(editBtn); actions.appendChild(delBtn);
-    item.appendChild(info); item.appendChild(badge); item.appendChild(toggle); item.appendChild(actions);
+    item.appendChild(dragHandle); item.appendChild(reorderCol); item.appendChild(info); item.appendChild(badge); item.appendChild(toggle); item.appendChild(actions);
     list.appendChild(item);
   });
 }
+let _draggedProviderId = null;
 
 // Toggling a provider off skips it in fetchModels() and blocks sending with its models,
 // without deleting the stored API key/config.
@@ -1226,7 +1430,31 @@ function cancelProviderEditor() { document.getElementById('providerEditor').styl
 // Removes a provider and refreshes the provider list and available models.
 function deleteProvider(id) {
   providers = providers.filter(p => p.id !== id);
+  delete _modelGroupsCache[id];
   save(); renderProviderList(); fetchModels();
+}
+// Reorders the providers array (used by both the ▲/▼ buttons and drag &
+// drop in the Provider panel) — providers only ever had their creation
+// order, with no way to permute that afterwards. `dir` is -1 (up) or +1
+// (down) for button moves; drag & drop instead passes an explicit
+// `toIndex`.
+function moveProvider(id, dir) {
+  const idx = providers.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  const target = idx + dir;
+  if (target < 0 || target >= providers.length) return;
+  const [item] = providers.splice(idx, 1);
+  providers.splice(target, 0, item);
+  save(); renderProviderList();
+}
+function reorderProviderTo(draggedId, targetId) {
+  if (draggedId === targetId) return;
+  const fromIdx = providers.findIndex(p => p.id === draggedId);
+  const toIdx = providers.findIndex(p => p.id === targetId);
+  if (fromIdx === -1 || toIdx === -1) return;
+  const [item] = providers.splice(fromIdx, 1);
+  providers.splice(toIdx, 0, item);
+  save(); renderProviderList();
 }
 
 // ── Profiles ──────────────────────────────────────────────────────
@@ -1278,46 +1506,258 @@ function updateProfileBadge() {
   }
 }
 
-// (Re)builds the list of saved profiles in the Profile panel, with select/edit/delete controls.
+// (Re)builds the list of saved profiles in the Profile panel, grouped into
+// user-defined folders (with select/edit/delete controls), mirroring the
+// chat sidebar's folder system. Profiles and folders are both drag-and-drop
+// reorderable / movable.
 function renderProfileList() {
   const list = document.getElementById('profileList');
   list.innerHTML = '';
-  if (!profiles.length) {
+  if (!profiles.length && !profileFolders.length) {
     const msg = document.createElement('div');
     msg.style.cssText = 'color:var(--muted);font-size:13px;text-align:center;padding:12px;';
     msg.textContent = t('js.noProfileList');
     list.appendChild(msg);
     return;
   }
-  profiles.forEach(p => {
-    const item = document.createElement('div');
-    item.className = 'profile-item' + (p.id === config.activeProfileId ? ' active' : '');
-    item.dataset.id = p.id;
-    item.addEventListener('click', () => selectProfile(item.dataset.id));
-    const dot = document.createElement('div');
-    dot.className = 'profile-item-dot'; dot.style.background = p.color;
-    const info = document.createElement('div');
-    info.className = 'profile-item-info';
-    const nameEl = document.createElement('div');
-    nameEl.className = 'profile-item-name'; nameEl.textContent = p.name;
-    const descEl = document.createElement('div');
-    descEl.className = 'profile-item-desc';
-    descEl.textContent = 'Temp ' + (p.temperature ?? 0.7);
-    info.appendChild(nameEl); info.appendChild(descEl);
-    const actions = document.createElement('div');
-    actions.className = 'profile-item-actions';
-    const editBtn = document.createElement('button');
-    editBtn.className = 'icon-btn'; editBtn.textContent = '✏️'; editBtn.title = t('js.edit');
-    editBtn.dataset.id = p.id;
-    editBtn.addEventListener('click', e => { e.stopPropagation(); editProfile(editBtn.dataset.id); });
+
+  const unfiled = profiles.filter(p => !p.folderId || !profileFolders.find(f => f.id === p.folderId));
+
+  profileFolders.forEach(f => {
+    const fp = profiles.filter(p => p.folderId === f.id);
+    const folderDiv = document.createElement('div');
+    folderDiv.className = 'folder';
+    folderDiv.draggable = true;
+    folderDiv.dataset.folderId = f.id;
+    folderDiv.addEventListener('dragstart', e => {
+      if (!draggedProfileId) {
+        e.stopPropagation();
+        onProfileFolderDragStart(e, f.id);
+        folderDiv.classList.add('folder-dragging');
+      }
+    });
+    folderDiv.addEventListener('dragend', () => {
+      folderDiv.classList.remove('folder-dragging');
+      document.querySelectorAll('.folder-drag-over').forEach(el => el.classList.remove('folder-drag-over'));
+    });
+    folderDiv.addEventListener('dragover', e => {
+      if (draggedProfileFolderId && draggedProfileFolderId !== f.id) {
+        e.preventDefault(); e.stopPropagation();
+        folderDiv.classList.add('folder-drag-over');
+      }
+    });
+    folderDiv.addEventListener('dragleave', e => {
+      if (!folderDiv.contains(e.relatedTarget)) folderDiv.classList.remove('folder-drag-over');
+    });
+    folderDiv.addEventListener('drop', e => {
+      if (draggedProfileFolderId) onProfileFolderDrop(e, f.id);
+      else onDropProfileFolder(e, f.id);
+    });
+
+    const header = document.createElement('div');
+    header.className = 'folder-header';
+    header.id = `pfh_${f.id}`;
+    const arrow = document.createElement('span');
+    arrow.className = 'folder-arrow ' + (f.collapsed ? '' : 'open');
+    arrow.textContent = '▶';
+    arrow.addEventListener('click', e => { e.stopPropagation(); toggleProfileFolder(f.id); });
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = f.collapsed ? '📁' : '📂';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'folder-name';
+    nameSpan.id = `pfname_${f.id}`;
+    nameSpan.textContent = f.name;
+    nameSpan.addEventListener('dblclick', () => startRenamingProfileFolder(f.id));
+    const countSpan = document.createElement('span');
+    countSpan.className = 'folder-count'; countSpan.textContent = fp.length;
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'folder-actions';
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'folder-btn'; renameBtn.textContent = '✏️';
+    renameBtn.title = t('js.edit');
+    renameBtn.addEventListener('click', e => { e.stopPropagation(); startRenamingProfileFolder(f.id); });
     const delBtn = document.createElement('button');
-    delBtn.className = 'icon-btn danger'; delBtn.textContent = '🗑'; delBtn.title = t('js.delete');
-    delBtn.dataset.id = p.id;
-    delBtn.addEventListener('click', e => { e.stopPropagation(); deleteProfile(delBtn.dataset.id); });
-    actions.appendChild(editBtn); actions.appendChild(delBtn);
-    item.appendChild(dot); item.appendChild(info); item.appendChild(actions);
-    list.appendChild(item);
+    delBtn.className = 'folder-btn danger'; delBtn.textContent = '🗑';
+    delBtn.title = t('js.delete');
+    delBtn.addEventListener('click', e => { e.stopPropagation(); deleteProfileFolder(f.id); });
+    actionsDiv.appendChild(renameBtn); actionsDiv.appendChild(delBtn);
+    header.appendChild(arrow); header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan); header.appendChild(actionsDiv);
+    header.addEventListener('dragover', e => {
+      if (draggedProfileId) { e.preventDefault(); header.classList.add('drag-target'); }
+    });
+    header.addEventListener('dragleave', () => header.classList.remove('drag-target'));
+    header.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, f.id); });
+    header.addEventListener('click', e => {
+      if (e.target.closest('.folder-actions') || e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+      f.collapsed = !f.collapsed; save(); renderProfileList();
+    });
+
+    const itemsDiv = document.createElement('div');
+    itemsDiv.className = 'folder-chats' + (f.collapsed ? ' collapsed' : '');
+    itemsDiv.id = `pfc_${f.id}`;
+    itemsDiv.addEventListener('dragover', e => { if (draggedProfileId) e.preventDefault(); });
+    itemsDiv.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, f.id); });
+    fp.forEach(p => itemsDiv.appendChild(buildProfileItem(p)));
+    folderDiv.appendChild(header); folderDiv.appendChild(itemsDiv);
+    list.appendChild(folderDiv);
   });
+
+  if (profileFolders.length > 0) {
+    // "No folder" drop target, only shown once at least one real folder exists
+    const header = document.createElement('div');
+    header.className = 'folder-header';
+    const arrow = document.createElement('span'); arrow.className = 'folder-arrow open'; arrow.textContent = '▶';
+    const icon = document.createElement('span'); icon.className = 'folder-icon'; icon.textContent = '🗂️';
+    const nameSpan = document.createElement('span'); nameSpan.className = 'folder-name'; nameSpan.textContent = t('js.noFolder');
+    const countSpan = document.createElement('span'); countSpan.className = 'folder-count'; countSpan.textContent = unfiled.length;
+    header.appendChild(arrow); header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan);
+    header.addEventListener('dragover', e => { if (draggedProfileId) { e.preventDefault(); header.classList.add('drag-target'); } });
+    header.addEventListener('dragleave', () => header.classList.remove('drag-target'));
+    header.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, null); });
+    list.appendChild(header);
+  }
+
+  const unfiledDiv = document.createElement('div');
+  unfiledDiv.className = 'profile-list';
+  unfiledDiv.style.marginTop = profileFolders.length ? '4px' : '0';
+  unfiledDiv.addEventListener('dragover', e => { if (draggedProfileId) e.preventDefault(); });
+  unfiledDiv.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, null); });
+  unfiled.forEach(p => unfiledDiv.appendChild(buildProfileItem(p)));
+  list.appendChild(unfiledDiv);
+}
+
+// Builds the DOM element for a single profile entry (select/edit/delete
+// controls, drag handlers for both reordering and moving between folders).
+function buildProfileItem(p) {
+  const item = document.createElement('div');
+  item.className = 'profile-item' + (p.id === config.activeProfileId ? ' active' : '');
+  item.dataset.id = p.id;
+  item.draggable = true;
+  item.addEventListener('dragstart', e => { e.stopPropagation(); onProfileDragStart(e, p.id); });
+  item.addEventListener('dragover', e => {
+    if (!draggedProfileId || draggedProfileId === p.id) return;
+    e.preventDefault(); e.stopPropagation();
+    item.classList.add('profile-drag-over');
+  });
+  item.addEventListener('dragleave', () => item.classList.remove('profile-drag-over'));
+  item.addEventListener('drop', e => {
+    if (!draggedProfileId) return;
+    e.preventDefault(); e.stopPropagation();
+    item.classList.remove('profile-drag-over');
+    if (draggedProfileId !== p.id) reorderProfileTo(draggedProfileId, p.id);
+    draggedProfileId = null;
+  });
+  item.addEventListener('click', () => selectProfile(item.dataset.id));
+  const dot = document.createElement('div');
+  dot.className = 'profile-item-dot'; dot.style.background = p.color;
+  const info = document.createElement('div');
+  info.className = 'profile-item-info';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'profile-item-name'; nameEl.textContent = p.name;
+  const descEl = document.createElement('div');
+  descEl.className = 'profile-item-desc';
+  descEl.textContent = 'Temp ' + (p.temperature ?? 0.7);
+  info.appendChild(nameEl); info.appendChild(descEl);
+  const actions = document.createElement('div');
+  actions.className = 'profile-item-actions';
+  const editBtn = document.createElement('button');
+  editBtn.className = 'icon-btn'; editBtn.textContent = '✏️'; editBtn.title = t('js.edit');
+  editBtn.dataset.id = p.id;
+  editBtn.addEventListener('click', e => { e.stopPropagation(); editProfile(editBtn.dataset.id); });
+  const delBtn = document.createElement('button');
+  delBtn.className = 'icon-btn danger'; delBtn.textContent = '🗑'; delBtn.title = t('js.delete');
+  delBtn.dataset.id = p.id;
+  delBtn.addEventListener('click', e => { e.stopPropagation(); deleteProfile(delBtn.dataset.id); });
+  actions.appendChild(editBtn); actions.appendChild(delBtn);
+  item.appendChild(dot); item.appendChild(info); item.appendChild(actions);
+  return item;
+}
+
+// ── Profile folders — with drag & drop, mirrors the chat-folder system ──
+function newProfileFolder() {
+  const id = Date.now().toString();
+  profileFolders.push({ id, name: t('js.newFolder'), collapsed: false });
+  save(); renderProfileList(); setTimeout(() => startRenamingProfileFolder(id), 50);
+}
+// Deletes a profile folder; unlike chat folders, the profiles inside are
+// NOT deleted — they're just moved back out to the unfiled list, since a
+// profile (system prompt etc.) is much more costly to recreate than a chat.
+function deleteProfileFolder(id) {
+  const f = profileFolders.find(x => x.id === id);
+  const inside = profiles.filter(p => p.folderId === id);
+  if (inside.length && !confirm(tf('js.deleteProfileFolderConfirm', { name: f?.name || '', n: inside.length }))) return;
+  inside.forEach(p => { p.folderId = null; });
+  profileFolders = profileFolders.filter(f => f.id !== id);
+  save(); renderProfileList();
+}
+function toggleProfileFolder(id) {
+  const f = profileFolders.find(x => x.id === id);
+  if (f) { f.collapsed = !f.collapsed; save(); renderProfileList(); }
+}
+function startRenamingProfileFolder(id) {
+  const nameEl = document.getElementById(`pfname_${id}`);
+  const f = profileFolders.find(x => x.id === id);
+  if (!nameEl || !f) return;
+  const input = document.createElement('input');
+  input.className = 'folder-name-input'; input.value = f.name;
+  input.addEventListener('blur', () => commitRenameProfileFolder(id, input.value));
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
+  nameEl.replaceWith(input); input.focus(); input.select();
+}
+function commitRenameProfileFolder(id, newName) {
+  const f = profileFolders.find(x => x.id === id);
+  if (f) f.name = (newName || '').trim() || f.name;
+  save(); renderProfileList();
+}
+function onProfileFolderDragStart(e, id) {
+  draggedProfileFolderId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'profileFolder:' + id);
+}
+function onProfileFolderDrop(e, targetId) {
+  e.preventDefault(); e.stopPropagation();
+  document.querySelectorAll('.folder-drag-over').forEach(el => el.classList.remove('folder-drag-over'));
+  if (!draggedProfileFolderId || draggedProfileFolderId === targetId) { draggedProfileFolderId = null; return; }
+  const fromIdx = profileFolders.findIndex(f => f.id === draggedProfileFolderId);
+  const toIdx = profileFolders.findIndex(f => f.id === targetId);
+  if (fromIdx === -1 || toIdx === -1) { draggedProfileFolderId = null; return; }
+  const [moved] = profileFolders.splice(fromIdx, 1);
+  profileFolders.splice(toIdx, 0, moved);
+  draggedProfileFolderId = null;
+  save(); renderProfileList();
+}
+// Marks a profile as the one currently being dragged in the profile panel.
+function onProfileDragStart(e, id) {
+  draggedProfileId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  if (e.dataTransfer) e.dataTransfer.setData('text/plain', 'profile:' + id);
+}
+// Handles a profile being dropped onto a folder (or the "no folder" zone).
+function onDropProfileFolder(e, folderId) {
+  e.preventDefault();
+  document.querySelectorAll('.drag-target').forEach(el => el.classList.remove('drag-target'));
+  if (!draggedProfileId) return;
+  const p = profiles.find(x => x.id === draggedProfileId);
+  if (p) p.folderId = folderId || null;
+  draggedProfileId = null;
+  save(); renderProfileList();
+}
+// Reorders `profiles` so draggedId sits right next to targetId — used when
+// a profile is dropped directly on another profile item, so profiles can
+// be freely reordered within (or moved between) folders.
+function reorderProfileTo(draggedId, targetId) {
+  const dragged = profiles.find(p => p.id === draggedId);
+  const target = profiles.find(p => p.id === targetId);
+  if (!dragged || !target) return;
+  if (dragged.folderId !== target.folderId) dragged.folderId = target.folderId || null;
+  const fromIdx = profiles.indexOf(dragged);
+  let toIdx = profiles.indexOf(target);
+  if (fromIdx === -1 || toIdx === -1) return;
+  profiles.splice(fromIdx, 1);
+  toIdx = profiles.indexOf(target);
+  profiles.splice(toIdx + 1, 0, dragged);
+  save(); renderProfileList();
 }
 
 // Applies the chosen profile and re-renders the profile list to reflect the new selection.
@@ -1479,6 +1919,11 @@ function applyChatWidth(val) {
 
 // ── Models ────────────────────────────────────────────────────────
 let providerStatus = {};
+// Caches the last successfully fetched model list per provider (populated by
+// fetchModels()). Lets toggleProviderEnabled() rebuild the model dropdown
+// instantly from memory instead of waiting on a fresh network round trip —
+// see rebuildModelDropdownFromCache().
+let _modelGroupsCache = {};
 
 // Queries every enabled provider's /models endpoint (or uses static lists for fixed providers), merges the results into the model selector, and updates each provider's status indicator.
 async function fetchModels() {
@@ -1507,7 +1952,7 @@ async function fetchModels() {
           const caps = m.capabilities || {};
           const adaptiveThinking = caps.adaptive_thinking != null
             ? !!caps.adaptive_thinking
-            : /^claude-(opus|sonnet|haiku)-4[-_]\d|^claude-[5-9]/i.test(m.id);
+            : _isModernClaudeGen(m.id);
           const noTemperature = caps.temperature === false
             || (caps.temperature == null && adaptiveThinking);
           const prev = _anthropicModelCaps[m.id];
@@ -1600,7 +2045,11 @@ async function fetchModels() {
         } else {
 		  const EMBED_FILTER = /embed|e5-|bge-|rerank|whisper|tts|dall-e/i;
           rawModels.forEach(m => {
-            const id = m.id || m.name || ''; if (!id) return;
+            // Google's /v1beta/openai/models endpoint returns native Gemini-style
+            // IDs like "models/gemini-2.5-pro" even though this is the
+            // OpenAI-compatible route, which expects (and the UI should show)
+            // the bare "gemini-2.5-pro" form — strip the prefix if present.
+            const id = (m.id || m.name || '').replace(/^models\//, ''); if (!id) return;
 			if (EMBED_FILTER.test(id)) return;
             const knownLabel = KNOWN_MODELS[id]?.label;
             const isThinking = THINKING_MODELS.has(id) || isThinkingCapable(id);
@@ -1615,17 +2064,30 @@ async function fetchModels() {
       }
     }
     if (provOk) { providerStatus[provider.id] = 'ok'; anyOk = true; }
-    if (groupModels.length) allGroups.push({ providerId: provider.id, providerName: provider.name, models: groupModels });
+    if (groupModels.length) {
+      allGroups.push({ providerId: provider.id, providerName: provider.name, models: groupModels });
+      _modelGroupsCache[provider.id] = { providerName: provider.name, models: groupModels };
+    }
   }
   if (!anyOk && anyError) setStatus('red'); else if (anyError) setStatus('red'); else if (anyOk) setStatus('green');
   renderProviderList(); updateActiveProviderInfo();
+  if (!allGroups.length && anyError) toast(t('js.noModelLoaded'));
+  applyModelGroupsToUI(allGroups);
+}
+
+// Rebuilds the model <select>/<optgroup> options (and the custom dropdown) from
+// a list of {providerId, providerName, models} groups, and — if the currently
+// selected model isn't among them anymore — falls back to the first available
+// one. Shared by fetchModels() (fresh network data) and
+// rebuildModelDropdownFromCache() (instant, no network) so both paths behave
+// identically.
+function applyModelGroupsToUI(allGroups) {
+  const ph = `<option value="">${escHtml(t('js.selectModel'))}</option>`;
   if (!allGroups.length) {
-    if (anyError) toast(t('js.noModelLoaded'));
-    const ph = `<option value="">${escHtml(t('js.selectModel'))}</option>`;
     ['modelSelector','modelInput'].forEach(id => { const el=document.getElementById(id); if(el) el.innerHTML=ph; });
+    if (window.buildCustomDropdownData) buildCustomDropdownData();
     return;
   }
-  const ph = `<option value="">${escHtml(t('js.selectModel'))}</option>`;
   let optsHtml = ph;
   allGroups.forEach(g => {
     optsHtml += `<optgroup label="${escHtml(g.providerName)}">`;
@@ -1636,23 +2098,46 @@ async function fetchModels() {
   });
   ['modelSelector','modelInput'].forEach(id => {
     const el = document.getElementById(id);
+    if (!el) return;
     el.innerHTML = optsHtml;
     el.value = config.model || '';
   });
   const sel = document.getElementById('modelSelector');
-  if (!sel.value && allGroups[0]?.models[0]) {
+  if (sel && !sel.value && allGroups[0]?.models[0]) {
+    // The previously selected model isn't in the list anymore (e.g. its
+    // provider was just disabled/deleted) — fall back to the first
+    // available one so normal chatting keeps working immediately.
     config.model = allGroups[0].models[0].fullId;
     sel.value = config.model;
-    document.getElementById('modelInput').value = config.model;
+    const mi = document.getElementById('modelInput'); if (mi) mi.value = config.model;
+    save();
   }
-  sel.onchange = () => {
-    config.model = sel.value;
-    document.getElementById('modelInput').value = config.model;
-    updateModelMaxInfo(); updateThinkingUI(); save(); renderAttachments();
-    if (window.syncCustomDropdown) syncCustomDropdown();
-  };
+  if (sel) {
+    sel.onchange = () => {
+      config.model = sel.value;
+      const mi = document.getElementById('modelInput'); if (mi) mi.value = config.model;
+      updateModelMaxInfo(); updateThinkingUI(); save(); renderAttachments();
+      if (window.syncCustomDropdown) syncCustomDropdown();
+    };
+  }
   updateModelMaxInfo(); syncAllModelSelects(); updateThinkingUI();
   if (window.buildCustomDropdownData) buildCustomDropdownData();
+}
+
+// Rebuilds the model dropdown from the in-memory cache only — no network
+// calls. Used right after enabling/disabling a provider so the change is
+// reflected for normal chatting instantly, instead of waiting on fetchModels()
+// to finish its (potentially slow) round trip to every enabled provider.
+function rebuildModelDropdownFromCache() {
+  const allGroups = [];
+  providers.forEach(provider => {
+    if (provider.enabled === false || !provider.apiKey) return;
+    const cached = _modelGroupsCache[provider.id];
+    if (cached && cached.models.length) {
+      allGroups.push({ providerId: provider.id, providerName: provider.name, models: cached.models });
+    }
+  });
+  applyModelGroupsToUI(allGroups);
 }
 // Refreshes the 'max output tokens' hint shown near the model selector for the currently selected model.
 function updateModelMaxInfo() {
@@ -1671,16 +2156,93 @@ function isThinkingCapable(modelId) {
   if (!modelId) return false;
   const bare = modelId.split('/').pop().toLowerCase();
   return THINKING_MODELS.has(modelId) || THINKING_MODELS.has(bare) ||
-    /^o\d/.test(bare) || /claude-(opus|sonnet)-4/.test(bare) || /claude-3-7/.test(bare) ||
+    /^o\d/.test(bare) || /^(chatgpt-)?gpt-5/.test(bare) || isAnthropicThinkingModel(bare) ||
+    isGeminiThinkingModel(bare) || isMiniMaxThinkingModel(bare) || isMistralThinkingModel(bare) ||
     /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare) ||
     /^glm-(5|4\.[567])/i.test(bare);
 }
-// Returns whether a model ID is an Anthropic Claude model with thinking support (legacy or adaptive).
+// Returns whether a model ID is a Gemini model that supports the `thinking`/
+// reasoning_effort controls. Gemini 2.5+ ships with thinking enabled by
+// default; older 1.x/2.0 (non-"thinking") generations don't support it.
+function isGeminiThinkingModel(modelId) {
+  const bare = (modelId || '').split('/').pop().toLowerCase();
+  if (/gemini.*thinking/.test(bare)) return true;
+  const m = /^gemini-(\d+(?:\.\d+)?)/.exec(bare);
+  if (!m) return false;
+  return parseFloat(m[1]) >= 2.5; // 2.5+ generations ship with thinking on by default
+}
+// Returns whether a model ID is a MiniMax reasoning model (M-series). These
+// always think (M2.x can't even be turned off) and have no effort/intensity
+// levels — only an on/off toggle, handled separately via isFixedThinkingModel().
+function isMiniMaxThinkingModel(modelId) {
+  const bare = (modelId || '').split('/').pop().toLowerCase();
+  return /^minimax-(m\d|text-)/.test(bare) || /^minimaxai\/minimax-m\d/.test(bare);
+}
+// Returns whether a model ID is a Mistral "native" reasoning model (Magistral
+// family): these always reason, take no reasoning_effort parameter, and
+// return content as an array of {type:'thinking'|'text'} chunks — same as
+// the adjustable models below when reasoning_effort:'high' is used.
+// See https://docs.mistral.ai/studio-api/conversations/reasoning/native
+function isMistralNativeThinkingModel(modelId) {
+  const bare = (modelId || '').split('/').pop().toLowerCase();
+  // magistral-small-latest now resolves to Mistral Small 4 (adjustable, see
+  // below) rather than the original Magistral Small — only magistral-medium
+  // and dated magistral-small-YYMM snapshots are still "always reasons".
+  return /^magistral-medium(-latest)?$/.test(bare) || /^magistral-small-\d+$/.test(bare);
+}
+// Returns whether a model ID is a Mistral "adjustable" reasoning model
+// (mistral-small-latest / mistral-medium-3-5 and its -latest alias): these
+// think only when reasoning_effort is explicitly set to 'high' (root-level
+// field), and are otherwise plain chat models.
+// See https://docs.mistral.ai/studio-api/conversations/reasoning/adjustable
+function isMistralAdjustableThinkingModel(modelId) {
+  const bare = (modelId || '').split('/').pop().toLowerCase();
+  return /^mistral-small(-latest)?$/.test(bare) || /^mistral-medium(-3-5|-latest)?$/.test(bare) || /^magistral-small-latest$/.test(bare);
+}
+function isMistralThinkingModel(modelId) {
+  return isMistralNativeThinkingModel(modelId) || isMistralAdjustableThinkingModel(modelId);
+}
+// Mistral reasoning models (native Magistral, or adjustable models with
+// reasoning_effort:'high') return `content` — in both the final message and,
+// apparently, each stream delta — as a list of chunks instead of a plain
+// string: {type:'text', text} for the answer and {type:'thinking', thinking}
+// for the reasoning trace (thinking itself is a list of {type:'text', text}
+// sub-chunks). Plain-string content (the non-reasoning / reasoning_effort:
+// 'none' case) is also handled here so callers don't need two code paths.
+// See https://docs.mistral.ai/studio-api/conversations/reasoning/native
+function parseMistralContent(content) {
+  if (typeof content === 'string') return { text: content, reasoning: '' };
+  if (!Array.isArray(content)) return { text: '', reasoning: '' };
+  let text = '', reasoning = '';
+  for (const part of content) {
+    if (!part) continue;
+    if (part.type === 'text' && typeof part.text === 'string') text += part.text;
+    else if (part.type === 'thinking') {
+      if (typeof part.thinking === 'string') reasoning += part.thinking;
+      else if (Array.isArray(part.thinking)) reasoning += part.thinking.map(t => (t && t.text) || '').join('');
+    }
+  }
+  return { text, reasoning };
+}
+// Returns whether a model has thinking permanently on/off-only, with no
+// low/medium/high effort levels to expose in the UI (MiniMax, and Mistral's
+// native Magistral models which always reason regardless of any parameter).
+function isFixedThinkingModel(modelId) {
+  return isMiniMaxThinkingModel(modelId) || isMistralNativeThinkingModel(modelId);
+}
+// Returns whether a model ID is an Anthropic Claude model with thinking support at all
+// (either the legacy budget_tokens format or the newer adaptive-effort format).
+// Built on the same opt-out list as isAdaptiveThinkingModel/isTemperatureSupported
+// above, so a new Claude release only needs to be handled in one place.
 function isAnthropicThinkingModel(modelId) {
-  return /^claude-(opus-4|sonnet-4|3-7-sonnet)/i.test(modelId);
+  const bare = (modelId || '').split('/').pop();
+  return /^claude-/i.test(bare) && !CLAUDE_NO_THINKING_RE.test(bare);
 }
 // Returns whether a model uses the legacy budget_tokens thinking format rather than adaptive effort.
-function usesTokenBudget(modelId) { return isAnthropicThinkingModel(modelId || ''); }
+function usesTokenBudget(modelId) {
+  const bare = (modelId || '').split('/').pop();
+  return CLAUDE_LEGACY_THINKING_RE.test(bare);
+}
 // Shows/hides the thinking-mode controls depending on whether the selected model supports it.
 function updateThinkingUI() {
   const { modelId } = splitModelId(config.model);
@@ -1699,7 +2261,12 @@ function updateThinkingUI() {
 function configureThinkingSlider(modelId) {
   const slider = document.getElementById('thinkingIntensitySlider');
   const label  = document.getElementById('thinkingIntensityLabel');
+  const wrap   = document.getElementById('thinkingIntensity');
   if (!slider) return;
+  // Fixed-thinking models (currently MiniMax) have no low/medium/high effort
+  // level to pick — thinking is just on or off, so hide the slider entirely.
+  if (wrap) wrap.classList.toggle('fixed-hidden', isFixedThinkingModel(modelId));
+  if (isFixedThinkingModel(modelId)) return;
   if (usesTokenBudget(modelId) && !isAdaptiveThinkingModel(modelId)) {
     // Legacy Claude 3.7: budget slider in tokens
     slider.min='1024'; slider.max='32000'; slider.step='256';
@@ -1718,6 +2285,7 @@ function updateThinkingIntensityUI() {
   const label  = document.getElementById('thinkingIntensityVal');
   if (!slider || !label) return;
   const { modelId } = splitModelId(config.model);
+  if (isFixedThinkingModel(modelId)) return;
   // Legacy Claude 3.7: show token budget (e.g. "8k tok")
   if (usesTokenBudget(modelId) && !isAdaptiveThinkingModel(modelId)) {
     const budget = config.thinkingBudget || 8000;
@@ -1761,11 +2329,21 @@ function newFolder() {
   folders.push({id, name: t('js.newFolder'), collapsed:false});
   save(); renderSidebar(); setTimeout(()=>startRenamingFolder(id), 50);
 }
-// Deletes a folder; chats inside it are moved out (not deleted) before removal.
+// Deletes a folder together with every chat inside it (after confirmation
+// if it isn't empty), then switches away from the active chat if it was
+// one of the deleted ones.
 function deleteFolder(id) {
-  chats.forEach(c=>{if(c.folderId===id)c.folderId=null;});
+  const f = folders.find(x=>x.id===id);
+  const inside = chats.filter(c=>c.folderId===id);
+  if (inside.length && !confirm(tf('js.deleteFolderConfirm', {name: f?.name || '', n: inside.length}))) return;
+  chats = chats.filter(c=>c.folderId!==id);
   folders = folders.filter(f=>f.id!==id);
   if (activeFolderId === id) activeFolderId = null;
+  if (currentChatId && !chats.some(c=>c.id===currentChatId)) {
+    currentChatId = chats[0]?.id || null;
+    if (currentChatId) renderMessages(currentChat().messages);
+    else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} }
+  }
   save(); renderSidebar();
 }
 // Expands/collapses a sidebar folder.
@@ -1873,6 +2451,28 @@ function getMoveChatIds(chatId) {
   return [chatId];
 }
 // Moves one or more chats into a different folder (or out of all folders).
+// Reorders `chats` so draggedId sits right next to targetId — used when a
+// chat is dropped directly on another chat item in the sidebar. Only
+// actually changes visual order (folder membership already matches; if it
+// doesn't — dropped on a chat in a different folder — fall back to a plain
+// move so the chat lands in the right folder instead of just appearing
+// misplaced next to an unrelated chat).
+function reorderChatTo(draggedId, targetId) {
+  const dragged = chats.find(c => c.id === draggedId);
+  const target = chats.find(c => c.id === targetId);
+  if (!dragged || !target) return;
+  if (dragged.folderId !== target.folderId) {
+    dragged.folderId = target.folderId;
+  }
+  const fromIdx = chats.indexOf(dragged);
+  let toIdx = chats.indexOf(target);
+  if (fromIdx === -1 || toIdx === -1) return;
+  chats.splice(fromIdx, 1);
+  toIdx = chats.indexOf(target); // recompute after removal
+  chats.splice(toIdx + 1, 0, dragged);
+  if (draggedId === currentChatId) activeFolderId = dragged.folderId || null;
+  save(); renderSidebar();
+}
 function moveChats(chatIds, folderId) {
   const ids = [...new Set(chatIds || [])];
   if (!ids.length) return;
@@ -2228,6 +2828,24 @@ function buildChatItem(c) {
   div.addEventListener('dragstart', e => {
     if (_multiSelectMode && !isSelected) { e.preventDefault(); return; }
     e.stopPropagation(); onDragStart(e, div.dataset.id);
+  });
+  // Dropping a chat directly onto another chat item reorders them (if
+  // they're in the same folder) instead of just moving between folders —
+  // previously chats could only be filed into a different folder; their
+  // order within a folder was fixed to array/creation order with no way
+  // to permute it.
+  div.addEventListener('dragover', e => {
+    if (!draggedChatId || draggedChatId === c.id) return;
+    e.preventDefault(); e.stopPropagation();
+    div.classList.add('chat-drag-over');
+  });
+  div.addEventListener('dragleave', () => div.classList.remove('chat-drag-over'));
+  div.addEventListener('drop', e => {
+    if (!draggedChatId) return;
+    e.preventDefault(); e.stopPropagation();
+    div.classList.remove('chat-drag-over');
+    if (draggedChatId !== c.id) reorderChatTo(draggedChatId, c.id);
+    draggedChatId = null;
   });
   div.addEventListener('click', () => {
     if (_multiSelectMode) { toggleChatSelect(div.dataset.id); return; }
@@ -3108,10 +3726,10 @@ function _applyPromptCache(msgs) {
   if (!prev) return;
   const c = prev.content;
   if (typeof c === 'string') {
-    prev.content = [{ type: 'text', text: c, cache_control: { type: 'ephemeral' } }];
+    prev.content = [{ type: 'text', text: c, cache_control: { type: 'ephemeral', ttl: '1h' } }];
   } else if (Array.isArray(c) && c.length) {
     const lp = c[c.length - 1];
-    if (lp && !lp.cache_control) lp.cache_control = { type: 'ephemeral' };
+    if (lp && !lp.cache_control) lp.cache_control = { type: 'ephemeral', ttl: '1h' };
   }
 }
 
@@ -3346,7 +3964,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     if (isTemperatureSupported(modelId)) {
       body.temperature = config.temperature;
     }
-    if (config.systemPrompt) body.system = [{ type: 'text', text: config.systemPrompt, cache_control: { type: 'ephemeral' } }];
+    if (config.systemPrompt) body.system = [{ type: 'text', text: config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
     if (config.thinkingEnabled && isThinkingCapable(modelId)) {
       if (isAdaptiveThinkingModel(modelId)) {
         // New API (Claude 4+): adaptive thinking via output_config.effort
@@ -3369,7 +3987,11 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         'Content-Type': 'application/json',
         'x-api-key': provider.apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'prompt-caching-2024-07-31',
+        // No anthropic-beta header needed here anymore: prompt caching is
+        // GA and ttl:'1h' works without it (was prompt-caching-2024-07-31,
+        // now redundant). See kiconnect-agent.js for the agent path, which
+        // does still send a beta header — for the separate, newer
+        // context-management feature, not for caching.
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(body),
@@ -3425,7 +4047,11 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     // messages are already expanded by caller (_toOpenAIContent) — pass through
     messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
     const reqBody = { model: modelId, messages: apiMsgs, stream: true };
-    const isOSeries = /^o\d/.test(modelId);
+    // GPT-5 is a reasoning model just like the o-series: it rejects
+    // `temperature` and `max_tokens` outright and requires
+    // `max_completion_tokens` instead — so it needs to take the same
+    // request-shape branch as o1/o3/o4.
+    const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
     if (isOSeries) {
       reqBody.max_completion_tokens = effectiveMaxTokens();
       if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
@@ -3445,6 +4071,27 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
       reqBody.thinking = { type: config.thinkingEnabled ? 'enabled' : 'disabled' };
       delete reqBody.reasoning_effort;
     }
+    // MiniMax (M-series) has no reasoning_effort levels — it thinks by default
+    // (M2.x can't even be turned off) — so instead of an effort value we send
+    // an on/off `thinking.type` plus `reasoning_split: true`, which asks the
+    // API to return the trace via delta.reasoning_details instead of inline
+    // <think>...</think> tags in the content field.
+    if (provider.type === 'minimax' && isThinkingCapable(modelId)) {
+      reqBody.thinking = { type: config.thinkingEnabled ? 'adaptive' : 'disabled' };
+      reqBody.reasoning_split = true;
+      delete reqBody.reasoning_effort;
+    }
+    // Mistral: only 'none'/'high' are documented values for reasoning_effort
+    // (no low/medium), and it's a root-level field, not nested — the
+    // OAI_EFFORT low/medium/high mapping above doesn't apply here. Native
+    // Magistral models always reason and take no parameter at all.
+    if (provider.type === 'mistral') {
+      if (isMistralAdjustableThinkingModel(modelId)) {
+        reqBody.reasoning_effort = (config.thinkingEnabled && isThinkingCapable(modelId)) ? 'high' : 'none';
+      } else {
+        delete reqBody.reasoning_effort;
+      }
+    }
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
     if (provider.type === 'glm') { extraHeaders['Accept-Language'] = 'en-US,en'; }
@@ -3461,6 +4108,13 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '';
     const isGlm = provider.type === 'glm';
+    const isMinimax = provider.type === 'minimax';
+    const isMistral = provider.type === 'mistral' && isThinkingCapable(modelId);
+    const showsThinking = isGlm || isMinimax || isMistral;
+    // MiniMax's delta.reasoning_details[].text arrives cumulative (each chunk
+    // repeats everything so far), unlike GLM's incremental reasoning_content —
+    // so track the previously-seen length to extract only the new suffix.
+    let minimaxReasoningSeen = '';
     while (true) {
       const { done, value } = await reader.read(); if (done) break;
       buf += decoder.decode(value, { stream: true });
@@ -3470,14 +4124,36 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
         const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
         try {
           const chunk = JSON.parse(payload);
-          const delta = chunk.choices?.[0]?.delta?.content || '';
-          const reasoningDelta = isGlm ? (chunk.choices?.[0]?.delta?.reasoning_content || '') : '';
+          const rawContent = chunk.choices?.[0]?.delta?.content;
+          let delta = '', reasoningDelta = '';
+          if (isMistral) {
+            const parsed = parseMistralContent(rawContent);
+            delta = parsed.text;
+            // Fall back to a reasoning_content field in case the streaming
+            // shape follows the same convention as GLM/DeepSeek instead of
+            // (or in addition to) chunked content — harmless either way.
+            reasoningDelta = parsed.reasoning || chunk.choices?.[0]?.delta?.reasoning_content || '';
+          } else {
+            delta = rawContent || '';
+            if (isGlm) {
+              reasoningDelta = chunk.choices?.[0]?.delta?.reasoning_content || '';
+            } else if (isMinimax) {
+              const details = chunk.choices?.[0]?.delta?.reasoning_details;
+              if (details && details.length) {
+                const full = details.map(d => d.text || '').join('');
+                if (full.length > minimaxReasoningSeen.length) {
+                  reasoningDelta = full.slice(minimaxReasoningSeen.length);
+                  minimaxReasoningSeen = full;
+                }
+              }
+            }
+          }
           if (reasoningDelta) {
             thinkingText += reasoningDelta;
           }
           assistantText += delta;
-          if (isGlm) {
-            // GLM: render live bubble with thinking block + assistant text
+          if (showsThinking) {
+            // GLM / MiniMax: render live bubble with thinking block + assistant text
             if (reasoningDelta || delta) {
               renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
               _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
@@ -3491,13 +4167,13 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
           if (chunk.usage) {
             const u = chunk.usage;
             usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens || 0 };
-            _rememberStreamSnapshot(isGlm ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData);
+            _rememberStreamSnapshot(showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData);
           }
         } catch {}
       }
     }
     _finalizeStreamingBubble(aiEl.querySelector('.bubble'), assistantText);
-    if (isGlm && thinkingText) {
+    if (showsThinking && thinkingText) {
       assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
     }
   }
@@ -4148,7 +4824,21 @@ async function performWebSearch(query) {
   const cached = webSearchCache.get(cacheKey);
   if (cached && Date.now() - cached.time < 30 * 60 * 1000) return cached.value;
 
+  // The button's "searching…" state is reset here, in a finally around the
+  // ENTIRE search (not just by whichever caller happens to await this) —
+  // previously only the normal chat send path reset it after catching an
+  // error; the agent mode's web_search tool calls performWebSearch()
+  // directly with no equivalent reset, so an agent web search (or any
+  // engine throwing before returning) left the Web button stuck showing
+  // "..." until the next unrelated call happened to reset it.
   updateWebSearchButton(true);
+  try {
+    return await performWebSearchInner(engine, key, locale, count, q, cacheKey);
+  } finally {
+    updateWebSearchButton(false);
+  }
+}
+async function performWebSearchInner(engine, key, locale, count, q, cacheKey) {
   let results = [];
 
   if (engine === 'brave') {
@@ -4518,7 +5208,6 @@ async function sendMessageCore(text, att) {
       toast(tf('web.failed', { e: err.message || err }));
       webSearch = null;
     } finally {
-      updateWebSearchButton(false);
       if ((config.webSearchMode || 'manual') === 'manual') config.webSearchEnabled = false;
       updateWebSearchButton(false);
       save();
@@ -4667,8 +5356,8 @@ function appendToMessages(el) {
   if(total){c.insertBefore(el,total);}else{c.appendChild(el);}
 }
 // Appends a new, empty assistant bubble to the message list (filled in as the stream arrives).
-function appendEmptyAI() {
-  const mid=config.model||'';
+function appendEmptyAI(modelOverride) {
+  const mid=modelOverride||config.model||'';
   const pureModelId=splitModelId(mid).modelId||mid;
   const div=document.createElement('div');
   div.className='message-row ai';
@@ -5565,6 +6254,7 @@ async function doLogin() {
       // CryptoKey build + Session token write (kein password in sessionStorage)
       await getCryptoKey();
       await _writeSessionToken();
+      await unlockAgentSession();
       localStorage.setItem('kic_active_account', _activeAccountId);
       const durMs = getSessionDurationMs();
       if (durMs > 0) localStorage.setItem('kic_' + _activeAccountId + '_session_expiry', String(Date.now() + durMs));
@@ -5655,7 +6345,19 @@ async function doSetupPassword() {
   const selSw = colorRow?.querySelector('[data-selected]');
   const color = selSw?.dataset.color || ACCOUNT_COLORS[_accounts.length % ACCOUNT_COLORS.length];
   // Create account
-  const accountId = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 7);
+  // Random part uses crypto.getRandomValues (not Math.random(), which is
+  // neither cryptographically strong nor high-entropy) — 16 random bytes,
+  // hex-encoded. Matters because /store/<accountId>/... on the local
+  // server has no separate password check of its own (see kiconnect-proxy.py);
+  // the account ID itself is the only thing standing between "just this
+  // account's encrypted blob" and "any account's encrypted blob" for
+  // anyone/anything else reaching localhost:5000 (e.g. another OS user on
+  // a shared machine). Content stays confidential either way (it's
+  // encrypted with a password-derived key), but a guessable ID would still
+  // let someone overwrite/delete another account's data.
+  const _idBytes = new Uint8Array(16);
+  crypto.getRandomValues(_idBytes);
+  const accountId = Date.now().toString() + '_' + Array.from(_idBytes, b => b.toString(16).padStart(2, '0')).join('');
   _accounts.push({ id: accountId, name, color, pwVersion: 2 });
   saveAccountRegistry();
   await storeAccountPasswordHash(accountId, pw);
@@ -5665,6 +6367,7 @@ async function doSetupPassword() {
   // Build CryptoKey and write session token
   await getCryptoKey();
   await _writeSessionToken();
+  await unlockAgentSession();
   localStorage.setItem('kic_active_account', _activeAccountId);
   const durMs = getSessionDurationMs();
   if (durMs > 0) localStorage.setItem('kic_' + _activeAccountId + '_session_expiry', String(Date.now() + durMs));
@@ -5750,6 +6453,7 @@ async function changeLoginPassword() {
   // Neuen CryptoKey build + Session token neu write
   await getCryptoKey();
   await _writeSessionToken();
+  await rekeyAgentSession();
   await save();
   const durMs = getSessionDurationMs();
   if (durMs > 0) localStorage.setItem(`kic_${_activeAccountId}_session_expiry`, String(Date.now() + durMs));
@@ -5762,6 +6466,7 @@ async function changeLoginPassword() {
 // Logs out of the current account, clearing the in-memory session key and returning to the login screen.
 function logoutNow() {
   closePanels();
+  lockAgentSession();
   if (_activeAccountId) localStorage.removeItem(`kic_${_activeAccountId}_session_expiry`);
   _activeAccountId = null;
   _cryptoKey = null;
@@ -5769,7 +6474,7 @@ function logoutNow() {
   try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch {}
   localStorage.removeItem('kic_active_account');
   // Reset app state
-  providers = []; profiles = []; folders = []; chats = []; currentChatId = null;
+  providers = []; profiles = []; profileFolders = []; folders = []; chats = []; currentChatId = null;
   config = freshConfig();
   // Hide main UI
   document.querySelector('.main')?.style.setProperty('display','none');
@@ -5893,7 +6598,7 @@ function clearAllData() {
   if (_activeAccountId) {
     deleteAccount(_activeAccountId);
   }
-  providers = []; profiles = []; folders = []; chats = [];
+  providers = []; profiles = []; profileFolders = []; folders = []; chats = [];
   config = freshConfig();
   closePanels(); renderSidebar(); renderMessages([]); updateProfileBadge();
   toast(t('js.cleared'));
@@ -6011,6 +6716,7 @@ function setupEventListeners(){
   // Profile Panel
   document.getElementById('profilePanelClose').addEventListener('click', closePanels);
   document.getElementById('addProfileBtn').addEventListener('click', startNewProfile);
+  document.getElementById('addProfileFolderBtn')?.addEventListener('click', newProfileFolder);
   document.getElementById('saveProfileBtn').addEventListener('click', saveProfileEditor);
   document.getElementById('cancelProfileBtn').addEventListener('click', cancelProfileEditor);
   document.getElementById('peTemp').addEventListener('input', e=>{document.getElementById('peTempVal').textContent=e.target.value;});
