@@ -1,8 +1,8 @@
 # Ki-Connect
 
-Ki-Connect is a chat program that gives you access to several AI providers – for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and others (*[list](TECHNICAL.md#configuration)*). The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
+Ki-Connect is a chat program that gives you access to several AI providers - for example ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI) and others (*[list](TECHNICAL.md#configuration)*). The key difference to the usual web chats: Ki-Connect runs on your own machine, and your chats are stored locally and encrypted instead of sitting on some provider's servers.
 
-Ki-Connect supports multiple local accounts on the same installation, but it is still designed as a personal tool for one household or one trusted group of people sharing a computer – not as a multi-tenant solution for a company with many independent, mutually untrusted users.
+Ki-Connect supports multiple local accounts on the same installation, but it is still designed as a personal tool for one household or one trusted group of people sharing a computer - not as a multi-tenant solution for a company with many independent, mutually untrusted users.
 
 ![Preview](./images_/preview.jpg)
 
@@ -14,7 +14,7 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 - **Stored encrypted.** Everything that's saved is encrypted and only accessible with your password.
 - **Several accounts on one installation.** Multiple people who share the same computer can each keep their own password-protected, separately encrypted account.
 - **Many AI providers in one place.** Switch between providers and models without needing several different programs.
-- **Built-in coding agent.** Turn any chat into an agent working on a real folder on your computer – it can read, write, search, and move files, and (only if you switch it on) run shell commands, with a choice of autonomy levels from "ask before every step" to "just do it."
+- **Built-in coding agent.** Turn any chat into an agent working on a real folder on your computer - it can read, write, search, and move files, and (only if you switch it on) run shell commands, with a choice of autonomy levels from "ask before every step" to "just do it."
 - **Optional web search.** If you turn it on, the AI can look things up on the internet before answering.
 - **Images and PDFs.** You can paste images or upload PDF files so the AI can read them.
 - **Speak instead of type.** There's voice input as well as a read-aloud function for replies.
@@ -25,7 +25,7 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 
 ## Requirements
 
-Ki-Connect itself is just Python plus a web interface, so it can in principle run on Windows, macOS, or Linux wherever Python is available. **This particular release, however, is packaged and tested for Windows** – the included start scripts (`.bat` files) only work there. On macOS or Linux you would need to start the proxy manually with Python (see "Manual Installation" below).
+Ki-Connect itself is just Python plus a web interface, so it can in principle run on Windows, macOS, or Linux wherever Python is available. **This particular release, however, is packaged and tested for Windows** - the included start scripts (`.bat` files) only work there. On macOS or Linux you would need to start the proxy manually with Python (see "Manual Installation" below).
 
 - Python, unless you use the portable variant (see below)
 - A modern browser (Chrome, Firefox, Edge, or Safari)
@@ -88,15 +88,15 @@ On startup, Ki-Connect automatically checks (via `update.bat`) whether newer ver
 
 ## Coding agent
 
-Any sidebar folder can be turned into a **project**: point it at a real folder on your computer (an existing one or a new one you create on the spot), then focus a chat on it via the toggle next to the model picker. From then on, that chat isn't just talking – it can look at, edit, search, and reorganize the files in that folder, using whichever provider/model you already have selected in the header.
+Any sidebar folder can be turned into a **project**: point it at a real folder on your computer (an existing one or a new one you create on the spot), then focus a chat on it via the toggle next to the model picker. From then on, that chat isn't just talking - it can look at, edit, search, and reorganize the files in that folder, using whichever provider/model you already have selected in the header.
 
 - **One access mode per project**, chosen up front:
-  - **Simulate** – describes what it would do, changes nothing
-  - **Confirm** – asks before every file change or command
-  - **Auto** – makes changes on its own
-- **Shell commands are off by default** for every new project and must be explicitly switched on per project – even in Auto mode, this is a separate opt-in.
+  - **Simulate** - describes what it would do, changes nothing
+  - **Confirm** - asks before every file change or command
+  - **Auto** - makes changes on its own
+- **Shell commands are off by default** for every new project and must be explicitly switched on per project - even in Auto mode, this is a separate opt-in.
 - Every tool call (read, write, search, move, run command, etc.) is shown as a collapsible step in the chat, so you can always see what happened.
-- Deleting a project only removes it from Ki-Connect – the files on disk are left untouched.
+- Deleting a project only removes it from Ki-Connect - the files on disk are left untouched.
 
 > Shell execution runs commands with best-effort sandboxing (resource limits, its own process group, optional network isolation where supported), but it is not a hard security boundary. Only enable it for projects and folders you trust, ideally on a machine you don't mind an errant command touching.
 
@@ -110,6 +110,6 @@ Ki-Connect is a tool for personal use, or use by a small trusted group, on your 
 
 ## License
 
-This project is licensed under a custom non-commercial license – see [LICENSE](LICENSE). Non-commercial use, copying, and modification are permitted; commercial use requires prior written permission from the author.
+This project is licensed under a custom non-commercial license - see [LICENSE](LICENSE). Non-commercial use, copying, and modification are permitted; commercial use requires prior written permission from the author.
 
 **Disclaimer:** This software is provided "as is". No liability is accepted for API costs, data loss, or security incidents. Use at your own risk.
