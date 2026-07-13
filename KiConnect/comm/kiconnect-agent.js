@@ -56,6 +56,7 @@
     'agent.sim.deleteDir': 'Simulation: would have deleted folder "{path}" and its contents. Nothing was changed.',
     'agent.sim.edit': 'Simulation: would have applied {n} change(s) to "{path}". No file was changed.',
     'agent.sim.move': 'Simulation: would have moved "{from}" to "{to}". Nothing was changed.',
+    'agent.sim.copy': 'Simulation: would have copied "{from}" to "{to}". Nothing was changed.',
     'agent.sim.replace': 'Simulation: would have replaced "{find}" in {n} file(s). No file was changed.',
     'agent.sim.run': 'Simulation: would have run "{command}". No command was executed.',
     'agent.warnSelfNested': 'Note: "{path}" nests a folder ("{seg}") inside another one with the same name — this is usually accidental. Check with list_files whether you meant the existing folder instead of creating another one inside it.',
@@ -149,7 +150,7 @@
 
   function compactToolCallLabel(name, args) {
     if (!args) return name;
-    const key = args.path || (Array.isArray(args.paths) && args.paths[0]) || args.query || args.command || args.from;
+    const key = args.path || (Array.isArray(args.paths) && args.paths[0]) || (Array.isArray(args.items) && args.items[0] && args.items[0].from) || args.query || args.command || args.from;
     return key ? `${name}(${String(key).slice(0, 60)})` : name;
   }
 
@@ -178,6 +179,7 @@
     create_file: '🆕', write_file: '✏️', edit_file: '✂️', write_files: '📝',
     delete_file: '🗑️', delete_files: '🗑️', create_directory: '📁', create_directories: '📁',
     delete_directory: '🗑️📁', delete_directories: '🗑️📁', move_file: '🔀', replace_in_files: '🔁',
+    copy_file: '📄', copy_files: '📄',
     web_search: '🌐', fetch_url: '🔗', run_command: '⚡',
   };
   // NOTE: these are functions (not plain objects) so they always read the
@@ -194,6 +196,7 @@
       create_directory: t('agent.tool.mkdir', 'Create folder'), create_directories: t('agent.tool.mkdirMulti', 'Create folders'),
       delete_directory: t('agent.tool.rmdir', 'Delete folder'), delete_directories: t('agent.tool.rmdirMulti', 'Delete folders'),
       move_file: t('agent.tool.move', 'Move / rename'), replace_in_files: t('agent.tool.replaceMulti', 'Replace in files'),
+      copy_file: t('agent.tool.copy', 'Copy'), copy_files: t('agent.tool.copyMulti', 'Copy files'),
       web_search: t('agent.tool.webSearch', 'Web search'), fetch_url: t('agent.tool.fetchUrl', 'Fetch webpage'),
       run_command: t('agent.tool.runCommand', 'Run command'),
     };
@@ -216,7 +219,8 @@
     if (a.command) return a.command;
     if (a.path) return a.path;
     if (a.from && a.to) return `${a.from} → ${a.to}`;
-    const list = Array.isArray(a.paths) ? a.paths : Array.isArray(a.files) ? a.files.map(f => f && f.path) : null;
+    const list = Array.isArray(a.paths) ? a.paths : Array.isArray(a.files) ? a.files.map(f => f && f.path)
+      : Array.isArray(a.items) ? a.items.map(it => it && it.from && it.to ? `${it.from} → ${it.to}` : (it && it.path)) : null;
     if (list) return list.length <= 3 ? list.filter(Boolean).join(', ') : tf('agent.nItems', { n: list.length });
     return '';
   }
@@ -245,7 +249,9 @@
       { type: 'function', function: { name: 'write_files', description: 'Creates or overwrites several files in one call — use this instead of separate write_file/create_file calls whenever a task touches multiple files at once (e.g. scaffolding several new files). Confirmed and executed as a single batch, not one prompt per file.', parameters: { type: 'object', properties: { files: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, createOnly: { type: 'boolean', description: 'true = fail instead of overwriting if the file already exists.' } }, required: ['path', 'content'] } } }, required: ['files'] } } },
       { type: 'function', function: { name: 'delete_file', description: 'Permanently deletes a single file. If you need to delete more than one file, use delete_files instead — it deletes them all in one call and one confirmation.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
       { type: 'function', function: { name: 'delete_files', description: 'Deletes several files in one call instead of one delete_file call per file — use this for any task that removes more than one file (e.g. "delete all files in this folder", "remove these 5 files").', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
-      { type: 'function', function: { name: 'move_file', description: 'Moves or renames a file or folder within the project without reading or resending its content — use this instead of read_file + create_file + delete_file when relocating or renaming something, especially for large files.', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, overwrite: { type: 'boolean', description: 'true = replace an existing file/folder already at the destination.' } }, required: ['from', 'to'] } } },
+      { type: 'function', function: { name: 'move_file', description: 'Moves or renames a file or folder within the project without reading or resending its content — use this instead of read_file + create_file + delete_file when relocating or renaming something, especially for large files. This DELETES the original at `from` — never use this for a "copy X to Y" / "duplicate X as Y" request, since that must leave the original in place; use copy_file for that instead.', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, overwrite: { type: 'boolean', description: 'true = replace an existing file/folder already at the destination.' } }, required: ['from', 'to'] } } },
+      { type: 'function', function: { name: 'copy_file', description: 'Copies a file or folder to a new path within the project, WITHOUT reading or resending its content and without touching the original — use this for any "copy X to Y", "duplicate X", or "make a copy of X" request, instead of read_file + create_file (which would waste tokens on large files and risks truncated copies) and instead of move_file (which deletes the original — wrong for a copy).', parameters: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, overwrite: { type: 'boolean', description: 'true = replace an existing file/folder already at the destination.' } }, required: ['from', 'to'] } } },
+      { type: 'function', function: { name: 'copy_files', description: 'Copies several files/folders in one call instead of one copy_file call per item — use this whenever a task copies more than one file (e.g. "copy all .js files in src/ to backup/").', parameters: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, overwrite: { type: 'boolean' } }, required: ['from', 'to'] } } }, required: ['items'] } } },
       { type: 'function', function: { name: 'replace_in_files', description: 'Replaces every occurrence of an exact text (or, if regex=true, every regex match) across several files in ONE call and ONE confirmation — e.g. renaming a function/variable everywhere it is used. Use search_in_files first to find which files contain it, then pass those paths here instead of one read_file + edit_file round trip per file.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: 'Files to apply the replacement to (get these from search_in_files or list_files).' }, find: { type: 'string', description: 'Exact text, or (if regex=true) a regular expression, to find.' }, replace: { type: 'string', description: 'Replacement text.' }, regex: { type: 'boolean', description: 'true = interpret find as a regular expression (matched with the global flag).' } }, required: ['paths', 'find'] } } },
       { type: 'function', function: { name: 'create_directory', description: 'Creates a (possibly nested) folder.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
       { type: 'function', function: { name: 'create_directories', description: 'Creates several (possibly nested) folders in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
@@ -282,7 +288,7 @@
       `Work step by step: if needed, first use list_files/search_in_files/read_file to get an overview of the existing project structure and the relevant code before you modify files.`,
       `Use search_in_files to find functions, variables, or text across the whole project instead of guessing file names or reading files blindly one by one.`,
       `Prefer the batch tools (read_files, write_files, delete_files, create_directories, delete_directories) over calling their single-file counterparts repeatedly whenever a task touches more than one file — e.g. for "delete all files in this folder" call list_files once, then delete_files once with every matching path, not one delete_file call per file.`,
-      `Prefer edit_file over write_file for a small change to an otherwise-large file — it only needs the exact snippet being changed, not the whole file; pass edit_file's \`edits\` array when a file needs several separate changes, instead of calling edit_file once per change. Use move_file to rename/relocate a file or folder instead of reading and rewriting its content. Use replace_in_files instead of read_file+edit_file per file when the exact same text needs to change in several files at once (e.g. renaming a function everywhere it's used) — search_in_files first to find which files are affected.`,
+      `Prefer edit_file over write_file for a small change to an otherwise-large file — it only needs the exact snippet being changed, not the whole file; pass edit_file's \`edits\` array when a file needs several separate changes, instead of calling edit_file once per change. Use move_file to rename/relocate a file or folder instead of reading and rewriting its content — but move_file DELETES the original, so never use it for "copy"/"duplicate" requests; use copy_file (or copy_files for several items) for those instead, since it leaves the original in place. Use replace_in_files instead of read_file+edit_file per file when the exact same text needs to change in several files at once (e.g. renaming a function everywhere it's used) — search_in_files first to find which files are affected.`,
       `Tool results can be large (e.g. a big file's content) and may be shown to you truncated with a note saying how much was cut off. NEVER call write_file on a file you only saw truncated or partially — you would overwrite the rest of the file with content you never actually saw. For reorganizing, reformatting, or otherwise touching most of a large file, use several edit_file/replace_in_files calls on the specific parts that change instead of write_file with the whole new content.`,
       `Use web_search and fetch_url when you need current information, documentation, or details about a library/API that you're not sure about.`,
       `Only make changes that belong to the given task. At the end, reply in short, plain prose about what you did — that ends the run.`,
@@ -403,6 +409,23 @@
   // through the model's context, unlike a read+create+delete round trip.
   async function apiMove(project, from, to, overwrite) {
     const res = await agentFetch(`/agent/move/${encodeURIComponent(project)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, overwrite: !!overwrite }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
+    return data;
+  }
+  // Copies a file or folder server-side (recursively for folders) — no
+  // content ever passes through the model's context, unlike a
+  // read+create round trip, and — unlike apiMove — the original at
+  // `from` is left untouched. Requires a matching /agent/copy/<project>
+  // route on the local proxy (kiconnect-proxy.py); see that file for the
+  // handler paired with this call (same shape as the existing move route,
+  // just copying instead of renaming on disk, e.g. shutil.copy2 /
+  // shutil.copytree in Python, recursive so it works for folders too).
+  async function apiCopy(project, from, to, overwrite) {
+    const res = await agentFetch(`/agent/copy/${encodeURIComponent(project)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to, overwrite: !!overwrite }),
     });
@@ -663,6 +686,11 @@
         return { simulated: true, message: tf('agent.sim.edit', { path: args.path, n }) };
       }
       if (name === 'move_file') return { simulated: true, message: tf('agent.sim.move', { from: args.from, to: args.to }) };
+      if (name === 'copy_file') return { simulated: true, message: tf('agent.sim.copy', { from: args.from, to: args.to }) };
+      if (name === 'copy_files') {
+        const items = Array.isArray(args.items) ? args.items : [];
+        return { files: items.map(it => ({ path: it && it.to, simulated: true, message: tf('agent.sim.copy', { from: it && it.from, to: it && it.to }) })) };
+      }
       if (name === 'replace_in_files') return { simulated: true, message: tf('agent.sim.replace', { find: args.find, n: Array.isArray(args.paths) ? args.paths.length : 0 }) };
       if (name === 'run_command') return { simulated: true, message: tf('agent.sim.run', { command: args.command }) };
       if (BATCH_ITEM_KEY[name]) {
@@ -680,6 +708,20 @@
     if (name === 'move_file') {
       if (!args.from || !args.to) return { error: t('agent.err.missingPath', 'missing path') };
       return withNestWarning(args.to, await apiMove(project, args.from, args.to, args.overwrite));
+    }
+    if (name === 'copy_file') {
+      if (!args.from || !args.to) return { error: t('agent.err.missingPath', 'missing path') };
+      return withNestWarning(args.to, await apiCopy(project, args.from, args.to, args.overwrite));
+    }
+    if (name === 'copy_files') {
+      const items = Array.isArray(args.items) ? args.items : [];
+      if (!items.length) return { error: t('agent.err.missingFiles', 'missing files') };
+      const results = [];
+      for (const it of items) {
+        if (!it || !it.from || !it.to) { results.push({ path: it && it.to, error: t('agent.err.missingPath', 'missing path') }); continue; }
+        results.push({ path: it.to, ...withNestWarning(it.to, await apiCopy(project, it.from, it.to, it.overwrite)) });
+      }
+      return { files: results };
     }
     if (name === 'replace_in_files') return applyReplaceInFiles(project, args);
     if (name === 'run_command') {
@@ -1136,6 +1178,25 @@
         else lines.push(`✅ ${t('agent.done', 'done.')}`);
         if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
       }
+    } else if (name === 'copy_file') {
+      if (result) {
+        if (result.error) lines.push(`❌ ${result.error}`);
+        else if (result.simulated) lines.push(`🧪 ${result.message}`);
+        else if (result.rejected) lines.push(`🚫 ${result.message}`);
+        else lines.push(`✅ ${t('agent.done', 'done.')}`);
+        if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
+      }
+    } else if (name === 'copy_files') {
+      const items = (result && Array.isArray(result.files)) ? result.files : [];
+      if (!items.length && result && result.error) lines.push(`❌ ${result.error}`);
+      items.forEach(it => {
+        let mark = '✅';
+        if (it.error) mark = `❌ ${it.error}`;
+        else if (it.simulated) mark = `🧪 ${it.message}`;
+        else if (it.rejected) mark = `🚫 ${it.message}`;
+        if (it.warning) mark += ` ⚠️ ${esc(it.warning)}`;
+        lines.push(`- \`${esc(it.path)}\` ${mark}`);
+      });
     } else if (name === 'write_files' || name === 'delete_files' || name === 'create_directories' || name === 'delete_directories') {
       const items = (result && Array.isArray(result.files)) ? result.files : [];
       if (!items.length && result && result.error) lines.push(`❌ ${result.error}`);

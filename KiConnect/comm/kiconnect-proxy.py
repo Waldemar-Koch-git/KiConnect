@@ -969,6 +969,78 @@ def agent_move(pid):
     return _agent_ok({'from': rel_from, 'to': rel_to})
 
 
+# ── /agent/copy/<id> - copy a file or folder, leaving the original ────
+# Mirrors agent_move above, but copies instead of renaming on disk, so the
+# source at `from` is left untouched. shutil.copy2 preserves metadata for a
+# single file; shutil.copytree (with dirs_exist_ok, since the destination
+# was already cleared above when overwrite=true) recurses for folders.
+# Folder copies are size-capped the same way run_command's output is capped
+# elsewhere, so a single "copy" call can't be used to silently balloon disk
+# usage with an unbounded recursive copy.
+MAX_AGENT_COPY_DIR_BYTES = 200 * 1024 * 1024   # 200 MB cap for a folder copy
+
+def _dir_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            fp = os.path.join(root, name)
+            try:
+                if not os.path.islink(fp):
+                    total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
+@app.route('/agent/copy/<pid>', methods=['POST', 'OPTIONS'])
+def agent_copy(pid):
+    if request.method == 'OPTIONS':
+        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
+    sess = _agent_session_or_401()
+    if not sess:
+        return _agent_error('Session expired - please log in again.', 401)
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    rel_from = body.get('from')
+    rel_to = body.get('to')
+    src = _safe_rel_path(pdir, rel_from) if rel_from else None
+    dst = _safe_rel_path(pdir, rel_to) if rel_to else None
+    if not src or not dst:
+        return _agent_error('Invalid from/to path.')
+    if not os.path.exists(src):
+        return _agent_error('Source not found.', 404)
+    if src == dst:
+        return _agent_error('Source and destination are the same path.')
+    # A folder can't be copied into its own subtree (mirrors the "..\ nested
+    # folder" footgun agent.warnSelfNested already warns about client-side).
+    if os.path.isdir(src) and (dst == src or dst.startswith(src + os.sep)):
+        return _agent_error('Cannot copy a folder into itself or a subfolder of itself.')
+    if os.path.isdir(src):
+        size = _dir_size(src)
+        if size > MAX_AGENT_COPY_DIR_BYTES:
+            return _agent_error(f'Folder too large to copy ({size // (1024*1024)} MB > {MAX_AGENT_COPY_DIR_BYTES // (1024*1024)} MB limit).', 413)
+    else:
+        if os.path.getsize(src) > MAX_AGENT_FILE_SIZE:
+            return _agent_error('File too large (>5 MB).', 413)
+    if os.path.exists(dst):
+        if not bool(body.get('overwrite')):
+            return _agent_error('Destination already exists (set overwrite to replace it).', 409)
+        with _store_lock:
+            if os.path.isdir(dst) and not os.path.islink(dst):
+                shutil.rmtree(dst, ignore_errors=True)
+            else:
+                os.remove(dst)
+    with _store_lock:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, symlinks=False)
+        else:
+            shutil.copy2(src, dst)
+    return _agent_ok({'from': rel_from, 'to': rel_to})
+
+
 @app.before_request
 def check_origin():
     if request.path.startswith('/proxy/') or request.path.startswith('/store') or request.path.startswith('/agent'):
@@ -1251,6 +1323,7 @@ if __name__ == '__main__':
     iline('GET/PUT/DELETE /agent/file/<id>/<p>      Read/write/delete file')
     iline('POST/DELETE /agent/dir/<id>/<p>          Create/delete folder')
     iline('POST     /agent/move/<id>                Move/rename')
+    iline('POST     /agent/copy/<id>                Copy (leaves original)')
     print('║  └' + '─' * IW + '┘  ║')
     line()
     line('Proxy allowlist: anthropic, openai, openrouter, mistral, googleapis,')
