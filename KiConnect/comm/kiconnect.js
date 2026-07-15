@@ -1063,7 +1063,7 @@ async function load() {
     try { return JSON.parse(raw); } catch { return fallback; }
   }
   try { config = {...freshConfig(), ...config, ...await loadKey('config', {})}; } catch{}
-  if (!['manual','auto','always','off'].includes(config.webSearchMode)) config.webSearchMode = 'manual';
+  if (!['manual','auto','always','off','agentic'].includes(config.webSearchMode)) config.webSearchMode = 'manual';
   if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex'].includes(config.webSearchEngine)) config.webSearchEngine = 'free';
   config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
   config.webLinkEnabled = !!config.webLinkEnabled;
@@ -1568,7 +1568,6 @@ function renderProfileList() {
     nameSpan.className = 'folder-name';
     nameSpan.id = `pfname_${f.id}`;
     nameSpan.textContent = f.name;
-    nameSpan.addEventListener('dblclick', () => startRenamingProfileFolder(f.id));
     const countSpan = document.createElement('span');
     countSpan.className = 'folder-count'; countSpan.textContent = fp.length;
     const actionsDiv = document.createElement('div');
@@ -1592,6 +1591,14 @@ function renderProfileList() {
       if (e.target.closest('.folder-actions') || e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
       f.collapsed = !f.collapsed; save(); renderProfileList();
     });
+    // Double-click = collapse the folder (renaming is only ever triggered via the context menu or the ✏️ button)
+    header.addEventListener('dblclick', e => {
+      if (e.target.closest('.folder-actions') || e.target.tagName==='BUTTON' || e.target.tagName==='INPUT') return;
+      if (!f.collapsed) { f.collapsed = true; save(); renderProfileList(); }
+    });
+    // Right-click = context menu with folder options (Rename / Move / Delete)
+    header.addEventListener('contextmenu', e => showProfileFolderCtxMenu(e, f.id));
+
 
     const itemsDiv = document.createElement('div');
     itemsDiv.className = 'folder-chats' + (f.collapsed ? ' collapsed' : '');
@@ -2335,7 +2342,8 @@ function newFolder() {
 function deleteFolder(id) {
   const f = folders.find(x=>x.id===id);
   const inside = chats.filter(c=>c.folderId===id);
-  if (inside.length && !confirm(tf('js.deleteFolderConfirm', {name: f?.name || '', n: inside.length}))) return;
+  //if (inside.length && !confirm(tf('js.deleteFolderConfirm', {name: f?.name || '', n: inside.length}) )) return;
+  if (inside.length && !confirm('\n🗂️ + 📝 → 🗑️ ❓') ) return;
   chats = chats.filter(c=>c.folderId!==id);
   folders = folders.filter(f=>f.id!==id);
   if (activeFolderId === id) activeFolderId = null;
@@ -2551,6 +2559,117 @@ function showChatCtxMenu(e, chatId) {
 function hideCtx() { document.getElementById('ctxMenu').style.display='none'; }
 document.addEventListener('click', hideCtx);
 
+// Opens the right-click context menu for a folder sidebar entry (Rename / Move / Delete).
+function showFolderCtxMenu(e, folderId) {
+  e.preventDefault(); e.stopPropagation();
+  const menu = document.getElementById('ctxMenu');
+  menu.innerHTML = '';
+  const idx = folders.findIndex(f => f.id === folderId);
+
+  const renameItem = document.createElement('div');
+  renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
+  renameItem.addEventListener('click', () => { startRenamingFolder(folderId); hideCtx(); });
+  menu.appendChild(renameItem);
+
+  // Move (purely symbolic, no dedicated translation needed) — submenu with ↑ / ↓
+  const moveItem = document.createElement('div');
+  moveItem.className = 'ctx-item ctx-item-submenu';
+  moveItem.textContent = '↕️ ▶';
+  const submenu = document.createElement('div');
+  submenu.className = 'ctx-submenu';
+  const upOpt = document.createElement('div');
+  upOpt.className = 'ctx-item'; upOpt.textContent = '↑';
+  if (idx <= 0) { upOpt.style.opacity = '0.5'; upOpt.style.pointerEvents = 'none'; }
+  upOpt.addEventListener('click', () => { moveFolder(folderId, -1); hideCtx(); });
+  submenu.appendChild(upOpt);
+  const downOpt = document.createElement('div');
+  downOpt.className = 'ctx-item'; downOpt.textContent = '↓';
+  if (idx === -1 || idx >= folders.length - 1) { downOpt.style.opacity = '0.5'; downOpt.style.pointerEvents = 'none'; }
+  downOpt.addEventListener('click', () => { moveFolder(folderId, 1); hideCtx(); });
+  submenu.appendChild(downOpt);
+  moveItem.appendChild(submenu);
+  moveItem.addEventListener('mouseenter', () => submenu.classList.add('open'));
+  moveItem.addEventListener('mouseleave', () => submenu.classList.remove('open'));
+  menu.appendChild(moveItem);
+
+  const delItem = document.createElement('div');
+  delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
+  delItem.addEventListener('click', () => { deleteFolder(folderId); hideCtx(); });
+  menu.appendChild(delItem);
+
+  menu.style.display = 'block';
+  const x = Math.min(e.clientX, window.innerWidth-180);
+  const y = Math.min(e.clientY, window.innerHeight-120);
+  menu.style.left = x+'px';
+  menu.style.top  = y+'px';
+}
+// Moves a folder within the array up (-1) or down (+1) by one position.
+function moveFolder(id, dir) {
+  const idx = folders.findIndex(f => f.id === id);
+  if (idx === -1) return;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= folders.length) return;
+  const [moved] = folders.splice(idx, 1);
+  folders.splice(newIdx, 0, moved);
+  save(); renderSidebar();
+}
+
+// Opens the right-click context menu for a profile-folder entry (Rename / Move / Delete),
+// mirroring showFolderCtxMenu for the chat sidebar.
+function showProfileFolderCtxMenu(e, folderId) {
+  e.preventDefault(); e.stopPropagation();
+  const menu = document.getElementById('ctxMenu');
+  menu.innerHTML = '';
+  const idx = profileFolders.findIndex(f => f.id === folderId);
+
+  const renameItem = document.createElement('div');
+  renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
+  renameItem.addEventListener('click', () => { startRenamingProfileFolder(folderId); hideCtx(); });
+  menu.appendChild(renameItem);
+
+  // Move (purely symbolic, no dedicated translation needed) — submenu with ↑ / ↓
+  const moveItem = document.createElement('div');
+  moveItem.className = 'ctx-item ctx-item-submenu';
+  moveItem.textContent = '↕️ ▶';
+  const submenu = document.createElement('div');
+  submenu.className = 'ctx-submenu';
+  const upOpt = document.createElement('div');
+  upOpt.className = 'ctx-item'; upOpt.textContent = '↑';
+  if (idx <= 0) { upOpt.style.opacity = '0.5'; upOpt.style.pointerEvents = 'none'; }
+  upOpt.addEventListener('click', () => { moveProfileFolder(folderId, -1); hideCtx(); });
+  submenu.appendChild(upOpt);
+  const downOpt = document.createElement('div');
+  downOpt.className = 'ctx-item'; downOpt.textContent = '↓';
+  if (idx === -1 || idx >= profileFolders.length - 1) { downOpt.style.opacity = '0.5'; downOpt.style.pointerEvents = 'none'; }
+  downOpt.addEventListener('click', () => { moveProfileFolder(folderId, 1); hideCtx(); });
+  submenu.appendChild(downOpt);
+  moveItem.appendChild(submenu);
+  moveItem.addEventListener('mouseenter', () => submenu.classList.add('open'));
+  moveItem.addEventListener('mouseleave', () => submenu.classList.remove('open'));
+  menu.appendChild(moveItem);
+
+  const delItem = document.createElement('div');
+  delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
+  delItem.addEventListener('click', () => { deleteProfileFolder(folderId); hideCtx(); });
+  menu.appendChild(delItem);
+
+  menu.style.display = 'block';
+  const x = Math.min(e.clientX, window.innerWidth-180);
+  const y = Math.min(e.clientY, window.innerHeight-120);
+  menu.style.left = x+'px';
+  menu.style.top  = y+'px';
+}
+// Moves a profile folder within the array up (-1) or down (+1) by one position.
+function moveProfileFolder(id, dir) {
+  const idx = profileFolders.findIndex(f => f.id === id);
+  if (idx === -1) return;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= profileFolders.length) return;
+  const [moved] = profileFolders.splice(idx, 1);
+  profileFolders.splice(newIdx, 0, moved);
+  save(); renderProfileList();
+}
+
 // ── Multi-select helpers ──────────────────────────────────────────
 function toggleChatSelect(id) {
   if (_selectedChatIds.has(id)) _selectedChatIds.delete(id);
@@ -2744,7 +2863,6 @@ function renderSidebar() {
     nameSpan.className = 'folder-name';
     nameSpan.id = `fname_${f.id}`;
     nameSpan.textContent = f.name;
-    nameSpan.addEventListener('dblclick', () => startRenamingFolder(f.id));
     const countSpan = document.createElement('span');
     countSpan.className = 'folder-count'; countSpan.textContent = fc.length;
     const actionsDiv = document.createElement('div');
@@ -2775,6 +2893,13 @@ function renderSidebar() {
       if (f.collapsed) { f.collapsed=false; save(); renderSidebar(); }
       else renderSidebar();
     });
+    // Double-click = collapse the folder (renaming is only ever triggered via the context menu or the ✏️ button)
+    header.addEventListener('dblclick', e => {
+      if (e.target.closest('.folder-actions') || e.target.tagName==='BUTTON' || e.target.tagName==='INPUT') return;
+      if (!f.collapsed) { f.collapsed = true; save(); renderSidebar(); }
+    });
+    // Right-click = context menu with folder options (Rename / Move / Delete)
+    header.addEventListener('contextmenu', e => showFolderCtxMenu(e, f.id));
     const chatsDiv = document.createElement('div');
     chatsDiv.className = 'folder-chats' + (f.collapsed ? ' collapsed' : '');
     chatsDiv.id = `fc_${f.id}`;
@@ -3947,8 +4072,12 @@ function _finishLiveStreamUI() {
  * @param {Array}  [documentIds] — optional KiConnect document IDs (OpenAI-compat only)
  * @returns {Promise<{text: string, usage: object|null}>}
  */
-async function _streamAIResponse(messages, provider, typingId, documentIds) {
-  let assistantText = '', usageData = null;
+async function _streamAIResponse(messages, provider, typingId, documentIds, opts) {
+  // opts.prefixText: pre-formed markdown/HTML (currently only the agentic
+  // web-search tool trace, see runAgenticWebToolLoop) seeded as already-
+  // "streamed" text before the model's own live delta text is appended —
+  // same trick already used below for the <thinking> block.
+  let assistantText = (opts && opts.prefixText) ? (opts.prefixText + '\n\n') : '', usageData = null;
   let aiRowEl = null; // the actual DOM row created for this streamed answer (see appendEmptyAI() below)
   activeStreamSnapshot = { text: '', usage: null };
 
@@ -4190,10 +4319,10 @@ async function _streamAIResponse(messages, provider, typingId, documentIds) {
  * setSendMode('stop') and created abortController.
  * Resets isStreaming/abortController/send-mode/status when done.
  */
-async function _runStreamAndAttach(chat, messages, provider, typingId, documentIds) {
+async function _runStreamAndAttach(chat, messages, provider, typingId, documentIds, opts) {
   let assistantText = '', usageData = null, streamEl = null;
   try {
-    const result = await _streamAIResponse(messages, provider, typingId, documentIds);
+    const result = await _streamAIResponse(messages, provider, typingId, documentIds, opts);
     assistantText = result.text; usageData = result.usage; streamEl = result.el;
   } catch (e) {
     removeTyping(typingId);
@@ -4363,7 +4492,12 @@ async function rerunFromUserMsg(userMsg) {
     messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
       .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
   }
-  await _runStreamAndAttach(chat, messages, provider, typingId, []);
+  if (isAgenticWebMode()) {
+    const { msgs: augmentedMessages, traceHtml } = await runAgenticWebToolLoop(messages, provider);
+    await _runStreamAndAttach(chat, augmentedMessages, provider, typingId, [], { prefixText: traceHtml });
+  } else {
+    await _runStreamAndAttach(chat, messages, provider, typingId, []);
+  }
 }
 
 
@@ -4385,12 +4519,12 @@ function updateWebSearchButton(searching=false) {
   const btn = document.getElementById('webSearchBtn');
   if (!btn) return;
   const mode = config.webSearchMode || 'manual';
-  const active = mode === 'always' || config.webSearchEnabled;
+  const active = mode === 'always' || mode === 'agentic' || config.webSearchEnabled;
   btn.classList.toggle('active', active && mode !== 'off');
   btn.classList.toggle('link-active', !!config.webLinkEnabled && getSelectedReadableUrls().length > 0);
   btn.classList.toggle('searching', searching);
   btn.disabled = mode === 'off' || searching;
-  btn.textContent = searching ? '...' : 'Web ▾';
+  btn.textContent = searching ? '...' : (mode === 'agentic' ? 'Web 🤖' : 'Web ▾');
   syncWebContextPopover();
 }
 
@@ -4400,6 +4534,7 @@ function toggleWebSearch() {
     toast(t('web.offToast'));
     return;
   }
+  if (isAgenticWebMode()) config.webSearchMode = 'manual';
   config.webSearchEnabled = !config.webSearchEnabled;
   updateWebSearchButton();
   save();
@@ -4424,6 +4559,7 @@ function setMiniToggle(btn, active) {
 // Refreshes the web-context popover's toggles to match the current config.
 function syncWebContextPopover() {
   setMiniToggle(document.getElementById('webSearchToggle'), shouldUseWebSearch(document.getElementById('messageInput')?.value || ''));
+  setMiniToggle(document.getElementById('webAgenticToggle'), isAgenticWebMode());
   setMiniToggle(document.getElementById('webLinkToggle'), !!config.webLinkEnabled);
   const count = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
   const countEl = document.getElementById('webContextCount');
@@ -4488,12 +4624,200 @@ function shouldAutoWebSearch(text) {
 }
 
 // Returns whether web search should run for the given message, combining the manual toggle and auto-detection.
+// 'agentic' mode is handled separately (see isAgenticWebMode()/runAgenticWebToolLoop) — it never
+// pre-fetches results before the model even sees the message, so it's excluded here.
 function shouldUseWebSearch(text) {
   const mode = config.webSearchMode || 'manual';
-  if (mode === 'off') return false;
+  if (mode === 'off' || mode === 'agentic') return false;
   if (mode === 'always') return true;
   if (config.webSearchEnabled) return true;
   return mode === 'auto' && shouldAutoWebSearch(text);
+}
+
+// 'agentic' mode: instead of guessing from the message text and pre-fetching
+// results (like manual/auto/always above), the model itself gets web_search
+// and fetch_url as real tools on the request and decides mid-conversation
+// whether it needs them — the same way the coding agent (kiconnect-agent.js)
+// decides for itself whether to search. See runAgenticWebToolLoop() below.
+function isAgenticWebMode() {
+  return (config.webSearchMode || 'manual') === 'agentic';
+}
+
+// ── Agentic web search: tool definitions, execution, and the tool loop ──
+// Same two tools kiconnect-agent.js offers its coding agent (web_search,
+// fetch_url), just offered on the NORMAL chat request too when 'agentic'
+// mode is on, so the model can decide for itself whether to look something
+// up — instead of the manual/auto/always modes above, which decide BEFORE
+// the model ever sees the message (a regex guess or a manual toggle).
+const AGENTIC_WEB_TOOLS_ANTHROPIC = [
+  {
+    name: 'web_search',
+    description: 'Searches the web via the search engine configured in KI Connect and returns title, URL, and a short snippet for each result. Use this whenever the answer may depend on information that could have changed after your training data, or that you are not fully certain about (current events, prices, versions, opening hours, someone\'s current role, etc.). Only search when it is actually needed — most questions do not need it.',
+    input_schema: { type: 'object', properties: { query: { type: 'string', description: 'A short, specific search query.' } }, required: ['query'] },
+  },
+  {
+    name: 'fetch_url',
+    description: 'Fetches a single webpage (e.g. a URL the user pasted, or one returned by web_search) and returns its readable text content, so you can read it in more detail than a search snippet allows.',
+    input_schema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
+  },
+];
+const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
+  type: 'function', function: { name: tl.name, description: tl.description, parameters: tl.input_schema },
+}));
+// Hard cap on how many search/fetch round-trips a single reply may trigger —
+// keeps a confused or looping model from stalling the chat indefinitely.
+const AGENTIC_TOOL_MAX_ITERS = 4;
+
+// Tiny bilingual label lookup for the trace/toasts this mode adds — kept
+// local instead of touching the (not included here) translations file.
+function agenticTr(key) {
+  const de = currentLang === 'de';
+  const map = {
+    webSearchLabel: de ? 'Web-Suche' : 'Web search',
+    fetchLabel:     de ? 'Seite geladen' : 'Page fetched',
+    done:           de ? 'fertig' : 'done',
+    errorLabel:     de ? 'Fehler' : 'Error',
+    noResult:       de ? '_(kein Ergebnis)_' : '_(no result)_',
+  };
+  return map[key];
+}
+
+// Executes one agentic tool call and returns a plain object to feed back to
+// the model as the tool_result — reuses the exact same search/fetch
+// functions the manual/auto modes and the coding agent already use, so
+// results, caching, and engine/key handling are all identical.
+async function runAgenticWebTool(name, args) {
+  try {
+    if (name === 'web_search') {
+      const query = ((args && args.query) || '').toString();
+      if (!query.trim()) return { error: 'missing query' };
+      const data = await performWebSearch(query);
+      if (!data || !data.results || !data.results.length) return { query, results: [], note: 'No results found.' };
+      return { query: data.query, results: data.results.map(r => ({ title: r.title, url: r.url, snippet: r.snippet || '' })) };
+    }
+    if (name === 'fetch_url') {
+      const url = ((args && args.url) || '').toString();
+      if (!/^https?:\/\//i.test(url)) return { error: 'invalid url' };
+      const page = await fetchLinkedPage(url);
+      return { title: page.title, url: page.url, text: (page.text || '').slice(0, 8000) };
+    }
+    return { error: `unknown tool: ${name}` };
+  } catch (err) {
+    return { error: (err && err.message) || String(err) };
+  }
+}
+
+// Renders the tool calls made for one reply as collapsed <details> cards,
+// prepended to the assistant's answer — reuses the "agent-trace" CSS class
+// kiconnect-agent.js already injects, so this needs no styling of its own.
+function buildAgenticTraceHtml(calls) {
+  if (!calls || !calls.length) return '';
+  return calls.map(c => {
+    const icon = c.name === 'fetch_url' ? '🔗' : '🌐';
+    const label = c.name === 'fetch_url' ? agenticTr('fetchLabel') : agenticTr('webSearchLabel');
+    const subject = c.name === 'fetch_url' ? (c.args?.url || '') : (c.args?.query || '');
+    const isError = !!(c.result && c.result.error);
+    const status = isError ? `${agenticTr('errorLabel')}: ${c.result.error}` : agenticTr('done');
+    let body = '';
+    if (c.name === 'web_search' && Array.isArray(c.result?.results) && c.result.results.length) {
+      body = c.result.results.map(r => `- [${escHtml(r.title || r.url)}](${escHtml(r.url)})${r.snippet ? ' — ' + escHtml(r.snippet) : ''}`).join('\n');
+    } else if (c.name === 'fetch_url' && c.result?.text) {
+      body = escHtml(c.result.text.slice(0, 600)) + (c.result.text.length > 600 ? '…' : '');
+    } else if (isError) {
+      body = escHtml(c.result.error);
+    }
+    return `<details class="agent-trace" data-status="${isError ? 'error' : 'ok'}"><summary>${icon} <b>${escHtml(label)}</b>${subject ? ` <code>${escHtml(subject)}</code>` : ''} — <em>${escHtml(status)}</em></summary>\n\n${body || agenticTr('noResult')}\n\n</details>`;
+  }).join('\n\n');
+}
+
+// One non-streaming model turn with only the two web tools attached — a
+// trimmed-down twin of kiconnect-agent.js's callModel(): same request
+// shapes, but no file/shell tools and no confirmation UI, since this only
+// ever runs the brief "does it need to search? / here are the results"
+// back-and-forth. The reply the person actually sees is produced afterwards
+// by the ordinary streaming call, once no more tool calls come back.
+async function callModelForAgenticWebTurn(msgs, provider) {
+  const { modelId } = splitModelId(config.model);
+  if (provider.type === 'anthropic') {
+    const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages: msgs, tools: AGENTIC_WEB_TOOLS_ANTHROPIC, tool_choice: { type: 'auto' } };
+    if (isTemperatureSupported(modelId)) body.temperature = config.temperature;
+    if (config.systemPrompt) body.system = config.systemPrompt;
+    const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json', 'x-api-key': provider.apiKey,
+        'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+    const data = await res.json();
+    const content = data.content || [];
+    const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    const toolCalls = content.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, arguments: b.input || {} }));
+    return { text, toolCalls, rawContent: content };
+  }
+  // Every other provider speaks the OpenAI-compatible /chat/completions shape.
+  const endpoint = getProviderEndpoint(provider);
+  const apiMsgs = [];
+  if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
+  apiMsgs.push(...msgs);
+  const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
+  const reqBody = { model: modelId, messages: apiMsgs, tools: AGENTIC_WEB_TOOLS_OPENAI, tool_choice: 'auto', stream: false };
+  if (isOSeries) reqBody.max_completion_tokens = effectiveMaxTokens();
+  else { reqBody.temperature = config.temperature; reqBody.max_tokens = effectiveMaxTokens(); }
+  const extraHeaders = {};
+  if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+  if (provider.type === 'glm') extraHeaders['Accept-Language'] = 'en-US,en';
+  const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
+    body: JSON.stringify(reqBody),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+  const data = await res.json();
+  const msg = data.choices && data.choices[0] && data.choices[0].message;
+  if (!msg) throw new Error('Invalid response from the model.');
+  const toolCalls = Array.isArray(msg.tool_calls)
+    ? msg.tool_calls.map(tc => { let a = {}; try { a = JSON.parse(tc.function?.arguments || '{}'); } catch {} return { id: tc.id, name: tc.function?.name, arguments: a }; })
+    : [];
+  const text = typeof msg.content === 'string' ? msg.content : '';
+  return { text, toolCalls };
+}
+
+// Resolves the model↔tool back-and-forth for 'agentic' web-search mode
+// before the visible reply is generated: repeatedly asks the model (non-
+// streaming, silently) whether it wants to call web_search/fetch_url,
+// executes whatever it calls, feeds the result back, and stops as soon as
+// it answers with plain text instead of a tool call (or the iteration cap
+// is hit). Returns the tool-augmented message history — ready to hand to
+// the normal streaming call for the actual reply — plus an HTML trace of
+// what was looked up, to prepend to that reply.
+async function runAgenticWebToolLoop(initialMsgs, provider) {
+  let msgs = initialMsgs.slice();
+  const allCalls = [];
+  for (let iter = 0; iter < AGENTIC_TOOL_MAX_ITERS; iter++) {
+    let turn;
+    try { turn = await callModelForAgenticWebTurn(msgs, provider); }
+    catch (err) { break; } // give up on tool use for this reply; fall back to the plain streaming call below
+    if (!turn.toolCalls.length) break;
+    const results = [];
+    for (const call of turn.toolCalls) {
+      const subject = call.name === 'fetch_url' ? (call.arguments.url || '') : (call.arguments.query || '');
+      toast(`🌐 ${call.name === 'fetch_url' ? agenticTr('fetchLabel') : agenticTr('webSearchLabel')}: "${subject}"`);
+      const result = await runAgenticWebTool(call.name, call.arguments);
+      results.push(result);
+      allCalls.push({ name: call.name, args: call.arguments, result });
+    }
+    if (provider.type === 'anthropic') {
+      msgs.push({ role: 'assistant', content: turn.rawContent });
+      msgs.push({ role: 'user', content: turn.toolCalls.map((c, i) => ({ type: 'tool_result', tool_use_id: c.id, content: JSON.stringify(results[i]) })) });
+    } else {
+      msgs.push({ role: 'assistant', content: turn.text || null, tool_calls: turn.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })) });
+      turn.toolCalls.forEach((c, i) => msgs.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(results[i]) }));
+    }
+  }
+  return { msgs, traceHtml: buildAgenticTraceHtml(allCalls) };
 }
 
 // Strips formatting/noise from a message so it can be used as a plain web-search query.
@@ -5091,7 +5415,7 @@ async function sendMessage() {
   if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
   if(!provider.apiKey){toast(t('js.noApiKey'));openProviderPanel();return;}
   if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
-  if (shouldUseWebSearch(text) && webEngineNeedsKey(config.webSearchEngine || 'free') && !(config.webSearchApiKey || '').trim()) {
+  if ((shouldUseWebSearch(text) || isAgenticWebMode()) && webEngineNeedsKey(config.webSearchEngine || 'free') && !(config.webSearchApiKey || '').trim()) {
     toast(t('web.noKey'));
     openSettings();
     return;
@@ -5194,7 +5518,7 @@ async function sendMessageCore(text, att) {
     userContent = buildLinkedPageAugmentedContent(userContent, linkedPages);
   }
 
-  if (shouldUseWebSearch(text)) {
+  if (!isAgenticWebMode() && shouldUseWebSearch(text)) {
     try {
       toast(t('web.searching'));
       webSearch = await performWebSearch(text);
@@ -5276,7 +5600,15 @@ async function sendMessageCore(text, att) {
       .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
     messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
   }
-  await _runStreamAndAttach(chat, messages, provider, typingId, documentIds);
+  if (isAgenticWebMode()) {
+    // Let the model decide for itself (via web_search/fetch_url tools)
+    // whether this message needs a lookup, before generating the reply
+    // the person actually sees — see runAgenticWebToolLoop() above.
+    const { msgs: augmentedMessages, traceHtml } = await runAgenticWebToolLoop(messages, provider);
+    await _runStreamAndAttach(chat, augmentedMessages, provider, typingId, documentIds, { prefixText: traceHtml });
+  } else {
+    await _runStreamAndAttach(chat, messages, provider, typingId, documentIds);
+  }
 }
 
 // ── Auto-Title Generation ─────────────────────────────────────────
@@ -6762,6 +7094,17 @@ function setupEventListeners(){
   });
   document.getElementById('webContextPopover')?.addEventListener('click', e => e.stopPropagation());
   document.getElementById('webSearchToggle')?.addEventListener('click', toggleWebSearch);
+  document.getElementById('webAgenticToggle')?.addEventListener('click', () => {
+    if (isAgenticWebMode()) {
+      config.webSearchMode = 'manual';
+    } else {
+      config.webSearchMode = 'agentic';
+      config.webSearchEnabled = false; // agentic mode replaces the manual per-message toggle
+    }
+    save();
+    updateWebSearchButton();
+    toast(isAgenticWebMode() ? '🕵🏻🌐 (✔️)' : '🕵🏻⛔');
+  });
   document.getElementById('webLinkToggle')?.addEventListener('click', () => {
     config.webLinkEnabled = !config.webLinkEnabled;
     if (!config.webLinkEnabled) {

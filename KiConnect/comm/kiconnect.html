@@ -33,7 +33,7 @@
        previously the two disagreed
        (meta said 'self', header said 'none'); the header always won in
        practice, this just removes the confusing mismatch. -->
-  <title>AI Chat 3.0.1</title>
+  <title>AI Chat 3.0.2</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -690,7 +690,7 @@
         <span class="ptb-label" data-i18n="toolbar.api">API</span>
       </button>
       <button class="panel-toolbar-btn" id="openTuningBtn" title="" data-i18n="header.tuningTitle" data-i18n-attr="title" data-panel="tuningPanel">
-        <span class="ptb-icon">⚙️</span>
+        <span class="ptb-icon">🔧</span>
         <span class="ptb-label" data-i18n="toolbar.tuning">Tuning</span>
       </button>
       <button class="panel-toolbar-btn" id="openModelMaxHeaderBtn" title="" data-i18n="header.limitsTitle" data-i18n-attr="title" data-panel="modelMaxPanel" style="display:none">
@@ -698,11 +698,11 @@
         <span class="ptb-label" data-i18n="toolbar.limits">Limits</span>
       </button>
       <button class="panel-toolbar-btn" id="openSettingsBtn" title="" data-i18n="header.settingsTitle" data-i18n-attr="title" data-panel="settingsPanel">
-        <span class="ptb-icon">⚙</span>
+        <span class="ptb-icon">𖥕</span>
         <span class="ptb-label" data-i18n="toolbar.settings">Settings</span>
       </button>
       <button class="panel-toolbar-btn" id="openIntroBtn" title="" data-i18n="header.helpTitle" data-i18n-attr="title" data-panel="introPanel">
-        <span class="ptb-icon">?</span>
+        <span class="ptb-icon">？</span>
         <span class="ptb-label" data-i18n="toolbar.help">Setup</span>
       </button>
     </div>
@@ -742,7 +742,7 @@
     <div class="messages" id="messages">
       <div id="printChatTitle"></div>
       <div class="empty-state" id="emptyState">
-        <div class="empty-icon">🤖</div>
+        <div class="empty-icon">.✦ ݁˖</div>
         <h2 data-i18n="empty.title">Ready to chat</h2>
         <p data-i18n="empty.desc">Configure a provider (🔌) and optionally choose a user profile.</p>
         <div class="suggestions" id="suggestionChips"></div>
@@ -764,17 +764,23 @@
           <button class="action-btn web-search-btn" id="webSearchBtn" title="" data-i18n="web.buttonTitle" data-i18n-attr="title">Web</button>
           <div class="web-context-popover" id="webContextPopover" hidden>
             <div class="web-context-row">
-              <span class="web-context-label" data-i18n="web.linksToggle">Include pasted links from the text field</span>
+			🔗 <span class="web-context-label" data-i18n="web.linksToggle">Include pasted links from the text field</span>
               <button class="mini-toggle" id="webLinkToggle" type="button" aria-pressed="false"></button>
             </div>
             <div class="web-context-links" id="webDetectedLinks"></div>
             <div class="web-context-separator"></div>
             <div class="web-context-row">
-              <span class="web-context-label" data-i18n="web.searchToggle">Direct web search with message text</span>
+			🗐🔍︎ <span class="web-context-label" data-i18n="web.searchToggle">Direct web search with message text</span>
               <button class="mini-toggle" id="webSearchToggle" type="button" aria-pressed="false"></button>
             </div>
+            <div class="web-context-separator"></div>
+            <div class="web-context-row">
+              🕵🏻.✦ ݁˖ <span class="web-context-label" title="The AI is equipped with web search and page retrieval tools and decides for itself whether to search and what to search for — rather than having to guess in advance using text recognition." data-i18n="agent.tool.agenticSearchToggle">Agentic Search</span>
+              <button class="mini-toggle" id="webAgenticToggle" type="button" aria-pressed="false"></button>
+            </div>
+			<div class="web-context-separator"></div>
             <div class="web-context-row compact">
-              <span class="web-context-label" data-i18n="web.resultCount">Results per search</span>
+              📃 <span class="web-context-label" data-i18n="web.resultCount">Results per search</span>
               <input class="web-context-range" type="range" min="3" max="30" step="1" id="webContextCount">
               <span class="web-context-count" id="webContextCountVal">8</span>
             </div>
@@ -802,6 +808,7 @@
   <option value="auto">auto</option>
   <option value="always">always</option>
   <option value="off">off</option>
+  <option value="agentic">agentic</option>
 </select>
 <!-- modelInput is shown in the header model picker; keep select hidden for JS compat -->
 <select id="modelInput" style="display:none">
