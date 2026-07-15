@@ -2002,9 +2002,14 @@ async function fetchModels() {
             return ra !== rb ? ra - rb : b.id.localeCompare(a.id);
           });
         if (liveModels.length > 0) {
-          liveModels.forEach(m => groupModels.push({
-            fullId: makeModelId(provider.id, m.id), label: KNOWN_MODELS[m.id]?.label || m.id, modelId: m.id
-          }));
+          const seenIds = new Set();
+          liveModels.forEach(m => {
+            if (seenIds.has(m.id)) return;
+            seenIds.add(m.id);
+            groupModels.push({
+              fullId: makeModelId(provider.id, m.id), label: KNOWN_MODELS[m.id]?.label || m.id, modelId: m.id
+            });
+          });
         } else {
           OPENAI_MODELS.forEach(m => groupModels.push({
             fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id
@@ -2035,9 +2040,12 @@ async function fetchModels() {
         const rawModels = data.data || data.models || [];
         if (provider.type === 'openrouter') {
           let orCacheUpdated = false;
+          const seenIds = new Set();
           rawModels
             .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
             .forEach(m => {
+              if (seenIds.has(m.id)) return;
+              seenIds.add(m.id);
               const isThinking = THINKING_MODELS.has(m.id) || /thinking|reason|qwq|r1/i.test(m.id);
               const lbl = (m.name || m.id) + (isThinking ? ' 🧠' : '');
               groupModels.push({ fullId: makeModelId(provider.id, m.id), label: lbl, modelId: m.id });
@@ -2051,6 +2059,7 @@ async function fetchModels() {
           if (orCacheUpdated) _saveOrCache();
         } else {
 		  const EMBED_FILTER = /embed|e5-|bge-|rerank|whisper|tts|dall-e/i;
+          const seenIds = new Set();
           rawModels.forEach(m => {
             // Google's /v1beta/openai/models endpoint returns native Gemini-style
             // IDs like "models/gemini-2.5-pro" even though this is the
@@ -2058,6 +2067,10 @@ async function fetchModels() {
             // the bare "gemini-2.5-pro" form — strip the prefix if present.
             const id = (m.id || m.name || '').replace(/^models\//, ''); if (!id) return;
 			if (EMBED_FILTER.test(id)) return;
+            // Some providers' /models endpoints return the same id more than once
+            // (duplicate catalog entries) — keep only the first occurrence.
+            if (seenIds.has(id)) return;
+            seenIds.add(id);
             const knownLabel = KNOWN_MODELS[id]?.label;
             const isThinking = THINKING_MODELS.has(id) || isThinkingCapable(id);
             const lbl = (knownLabel || id) + (isThinking ? ' 🧠' : '');
