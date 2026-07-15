@@ -5438,6 +5438,41 @@ async function sendMessage() {
   await sendMessageCore(text, att);
 }
 
+// Turns pending attachments (+ typed text) into the internal storage/wire content-block
+// format (image_url / pdf_base64 / pdf_text / text-file text blocks), and the flat list of
+// file names shown as chips. Shared by normal chat (sendMessageCore) and the project/agent
+// module (kiconnect-agent.js's runAgentChatTurn) so attaching files works identically in both —
+// see buildAttachmentContent() call sites for the two places this feeds into.
+function buildAttachmentContent(text, att) {
+  let userContent;
+  const fileNames = [];
+  if (att.length) {
+    userContent = [];
+    if (text) userContent.push({ type: 'text', text });
+    att.forEach(a => {
+      if (a.type === 'image') userContent.push({ type: 'image_url', image_url: { url: a.data } });
+      else if (a.type === 'pdf-b64') {
+        fileNames.push(a.name);
+        if (a._uploadedId) {}
+        else if (a.pdfMode === 'text') { const txt = a.extractedText || t('js.noText'); userContent.push({ type: 'pdf_text', name: a.name, text: txt }); }
+        else { const b64 = (a.data || '').split(',')[1] || a.data; userContent.push({ type: 'pdf_base64', name: a.name, data: b64 }); }
+      } else if (a.type === 'text-file') {
+        fileNames.push(a.name);
+        // _fromHistory: content already in AI context, skip re-injection to avoid duplication
+        if (!a._fromHistory) userContent.push({ type: 'text', text: `${tf('js.fileContent', { name: a.name })}\n${a.content}\n${t('js.fileEnd')}` });
+      } else if (a.type === '_chip_only') {
+        // Chip-only placeholder (e.g. PDF from history whose binary is gone): show chip, no content
+        fileNames.push(a.name);
+      } else {
+        fileNames.push(a.name);
+        userContent.push({ type: 'text', text: `[${tf('js.unreadableFormat', { name: a.name })}]` });
+      }
+    });
+    if (userContent.length === 0 && text) userContent = text;
+  } else { userContent = text; }
+  return { userContent, fileNames };
+}
+
 // Builds the outgoing message (with attachments, web search and linked-page augmentation), renders the user bubble, and starts the AI response stream.
 async function sendMessageCore(text, att) {
   if(!currentChatId) newChat();
@@ -5495,32 +5530,9 @@ async function sendMessageCore(text, att) {
 
   // Build userContent: text first, then non-file attachments (images)
   // Text-files and PDFs go as file chips only — their content is injected separately
-  let userContent;
-  const fileNames=[];
-  if(att.length){
-    userContent=[];
-    if(text) userContent.push({type:'text',text});
-    att.forEach(a=>{
-      if(a.type==='image') userContent.push({type:'image_url',image_url:{url:a.data}});
-      else if(a.type==='pdf-b64'){
-        fileNames.push(a.name);
-        if(a._uploadedId){}
-        else if(a.pdfMode==='text'){const txt=a.extractedText||t('js.noText');userContent.push({type:'pdf_text',name:a.name,text:txt});} //  Bug 2: structured pdf_text block instead of i18n-string
-        else{const b64=(a.data||'').split(',')[1]||a.data;userContent.push({type:'pdf_base64',name:a.name,data:b64});}
-      } else if(a.type==='text-file'){
-        fileNames.push(a.name);
-        // _fromHistory: content already in AI context, skip re-injection to avoid duplication
-        if(!a._fromHistory) userContent.push({type:'text',text:`${tf('js.fileContent',{name:a.name})}\n${a.content}\n${t('js.fileEnd')}`});
-      } else if(a.type==='_chip_only'){
-        // Chip-only placeholder (e.g. PDF from history whose binary is gone): show chip, no content
-        fileNames.push(a.name);
-      } else{
-        fileNames.push(a.name);
-        userContent.push({type:'text',text:`[${tf('js.unreadableFormat',{name:a.name})}]`});
-      }
-    });
-    if(userContent.length===0&&text) userContent=text;
-  } else { userContent=text; }
+  const {userContent:_uc,fileNames:_fn}=buildAttachmentContent(text,att);
+  let userContent=_uc;
+  const fileNames=_fn;
 
   const readableUrls = extractReadableHttpUrls(text);
   const selectedReadableUrls = config.webLinkEnabled

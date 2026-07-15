@@ -847,7 +847,7 @@
     const out = []; let system = '';
     history.forEach(h => {
       if (h.role === 'system') system = h.text || '';
-      else if (h.role === 'user') out.push({ role: 'user', content: h.text || '' });
+      else if (h.role === 'user') out.push({ role: 'user', content: h.content ? _toAnthropicContent(h.content) : (h.text || '') });
       else if (h.role === 'assistant') {
         const content = [];
         if (h.text) content.push({ type: 'text', text: h.text });
@@ -863,7 +863,7 @@
     const out = [];
     history.forEach(h => {
       if (h.role === 'system') out.push({ role: 'system', content: h.text || '' });
-      else if (h.role === 'user') out.push({ role: 'user', content: h.text || '' });
+      else if (h.role === 'user') out.push({ role: 'user', content: h.content ? _toOpenAIContent(h.content) : (h.text || '') });
       else if (h.role === 'assistant') {
         out.push({ role: 'assistant', content: h.text || '', tool_calls: (h.toolCalls && h.toolCalls.length) ? h.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) } })) : undefined });
       } else if (h.role === 'tool_results') {
@@ -1249,7 +1249,7 @@
     return '';
   }
 
-  async function runAgentChatTurn(task, folder) {
+  async function runAgentChatTurn(task, folder, att) {
     if (running) { showToast(t('agent.stillRunning', 'The agent is still working — please wait or stop it.')); return; }
     let chat = currentChat();
     if (!chat) { newChat(folder.id); chat = currentChat(); }
@@ -1259,8 +1259,14 @@
     // every message used to start a brand new, memory-less run.
     const priorHistory = buildPriorHistory(chat);
 
+    // Same attachment → content-block conversion normal chat uses (images,
+    // base64/text-mode PDFs, text files) — see buildAttachmentContent() in
+    // kiconnect.js. Previously this whole module only ever read the typed
+    // text and silently dropped any attached files.
+    const { userContent, fileNames } = buildAttachmentContent(task, att || []);
+
     const container = getActiveContainer(chat);
-    const userMsg = { role: 'user', content: task };
+    const userMsg = { role: 'user', content: userContent, _files: fileNames.length ? fileNames : undefined };
     container.push(userMsg);
     // Same auto-title flow as normal chat (host app's autoGenerateChatTitle):
     // placeholder immediately, then replaced by a real AI-generated title in
@@ -1276,7 +1282,7 @@
     scrollToBottom();
     renderSidebar();
 
-    await runAgentCompletion(chat, folder, container, priorHistory, task);
+    await runAgentCompletion(chat, folder, container, priorHistory, task, userContent);
   }
 
   // Regenerating an assistant reply in a project chat: remove that reply
@@ -1303,7 +1309,8 @@
     renderMessages(chat.messages, idx);
     const priorHistory = buildPriorHistory(chat);
     const task = extractContextText(userMsg) || (typeof userMsg.content === 'string' ? userMsg.content : '');
-    await runAgentCompletion(chat, folder, container, priorHistory, task);
+    const content = Array.isArray(userMsg.content) ? userMsg.content : undefined;
+    await runAgentCompletion(chat, folder, container, priorHistory, task, content);
     return true;
   }
   function buildPriorHistory(chat) {
@@ -1311,14 +1318,21 @@
     return getActivePath(chat)
       .filter(m => m.role === 'user' || m.role === 'assistant')
       .slice(-MAX_CONTEXT_TURNS)
-      .map(m => ({ role: m.role, text: extractContextText(m) }));
+      .map(m => {
+        const h = { role: m.role, text: extractContextText(m) };
+        // Past user turns that had attachments (images/PDFs) store their content
+        // as an array (see runAgentChatTurn) — keep it so toAnthropicHistory/
+        // toOpenAIHistory can resend the actual file, not just its text parts.
+        if (m.role === 'user' && Array.isArray(m.content)) h.content = m.content;
+        return h;
+      });
   }
 
   // The actual model/tool loop — appends the live AI bubble, drives
   // callModel()+executeTool() until a final text-only reply, then saves
   // and upgrades the bubble into its full interactive form. Shared by a
   // normal send (runAgentChatTurn) and a regenerate (agentRegenerate).
-  async function runAgentCompletion(chat, folder, container, priorHistory, task) {
+  async function runAgentCompletion(chat, folder, container, priorHistory, task, content) {
     if (!folder.agentAutonomy) folder.agentAutonomy = 'confirm';
     const provider = providerForModel(config.model);
     if (!provider) {
@@ -1340,7 +1354,7 @@
     let history = [
       { role: 'system', text: systemPrompt(folder.name) },
       ...priorHistory,
-      { role: 'user', text: task },
+      Array.isArray(content) ? { role: 'user', text: task, content } : { role: 'user', text: task },
     ];
 
     let iterations = 0, aborted = false;
@@ -2012,10 +2026,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       if (folder && folder.agentProject) {
         const input = document.getElementById('messageInput');
         const text = (input.value || '').trim();
-        if (!text) return;
+        if (!text && !attachments.length) return;
         input.value = '';
         try { autoResize(input); } catch (e) {}
-        await runAgentChatTurn(text, folder);
+        const att = [...attachments];
+        clearAttachments();
+        await runAgentChatTurn(text, folder, att);
         return;
       }
       return _origSendMessage.apply(this, arguments);
