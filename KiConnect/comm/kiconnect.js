@@ -4186,8 +4186,25 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
     const { modelId } = splitModelId(config.model);
     const apiMsgs = [];
     if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
-    // messages are already expanded by caller (_toOpenAIContent) — pass through
-    messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
+    // messages are already expanded by caller (_toOpenAIContent) — pass through.
+    // Also forward tool_calls (on assistant messages) and role:'tool' messages
+    // unchanged — these appear here whenever 'agentic' web-search mode ran a
+    // web_search/fetch_url round trip first (see runAgenticWebToolLoop):
+    // dropping them left a dangling assistant tool_calls message with no
+    // matching tool results, which most OpenAI-compatible APIs reject with a
+    // 400 ("messages with role 'tool' must be a response to a preceding
+    // message with 'tool_calls'"), breaking every non-Anthropic provider in
+    // that mode. The Anthropic branch above never hit this since it sends
+    // `messages` straight through instead of rebuilding it.
+    messages.forEach(m => {
+      if (m.role === 'user' || m.role === 'assistant') {
+        const msg = { role: m.role, content: m.content };
+        if (m.tool_calls) msg.tool_calls = m.tool_calls;
+        apiMsgs.push(msg);
+      } else if (m.role === 'tool') {
+        apiMsgs.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
+      }
+    });
     const reqBody = { model: modelId, messages: apiMsgs, stream: true };
     // GPT-5 is a reasoning model just like the o-series: it rejects
     // `temperature` and `max_tokens` outright and requires
