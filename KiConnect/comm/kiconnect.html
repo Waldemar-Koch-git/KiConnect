@@ -10,7 +10,7 @@
     default-src 'self';
     script-src  'self';
     style-src   'self' 'unsafe-inline';
-    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com;
+    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com https://api.langsearch.com;
     img-src     'self' data: blob:;
     font-src    'self';
     worker-src  blob:;
@@ -33,7 +33,7 @@
        previously the two disagreed
        (meta said 'self', header said 'none'); the header always won in
        practice, this just removes the confusing mismatch. -->
-  <title>AI Chat 3.0.5</title>
+  <title>AI✨ Chat/Agent (3.0.6)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -67,8 +67,8 @@
 
   <!-- Logo -->
   <div style="text-align:center;margin-bottom:4px;">
-    <div style="font-size:48px;margin-bottom:10px;">🤖</div>
-    <h1 style="font-size:26px;font-weight:800;color:var(--text);" data-i18n="login.title">KI Connect</h1>
+    <div style="font-size:72px;margin-bottom:10px;">🪪🔐</div> 
+    <!-- <h1 style="font-size:26px;font-weight:800;color:var(--text);">🪪🔐</h1>-->
   </div>
 
   <!-- ── Account selection (default view) ── -->
@@ -279,7 +279,7 @@
 
   <!-- 2. Search -->
   <hr class="divider" style="margin-top:16px;">
-  <div class="section-header" data-i18n="web.title">🔍 Suche</div>
+  <div class="section-header" data-i18n="web.title">🔍 Web-Search</div>
   <div class="setting-group">
     <div class="setting-label" data-i18n="web.engine">Search engine</div>
     <select class="setting-input" id="webSearchEngine">
@@ -289,6 +289,9 @@
       <option value="qwant" data-i18n="web.engineQwant">Qwant (free, no key)</option>
       <option value="yahoo" data-i18n="web.engineYahoo">Yahoo (free, no key)</option>
       <option value="startpage" data-i18n="web.engineStartpage">Startpage (free, no key)</option>
+	  <hr>
+	  <option value="langsearch" data-i18n="web.engineLangSearch">LangSearch (key required)</option>
+	  <hr>
       <option value="brave" data-i18n="web.engineBrave">Brave Search API (key required)</option>
       <option value="google" data-i18n="web.engineGoogle">Google Custom Search (key required)</option>
       <option value="bing" data-i18n="web.engineBing">Bing / Microsoft (key required)</option>
@@ -775,7 +778,7 @@
             </div>
             <div class="web-context-separator"></div>
             <div class="web-context-row">
-              🕵🏻.✦ ݁˖ <span class="web-context-label" title="The AI is equipped with web search and page retrieval tools and decides for itself whether to search and what to search for — rather than having to guess in advance using text recognition." data-i18n="agent.tool.agenticSearchToggle">Agentic Search</span>
+              🕵🏻🌐 <span class="web-context-label" title="The AI is equipped with web search and page retrieval tools and decides for itself whether to search and what to search for — rather than having to guess in advance using text recognition." data-i18n="agent.tool.agenticSearchToggle">Agentic Search</span>
               <button class="mini-toggle" id="webAgenticToggle" type="button" aria-pressed="false"></button>
             </div>
 			<div class="web-context-separator"></div>

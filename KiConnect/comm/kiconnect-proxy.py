@@ -1163,6 +1163,7 @@ SECURITY_HEADERS = {
         "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
         "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
         "https://api.mojeek.com https://yandex.com "
+        "https://api.langsearch.com "
         "https://searx.be https://searxng.world https://search.bus-hit.me "
         "https://searx.tiekoetter.com https://search.sapti.me https://searx.prvcy.eu "
         "https://searx.fmac.xyz https://search.ononoki.org; "
@@ -1329,7 +1330,7 @@ if __name__ == '__main__':
     line('Proxy allowlist: anthropic, openai, openrouter, mistral, googleapis,')
     line('                 x.ai, groq, deepseek, minimax, z.ai, chat.kiconnect.nrw')
     line('Search: brave, duckduckgo, qwant, yahoo, startpage, google, bing,')
-    line('        mojeek, yandex, searxng')
+    line('        mojeek, yandex, searxng, langsearch')
     line()
     line('Stop: Ctrl+C')
     print('╚' + '═' * (W + 2) + '╝')

@@ -637,6 +637,11 @@ header {
   padding: 8px 12px 4px;
   font-family: 'IBM Plex Mono', monospace;
 }
+.cm-group-label:not(:first-child) {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
 .cm-option {
   padding: 7px 14px;
   font-size: 12px; font-family: 'IBM Plex Mono', monospace;
@@ -803,6 +808,7 @@ header {
 }
 .setting-input:focus        { border-color: var(--accent); }
 .setting-input[type=range]  { padding: 0; cursor: pointer; accent-color: var(--accent); }
+textarea.setting-input      { resize: vertical; min-height: 70px; max-height: none; }
 .range-val { color: var(--accent); font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
 
 .save-btn {
@@ -1429,7 +1435,8 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .edit-box {
   width: 100%; background: var(--surface2); border: 1px solid var(--accent);
   color: var(--text); font-family: 'Syne', sans-serif; font-size: 15px;
-  border-radius: 10px; padding: 10px 12px; outline: none; resize: none; line-height: 1.6;
+  border-radius: 10px; padding: 10px 12px; outline: none; resize: vertical; line-height: 1.6;
+  min-height: 60px; max-height: none;
 }
 .edit-actions     { display: flex; gap: 6px; margin-top: 6px; }
 .edit-confirm-btn {
@@ -1881,7 +1888,7 @@ textarea::placeholder { color: var(--muted); }
   .sidebar              { display: none !important; }
   .sidebar-resizer      { display: none !important; }
   .chat-area            { display: block !important; overflow: visible !important; height: auto !important; flex: none !important; }
-  .input-area           { display: none !important; }
+  .input-zone           { display: none !important; }
   .bubble-actions       { display: none !important; }
   .bubble-act-btn       { display: none !important; }
   .code-copy-btn        { display: none !important; }

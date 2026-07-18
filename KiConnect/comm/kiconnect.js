@@ -1064,7 +1064,7 @@ async function load() {
   }
   try { config = {...freshConfig(), ...config, ...await loadKey('config', {})}; } catch{}
   if (!['manual','auto','always','off','agentic'].includes(config.webSearchMode)) config.webSearchMode = 'manual';
-  if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex'].includes(config.webSearchEngine)) config.webSearchEngine = 'free';
+  if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex','langsearch'].includes(config.webSearchEngine)) config.webSearchEngine = 'free';
   config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(config.webSearchResultCount) || 8));
   config.webLinkEnabled = !!config.webLinkEnabled;
   try {
@@ -1185,6 +1185,7 @@ const ALLOWED_API_DOMAINS = [
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
   'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',
+  'api.langsearch.com',
   'searx.be','searxng.world','search.bus-hit.me','searx.tiekoetter.com',
   'search.sapti.me','searx.prvcy.eu','searx.fmac.xyz','search.ononoki.org',
 ];
@@ -4554,7 +4555,7 @@ function updateWebSearchButton(searching=false) {
   btn.classList.toggle('link-active', !!config.webLinkEnabled && getSelectedReadableUrls().length > 0);
   btn.classList.toggle('searching', searching);
   btn.disabled = mode === 'off' || searching;
-  btn.textContent = searching ? '...' : (mode === 'agentic' ? 'Web 🤖' : 'Web ▾');
+  btn.textContent = searching ? '...' : (mode === 'agentic' ? 'Web 🕵🏻🌐' : 'Web ▾');
   syncWebContextPopover();
 }
 
@@ -4698,20 +4699,6 @@ const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
 // keeps a confused or looping model from stalling the chat indefinitely.
 const AGENTIC_TOOL_MAX_ITERS = 4;
 
-// Tiny bilingual label lookup for the trace/toasts this mode adds — kept
-// local instead of touching the (not included here) translations file.
-function agenticTr(key) {
-  const de = currentLang === 'de';
-  const map = {
-    webSearchLabel: de ? 'Web-Suche' : 'Web search',
-    fetchLabel:     de ? 'Seite geladen' : 'Page fetched',
-    done:           de ? 'fertig' : 'done',
-    errorLabel:     de ? 'Fehler' : 'Error',
-    noResult:       de ? '_(kein Ergebnis)_' : '_(no result)_',
-  };
-  return map[key];
-}
-
 // Executes one agentic tool call and returns a plain object to feed back to
 // the model as the tool_result — reuses the exact same search/fetch
 // functions the manual/auto modes and the coding agent already use, so
@@ -4744,10 +4731,10 @@ function buildAgenticTraceHtml(calls) {
   if (!calls || !calls.length) return '';
   return calls.map(c => {
     const icon = c.name === 'fetch_url' ? '🔗' : '🌐';
-    const label = c.name === 'fetch_url' ? agenticTr('fetchLabel') : agenticTr('webSearchLabel');
+    const label = c.name === 'fetch_url' ? t('agent.tool.fetchUrl', 'Fetch webpage') : t('agent.tool.webSearch', 'Web search');
     const subject = c.name === 'fetch_url' ? (c.args?.url || '') : (c.args?.query || '');
     const isError = !!(c.result && c.result.error);
-    const status = isError ? `${agenticTr('errorLabel')}: ${c.result.error}` : agenticTr('done');
+    const status = isError ? `${t('agent.errorShort', 'error')}: ${c.result.error}` : t('agent.done', 'done.');
     let body = '';
     if (c.name === 'web_search' && Array.isArray(c.result?.results) && c.result.results.length) {
       body = c.result.results.map(r => `- [${escHtml(r.title || r.url)}](${escHtml(r.url)})${r.snippet ? ' — ' + escHtml(r.snippet) : ''}`).join('\n');
@@ -4756,7 +4743,7 @@ function buildAgenticTraceHtml(calls) {
     } else if (isError) {
       body = escHtml(c.result.error);
     }
-    return `<details class="agent-trace" data-status="${isError ? 'error' : 'ok'}"><summary>${icon} <b>${escHtml(label)}</b>${subject ? ` <code>${escHtml(subject)}</code>` : ''} — <em>${escHtml(status)}</em></summary>\n\n${body || agenticTr('noResult')}\n\n</details>`;
+    return `<details class="agent-trace" data-status="${isError ? 'error' : 'ok'}"><summary>${icon} <b>${escHtml(label)}</b>${subject ? ` <code>${escHtml(subject)}</code>` : ''} — <em>${escHtml(status)}</em></summary>\n\n${body || `_${t('js.empty', '(empty)')}_`}\n\n</details>`;
   }).join('\n\n');
 }
 
@@ -4834,7 +4821,7 @@ async function runAgenticWebToolLoop(initialMsgs, provider) {
     const results = [];
     for (const call of turn.toolCalls) {
       const subject = call.name === 'fetch_url' ? (call.arguments.url || '') : (call.arguments.query || '');
-      toast(`🌐 ${call.name === 'fetch_url' ? agenticTr('fetchLabel') : agenticTr('webSearchLabel')}: "${subject}"`);
+      toast(`🌐 ${call.name === 'fetch_url' ? t('agent.tool.fetchUrl', 'Fetch webpage') : t('agent.tool.webSearch', 'Web search')}: "${subject}"`);
       const result = await runAgenticWebTool(call.name, call.arguments);
       results.push(result);
       allCalls.push({ name: call.name, args: call.arguments, result });
@@ -4859,7 +4846,7 @@ function cleanSearchQuery(text) {
     .slice(0, 500);
 }
 
-const ENGINES_NEEDING_KEY = new Set(['brave','google','bing','mojeek','yandex']);
+const ENGINES_NEEDING_KEY = new Set(['brave','google','bing','mojeek','yandex','langsearch']);
 // Returns whether the given search engine requires an API key.
 function webEngineNeedsKey(engine) { return ENGINES_NEEDING_KEY.has(engine); }
 
@@ -4878,6 +4865,7 @@ function updateWebSearchKeyUI(engine) {
     bing:    { label: t('web.bingKey'),    hint: t('web.hintBing'),    ph: 'Azure Cognitive Services key' },
     mojeek:  { label: t('web.mojeekKey'),  hint: t('web.hintMojeek'),  ph: 'Mojeek API key' },
     yandex:  { label: t('web.yandexKey'),  hint: t('web.hintYandex'),  ph: 'folderId::apiKey' },
+    langsearch: { label: t('web.langsearchKey'), hint: t('web.hintLangsearch'), ph: 'LangSearch API key' },
     searxng: { label: t('web.searxngKey'), hint: t('web.hintSearxng'), ph: 'https://searx.be' },
   };
   const i = info[engine] || info.brave;
@@ -5024,7 +5012,11 @@ async function searchDuckDuckGo(q, count) {
   return [];
 }
 
-// Runs a web search against a SearXNG instance.
+// Runs a web search against a SearXNG instance. Uses fetchPublicWithTimeout (scheme-only
+// check) rather than fetchWithTimeout (fixed ALLOWED_API_DOMAINS check), since this is the
+// one engine where the "key" field is actually a free-form self-hosted instance URL - a
+// fixed domain allowlist would silently block any instance that isn't one of the built-in
+// public ones below.
 async function searchSearxng(q, count, instanceUrl = '') {
   const locale = getWebSearchLocale();
   const instances = instanceUrl ? [instanceUrl.replace(/\/$/, '')] : SEARXNG_PUBLIC_INSTANCES;
@@ -5035,7 +5027,7 @@ async function searchSearxng(q, count, instanceUrl = '') {
         const collected = [];
         for (let page = 1; page <= Math.ceil(count / 10) && collected.length < count; page++) {
           const url = `${instance}/search?q=${encodeURIComponent(q)}&format=json&categories=general&pageno=${page}&language=${encodeURIComponent(language)}`;
-          const res = await fetchWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'application/json' }) }, 10000);
+          const res = await fetchPublicWithTimeout(url, { headers: localizedHeaders({ 'Accept': 'application/json' }) }, 10000);
           if (!res.ok) throw new Error(`SearXNG ${res.status}: ${await res.text()}`);
           const data = await res.json();
           collected.push(...(data.results || []).map(r => ({
@@ -5271,6 +5263,27 @@ async function performWebSearchInner(engine, key, locale, count, q, cacheKey) {
       url: (d.querySelector('url')?.textContent || '').trim(),
       snippet: (d.querySelector('headline, passage')?.textContent || '').replace(/\s+/g, ' ').trim(),
     })).filter(r => r.title && /^https?:\/\//i.test(r.url));
+
+  } else if (engine === 'langsearch') {
+    const url = 'https://api.langsearch.com/v1/web-search';
+    const res = await fetch(proxyUrl(url), {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`,
+      },
+      body: JSON.stringify({ query: q, freshness: 'noLimit', summary: false, count: Math.min(count, 10) }),
+    });
+    if (!res.ok) throw new Error(`LangSearch ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    const items = data.data?.webPages?.value || [];
+    results = items.slice(0, count).map((r, i) => ({
+      index: i + 1,
+      title: (r.name || '').replace(/\s+/g, ' ').trim(),
+      url: r.url || '',
+      snippet: (r.snippet || r.summary || '').replace(/\s+/g, ' ').trim(),
+    })).filter(r => r.title && r.url);
 
   } else if (engine === 'qwant') {
     try {
