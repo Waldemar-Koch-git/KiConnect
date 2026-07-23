@@ -1158,7 +1158,7 @@ SECURITY_HEADERS = {
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
         "https://api.x.ai https://api.groq.com "
         "https://api.deepseek.com https://api.minimax.io "
-        "https://api.z.ai "
+        "https://api.z.ai https://api.moonshot.ai "
         "https://api.search.brave.com https://html.duckduckgo.com "
         "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
         "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
@@ -1328,7 +1328,8 @@ if __name__ == '__main__':
     print('║  └' + '─' * IW + '┘  ║')
     line()
     line('Proxy allowlist: anthropic, openai, openrouter, mistral, googleapis,')
-    line('                 x.ai, groq, deepseek, minimax, z.ai, chat.kiconnect.nrw')
+    line('                 x.ai, groq, deepseek, minimax, z.ai, moonshot,')
+    line('                 chat.kiconnect.nrw')
     line('Search: brave, duckduckgo, qwant, yahoo, startpage, google, bing,')
     line('        mojeek, yandex, searxng, langsearch')
     line()

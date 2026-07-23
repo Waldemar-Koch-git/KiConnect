@@ -995,7 +995,7 @@
     const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
     if (!isOSeries) reqBody.temperature = config.temperature;
     if (config.thinkingEnabled && isThinkingCapable(modelId)) {
-      if (provider.type === 'glm') reqBody.thinking = { type: 'enabled' };
+      if (provider.type === 'zhipu') reqBody.thinking = { type: 'enabled' };
       // MiniMax has no reasoning_effort levels — on/off only, and thinking
       // is on by default anyway (M2.x can't be disabled). The agent path
       // doesn't surface the reasoning trace in its UI, so no reasoning_split
@@ -1018,7 +1018,7 @@
     }
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
-    if (provider.type === 'glm') extraHeaders['Accept-Language'] = 'en-US,en';
+    if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
     const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
@@ -1053,7 +1053,7 @@
           // Never actually signed by Gemini (we built this call ourselves
           // from raw text) — use Google's documented bypass value so the
           // next turn doesn't get rejected for a missing signature.
-          _thoughtSig: provider.type === 'gemini' ? 'skip_thought_signature_validator' : undefined,
+          _thoughtSig: provider.type === 'google' ? 'skip_thought_signature_validator' : undefined,
         }];
         text = '';
       }

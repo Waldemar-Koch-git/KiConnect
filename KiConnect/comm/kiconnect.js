@@ -241,33 +241,38 @@ document.addEventListener('click', e => {
 
 // ─── Konstanten ───────────────────────────────────────────────────
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
+// Labels are the real company operating the API, not the model name.
+// 'google' was 'gemini' and 'zhipu' was 'glm' — see LEGACY_PROVIDER_TYPE_MAP
+// in decryptProvider() for migration of already-saved providers.
 const PROVIDER_TYPES = {
-  'openai-compat':   { label:'OpenAI-kompatibel',    needsUrl:true  },
-  'kiconnect-nrw':   { label:'KiConnect NRW',         needsUrl:false },
-  'anthropic':       { label:'Anthropic (Claude)',    needsUrl:false },
-  'openai-direct':   { label:'OpenAI direkt',         needsUrl:false },
-  'openrouter':    { label:'OpenRouter',         needsUrl:false },
-  'mistral':       { label:'Mistral AI',         needsUrl:false },
-  'gemini':        { label:'Google Gemini',      needsUrl:false },
-  'xai':           { label:'xAI Grok',           needsUrl:false },
-  'groq':          { label:'Groq',               needsUrl:false },
-  'deepseek':      { label:'DeepSeek',           needsUrl:false },
-  'minimax':       { label:'MiniMax',            needsUrl:false },
-  'glm':           { label:'GLM (z.ai)',         needsUrl:false },
+  'openai-compat':   { label:'OpenAI-kompatibel (...)',	           needsUrl:true  },
+  'kiconnect-nrw':   { label:'KI Connect NRW (Gateway)',           needsUrl:false },
+  'anthropic':       { label:'Anthropic (Claude)',                 needsUrl:false },
+  'openai-direct':   { label:'OpenAI (GPT, o-Serie)',              needsUrl:false },
+  'openrouter':      { label:'OpenRouter (Model-Broker, 200+)',    needsUrl:false },
+  'mistral':         { label:'Mistral AI (Large, Small, Nemo)',    needsUrl:false },
+  'google':          { label:'Google (Gemini)',                    needsUrl:false },
+  'xai':             { label:'xAI (Grok)',                         needsUrl:false },
+  'groq':            { label:'Groq (Llama, Model-Broker)',         needsUrl:false },
+  'deepseek':        { label:'DeepSeek (v4)',                      needsUrl:false },
+  'minimax':         { label:'MiniMax AI (MiniMax)',               needsUrl:false },
+  'zhipu':           { label:'Zhipu AI / Z.ai (GLM)',              needsUrl:false },
+  'kimi':            { label:'Moonshot AI (Kimi)',                 needsUrl:false },
 };
 const PROVIDER_HINTS = {
   'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances …',
   'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-compatible',
-  'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3.7+/4',
-  'openai-direct': '💡 API Key : platform.openai.com · 🧠 Reasoning  o1/o3/o4',
-  'openrouter':    '💡 API Key : openrouter.ai · 200+ models loaded live · 🧠 Thinking for reasoning models',
+  'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3/4/5+',
+  'openai-direct': '💡 API Key : platform.openai.com · 🧠 with Reasoning',
+  'openrouter':    '💡 API Key : openrouter.ai · 200+ models loaded live · 🧠 with Reasoning models',
   'mistral':       '💡 API Key : console.mistral.ai · Models are loaded live',
-  'gemini':        '💡 API Key : aistudio.google.com (AI Studio) · Models are loaded live',
-  'xai':           '💡 API Key : console.x.ai · Grok 3 with optional 🧠 Thinking',
+  'google':        '💡 API Key : aistudio.google.com (AI Studio) · Models are loaded live',
+  'xai':           '💡 API Key : console.x.ai · Grok with optional 🧠 Thinking',
   'groq':          '💡 API Key : console.groq.com · Ultra-fast inference · Models live',
-  'deepseek':      '💡 API Key : platform.deepseek.com · Models loaded live, reasoning for R1',
+  'deepseek':      '💡 API Key : platform.deepseek.com · Models loaded live, reasoning for v4',
   'minimax':       '💡 API Key : platform.minimax.io · OpenAI-compatible · Models loaded live',
-  'glm':           '💡 API Key : z.ai · OpenAI-compatible · 🧠 Thinking for GLM models',
+  'zhipu':         '💡 API Key : z.ai · OpenAI-compatible · 🧠 Thinking for GLM models',
+  'kimi':          '💡 API Key : platform.moonshot.ai · OpenAI-compatible · lange Kontexte · 🧠 Thinking bei K2-Thinking/K3',
 };
 // Static entries only needed for providers that don't expose live model metadata
 // (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
@@ -278,52 +283,71 @@ const THINKING_MODELS = new Set([
 
 // KNOWN_MODELS: used only as metadata fallback (maxOutput, vision) when the live API
 // doesn't provide these values. The display list is always built dynamically from fetchModels().
+// Last reviewed 2026-07-23 against each provider's live docs. See chat notes for sources/rationale.
 const KNOWN_MODELS = {
-  'claude-opus-4-6':            { label:'Claude Opus 4.6',           maxOutput:32000,  vision:true  },
-  'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6',         maxOutput:64000,  vision:true  },
-  'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:16000,  vision:true  },
-  'claude-3-7-sonnet-20250219': { label:'Claude 3.7 Sonnet',         maxOutput:64000,  vision:true  },
-  'claude-3-5-sonnet-20241022': { label:'Claude 3.5 Sonnet',         maxOutput:8096,   vision:true  },
-  'claude-3-5-haiku-20241022':  { label:'Claude 3.5 Haiku',          maxOutput:8096,   vision:true  },
-  'claude-3-opus-20240229':     { label:'Claude 3 Opus',             maxOutput:4096,   vision:true  },
-  'gpt-4.1':                    { label:'GPT-4.1',                   maxOutput:32768,  vision:true  },
-  'gpt-4.1-mini':               { label:'GPT-4.1 mini',              maxOutput:32768,  vision:true  },
-  'gpt-4.1-nano':               { label:'GPT-4.1 nano',              maxOutput:32768,  vision:true  },
-  'gpt-4o':                     { label:'GPT-4o',                    maxOutput:16384,  vision:true  },
-  'gpt-4o-mini':                { label:'GPT-4o mini',               maxOutput:16384,  vision:true  },
-  'gpt-4o-search-preview':      { label:'GPT-4o Search Preview',     maxOutput:16384,  vision:true  },
-  'gpt-4.5-preview':            { label:'GPT-4.5 Preview',           maxOutput:16384,  vision:true  },
-  'gpt-4-turbo':                { label:'GPT-4 Turbo',               maxOutput:4096,   vision:true  },
-  'o4-mini':                    { label:'o4-mini (Thinking)',         maxOutput:100000, vision:true  },
-  'o4-mini-high':               { label:'o4-mini high (Thinking)',    maxOutput:100000, vision:true  },
-  'o3':                         { label:'o3 (Thinking)',              maxOutput:100000, vision:true  },
-  'o3-mini':                    { label:'o3-mini (Thinking)',         maxOutput:100000, vision:false },
-  'o1':                         { label:'o1 (Thinking)',              maxOutput:32768,  vision:false },
-  'o1-mini':                    { label:'o1-mini (Thinking)',         maxOutput:65536,  vision:false },
-  'o1-pro':                     { label:'o1-pro (Thinking)',          maxOutput:32768,  vision:false },
-  'mistral-large-latest':       { label:'Mistral Large',             maxOutput:131072, vision:true  },
-  'mistral-medium-latest':      { label:'Mistral Medium',            maxOutput:131072, vision:false },
-  'mistral-small-latest':       { label:'Mistral Small',             maxOutput:131072, vision:true  },
+  // ── Anthropic ── Opus 4.1 (legacy) retiring 2026-08-05; Sonnet 4/Opus 4 retired 2026-06-15;
+  // Claude 3.7 Sonnet + 3.5 Haiku retired 2026-02-19; Claude 3 Opus retired 2026-01-05;
+  // Claude 3.5 Sonnet (both snapshots) retired 2025-10-28. All removed below — calls to those
+  // IDs now error out on the API. Fable 5 / Mythos 5 launched 2026-06-09 (briefly export-controlled
+  // 2026-06-12 to 2026-07-01, now restored).
+  'claude-fable-5':             { label:'Claude Fable 5 (top capability)', maxOutput:128000, vision:true  },
+  'claude-opus-4-8':            { label:'Claude Opus 4.8',           maxOutput:128000, vision:true  },
+  'claude-sonnet-5':            { label:'Claude Sonnet 5',           maxOutput:128000, vision:true  },
+  'claude-haiku-4-5-20251001':  { label:'Claude Haiku 4.5',          maxOutput:64000,  vision:true  },
+  'claude-opus-4-6':            { label:'Claude Opus 4.6 (legacy)',  maxOutput:32000,  vision:true  },
+  'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6 (legacy)',maxOutput:64000,  vision:true  },
+
+  // ── OpenAI ── the o1/o3/o4-mini and GPT-4o/4.1/4.5/4-turbo lines were pulled from ChatGPT on
+  // 2026-02-13 / 2026-06-27 and the API deprecation wave already removed 18 snapshots on
+  // 2026-07-23 (today), with o3, o4-mini, gpt-4-turbo scheduled for 2026-10-23 and the last GPT-5/
+  // o3 snapshots for 2026-12-11. Current line is GPT-5.3/5.4/5.5 (all 1M-ish context, 128k output).
+  'gpt-5.5':                    { label:'GPT-5.5',                   maxOutput:128000, vision:true  },
+  'gpt-5.4':                    { label:'GPT-5.4 (Thinking)',        maxOutput:128000, vision:true  },
+  'gpt-5.4-mini':                { label:'GPT-5.4 mini',              maxOutput:128000, vision:true  },
+  'gpt-5.3-codex':              { label:'GPT-5.3 Codex',             maxOutput:128000, vision:true  },
+
+  // ── Mistral ── these three are '-latest' aliases, so they auto-resolve to the current
+  // generation (Large 3 / Medium 3.5 / Small 4) without needing an update here; context grew to
+  // ~256k in the process. codestral-latest / mistral-nemo are older but still served.
+  'mistral-large-latest':       { label:'Mistral Large (3)',         maxOutput:131072, vision:true  },
+  'mistral-medium-latest':      { label:'Mistral Medium (3.5)',      maxOutput:131072, vision:false },
+  'mistral-small-latest':       { label:'Mistral Small (4)',         maxOutput:131072, vision:true  },
   'codestral-latest':           { label:'Codestral',                 maxOutput:131072, vision:false },
   'mistral-nemo':               { label:'Mistral Nemo',              maxOutput:131072, vision:false },
-  'gemini-2.0-flash':           { label:'Gemini 2.0 Flash',          maxOutput:8192,   vision:true  },
-  'gemini-2.0-flash-lite':      { label:'Gemini 2.0 Flash Lite',     maxOutput:8192,   vision:true  },
-  'gemini-2.5-pro-preview-05-06':{ label:'Gemini 2.5 Pro',           maxOutput:65536,  vision:true  },
-  'gemini-1.5-pro':             { label:'Gemini 1.5 Pro',            maxOutput:8192,   vision:true  },
-  'gemini-1.5-flash':           { label:'Gemini 1.5 Flash',          maxOutput:8192,   vision:true  },
-  'grok-3':                     { label:'Grok 3',                    maxOutput:131072, vision:true  },
-  'grok-3-mini':                { label:'Grok 3 Mini',               maxOutput:131072, vision:false },
-  'grok-2-1212':                { label:'Grok 2',                    maxOutput:131072, vision:true  },
+
+  // ── Google ── the entire 2.0/1.5 generation is shut down; Gemini moved to the 3.x family.
+  'gemini-3-pro':               { label:'Gemini 3 Pro',              maxOutput:65536,  vision:true  },
+  'gemini-3-flash':             { label:'Gemini 3 Flash',            maxOutput:65536,  vision:true  },
+  'gemini-3.5-flash':           { label:'Gemini 3.5 Flash',          maxOutput:65536,  vision:true  },
+  'gemini-3.5-flash-lite':      { label:'Gemini 3.5 Flash Lite',     maxOutput:65536,  vision:true  },
+
+  // ── xAI ── Grok 3/2 are gone; Grok 4.5 (2026-07-08) is the current flagship. xAI's own docs
+  // give it a 500k context window (third-party trackers disagree, so treat context figures for
+  // Grok with some caution and check console.x.ai before relying on an exact number).
+  'grok-4.5':                   { label:'Grok 4.5',                  maxOutput:128000, vision:true  },
+  'grok-4':                     { label:'Grok 4',                    maxOutput:128000, vision:true  },
+
+  // ── Groq ── Groq deprecated llama-4-maverick, kimi-k2-instruct-0905 and gemma2-9b-it during
+  // 2026 in favor of gpt-oss-120b; mixtral-8x7b and the un-versioned llama3-70b-8192 are long gone
+  // from Groq's console. Kept llama-3.3-70b / llama-3.1-8b since Groq still serves them.
   'llama-3.3-70b-versatile':    { label:'Llama 3.3 70B',             maxOutput:32768,  vision:false },
   'llama-3.1-8b-instant':       { label:'Llama 3.1 8B',              maxOutput:8000,   vision:false },
-  'llama3-70b-8192':            { label:'Llama 3 70B',               maxOutput:8192,   vision:false },
-  'mixtral-8x7b-32768':         { label:'Mixtral 8x7B',              maxOutput:32768,  vision:false },
-  'gemma2-9b-it':               { label:'Gemma 2 9B',                maxOutput:8192,   vision:false },
-  'deepseek-r1-distill-llama-70b':{ label:'DeepSeek R1 Distill 70B 🧠', maxOutput:8000, vision:false },
-  'deepseek-chat':              { label:'DeepSeek V3',               maxOutput:8192,   vision:false },
-  'deepseek-reasoner':          { label:'DeepSeek R1 🧠',            maxOutput:8192,   vision:false },
-  'deepseek-v4-pro':            { label: 'DeepSeek V4 Pro',      maxOutput: 393216, vision:false },
-  'deepseek-v4-flash':          { label: 'DeepSeek V4 Flash',        maxOutput: 393216, vision:false },
+  'openai/gpt-oss-120b':        { label:'GPT-OSS 120B (via Groq)',   maxOutput:32768,  vision:false },
+
+  // ── DeepSeek ── ⚠️ deepseek-chat / deepseek-reasoner retire 2026-07-24 15:59 UTC (i.e. tomorrow
+  // relative to today) and currently just alias to deepseek-v4-flash. Migrate configs to the v4
+  // IDs directly. V4 context is 1M, max output is 384k for both Pro and Flash.
+  'deepseek-v4-pro':            { label:'DeepSeek V4 Pro',           maxOutput:384000, vision:false },
+  'deepseek-v4-flash':          { label:'DeepSeek V4 Flash',         maxOutput:384000, vision:false },
+
+  // ── Moonshot AI (Kimi) / Zhipu (GLM) ── kimi-k3 (2026-07-16) is the current flagship, k2.6 /
+  // k2.7-code / k2.5 remain available as cheaper predecessors.
+  'kimi-k3':                    { label:'Kimi K3',                   maxOutput:262144, vision:false },
+  'kimi-k2.6':                  { label:'Kimi K2.6',                 maxOutput:131072, vision:false },
+  'kimi-k2.7-code':             { label:'Kimi K2.7 Code',             maxOutput:131072, vision:false },
+  'kimi-k2.5':                  { label:'Kimi K2.5',                 maxOutput:131072, vision:true  },
+  'moonshot-v1-128k':           { label:'Moonshot v1 128k',          maxOutput:131072, vision:false },
+  'glm-5.2':                    { label:'GLM-5.2',                   maxOutput:131072, vision:false },
 };
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
@@ -431,14 +455,20 @@ function getModelDefaultMax(modelId) {
   if (orMeta?.maxOutput && orMeta.maxOutput > 0) return orMeta.maxOutput;
   if (/llama-?3.*70b|llama-?3.*8b|llama-?3\.3/i.test(modelId)) return 32768;
   if (/llama-?3/i.test(modelId)) return 8192;
+  if (/gpt-oss/i.test(modelId)) return 32768;
   if (/mixtral/i.test(modelId)) return 32768;
   if (/mistral/i.test(modelId)) return 32768;
-  if (/gemma.*27b|gemma.*9b/i.test(modelId)) return 8192;
+  if (/gemma/i.test(modelId)) return 8192;
+  if (/deepseek-v4/i.test(modelId)) return 384000;
   if (/deepseek-r|reasoner/i.test(modelId)) return 8192;
+  if (/^gpt-5/i.test(modelId)) return 128000;
   if (/gpt-4/i.test(modelId)) return 8192;
-  if (/gemini-2\.5/i.test(modelId)) return 65536;
+  if (/gemini-3/i.test(modelId)) return 65536;
   if (/gemini/i.test(modelId)) return 8192;
-  if (/grok-3/i.test(modelId)) return 131072;
+  if (/^kimi-k3/i.test(modelId)) return 262144;
+  if (/^kimi-|^moonshot-/i.test(modelId)) return 131072;
+  if (/grok-4/i.test(modelId)) return 128000;
+  if (/grok/i.test(modelId)) return 131072;
   if (/^glm-(5|4\.[67])/i.test(modelId)) return 131072;
   if (/^glm-4\.5/i.test(modelId)) return 98304;
   if (/^glm-4-32b/i.test(modelId)) return 16384;
@@ -725,10 +755,15 @@ async function encryptProvider(p) {
   if (p.apiKey) out.apiKey = await encryptStr(p.apiKey);
   return out;
 }
+// Older versions stored the model name instead of the actual company as
+// provider type ('gemini' instead of 'google', 'glm' instead of 'zhipu').
+// Migrate on load so already-saved providers keep working.
+const LEGACY_PROVIDER_TYPE_MAP = { 'gemini': 'google', 'glm': 'zhipu' };
 // Returns a copy of a provider object with its apiKey field decrypted, after loading from storage.
 async function decryptProvider(p) {
   const out = {...p};
   if (p.apiKey) out.apiKey = await decryptStr(p.apiKey);
+  if (LEGACY_PROVIDER_TYPE_MAP[out.type]) out.type = LEGACY_PROVIDER_TYPE_MAP[out.type];
   return out;
 }
 
@@ -1179,12 +1214,13 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'openai-direct') return 'https://api.openai.com/v1';
   if (provider.type === 'openrouter')    return 'https://openrouter.ai/api/v1';
   if (provider.type === 'mistral')       return 'https://api.mistral.ai/v1';
-  if (provider.type === 'gemini')        return 'https://generativelanguage.googleapis.com/v1beta/openai';
+  if (provider.type === 'google')        return 'https://generativelanguage.googleapis.com/v1beta/openai';
   if (provider.type === 'xai')           return 'https://api.x.ai/v1';
   if (provider.type === 'groq')          return 'https://api.groq.com/openai/v1';
   if (provider.type === 'deepseek')      return 'https://api.deepseek.com/v1';
   if (provider.type === 'minimax')       return 'https://api.minimax.io/v1';
-  if (provider.type === 'glm')           return 'https://api.z.ai/api/paas/v4';
+  if (provider.type === 'zhipu')         return 'https://api.z.ai/api/paas/v4';
+  if (provider.type === 'kimi')          return 'https://api.moonshot.ai/v1';
   return null;
 }
 // Returns the max-output-tokens to send with a request: the active profile's override if set, capped at the model's max.
@@ -1200,7 +1236,7 @@ function effectiveMaxTokens() {
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
-  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai',
+  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai', 'api.moonshot.ai',
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
   'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',
@@ -2079,7 +2115,7 @@ async function fetchModels() {
           extraHeaders['HTTP-Referer'] = window.location.origin;
           extraHeaders['X-Title'] = 'KI Connect NRW';
         }
-        if (provider.type === 'glm') {
+        if (provider.type === 'zhipu') {
           extraHeaders['Accept-Language'] = 'en-US,en';
         }
         const res = await fetch(proxyUrl(`${endpoint}/models`), {
@@ -4270,13 +4306,13 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
       if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
     }
     if (documentIds?.length) reqBody.documents = documentIds;
-    if (provider.type !== 'glm') {
+    if (provider.type !== 'zhipu') {
       reqBody.stream_options = { include_usage: true };
     }
     // GLM (z.ai) uses a different thinking shape than o-series/deepseek:
     // it sets `thinking: { type: 'enabled' }` instead of `reasoning_effort`,
     // and streams the reasoning trace via delta.reasoning_content.
-    if (provider.type === 'glm' && isThinkingCapable(modelId)) {
+    if (provider.type === 'zhipu' && isThinkingCapable(modelId)) {
       reqBody.thinking = { type: config.thinkingEnabled ? 'enabled' : 'disabled' };
       delete reqBody.reasoning_effort;
     }
@@ -4303,7 +4339,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
     }
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
-    if (provider.type === 'glm') { extraHeaders['Accept-Language'] = 'en-US,en'; }
+    if (provider.type === 'zhipu') { extraHeaders['Accept-Language'] = 'en-US,en'; }
     const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
@@ -4316,10 +4352,10 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
     aiRowEl = aiEl;
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '';
-    const isGlm = provider.type === 'glm';
+    const isZhipu = provider.type === 'zhipu';
     const isMinimax = provider.type === 'minimax';
     const isMistral = provider.type === 'mistral' && isThinkingCapable(modelId);
-    const showsThinking = isGlm || isMinimax || isMistral;
+    const showsThinking = isZhipu || isMinimax || isMistral;
     // MiniMax's delta.reasoning_details[].text arrives cumulative (each chunk
     // repeats everything so far), unlike GLM's incremental reasoning_content —
     // so track the previously-seen length to extract only the new suffix.
@@ -4344,7 +4380,7 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
             reasoningDelta = parsed.reasoning || chunk.choices?.[0]?.delta?.reasoning_content || '';
           } else {
             delta = rawContent || '';
-            if (isGlm) {
+            if (isZhipu) {
               reasoningDelta = chunk.choices?.[0]?.delta?.reasoning_content || '';
             } else if (isMinimax) {
               const details = chunk.choices?.[0]?.delta?.reasoning_details;
@@ -4834,7 +4870,7 @@ async function callModelForAgenticWebTurn(msgs, provider) {
   else { reqBody.temperature = config.temperature; reqBody.max_tokens = effectiveMaxTokens(); }
   const extraHeaders = {};
   if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
-  if (provider.type === 'glm') extraHeaders['Accept-Language'] = 'en-US,en';
+  if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
   const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
