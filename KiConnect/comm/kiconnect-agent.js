@@ -69,7 +69,7 @@
     'agent.nOccurrences': '{n}×',
     'agent.err.modelCallFailed': 'Error calling the model: {error}',
     'agent.maxIterations': 'Maximum number of steps ({n}) reached.',
-    'agent.confirmDeleteProject': 'Really remove project "{name}" from KI Connect?\n\nThe folder and its files on disk stay untouched — only the link is removed. The associated chats remain, but are no longer tracked as a project.',
+    'agent.confirmDeleteProject': 'Really remove project "{name}" from KI Connect?\n\nThe folder and its files on disk stay untouched — only the link is removed. This will also permanently delete the {n} chat(s) filed under this project (not recoverable).',
     'agent.shellWarning': 'Enable shell commands for "{name}"?\n\nThe agent will then be able to run arbitrary terminal commands in the project folder (e.g. install packages, run tests, delete files outside the project). This runs with the same permissions as the local KI Connect server on your machine — there is no real sandbox, only the project folder as the working directory.\n\nOnly proceed if you trust this project.',
     'agent.compactedNote': 'Older tool result cleared to save tokens',
     'agent.compactedHint': 'Call the same tool again with the same arguments if you still need this content — the underlying file/data on disk is unchanged, only this copy was removed from the conversation.',
@@ -865,7 +865,26 @@
       if (h.role === 'system') out.push({ role: 'system', content: h.text || '' });
       else if (h.role === 'user') out.push({ role: 'user', content: h.content ? _toOpenAIContent(h.content) : (h.text || '') });
       else if (h.role === 'assistant') {
-        out.push({ role: 'assistant', content: h.text || '', tool_calls: (h.toolCalls && h.toolCalls.length) ? h.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) } })) : undefined });
+        out.push({
+          role: 'assistant',
+          content: h.text || '',
+          tool_calls: (h.toolCalls && h.toolCalls.length) ? h.toolCalls.map(c => ({
+            id: c.id, type: 'function',
+            function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
+            // Gemini 2.5+/3.x require each function call to carry back the
+            // exact thought_signature it was originally issued with, or the
+            // *next* turn is rejected with 400 "Function call is missing a
+            // thought_signature..." (this happens even when the "thinking"
+            // toggle here is off — recent Gemini models reason internally
+            // regardless). We stash the signature on the tool-call object
+            // as soon as we see it (see callModel below) and echo it back
+            // here. Calls we invented ourselves (the JSON-in-text fallback
+            // path a few lines down) were never signed by Gemini, so there's
+            // nothing real to echo — send Google's documented bypass
+            // sentinel instead so the conversation isn't permanently stuck.
+            ...(c._thoughtSig ? { extra_content: { google: { thought_signature: c._thoughtSig } } } : {}),
+          })) : undefined,
+        });
       } else if (h.role === 'tool_results') {
         h.results.forEach(r => out.push({ role: 'tool', tool_call_id: r.id, content: serializeToolResult(r.result) }));
       }
@@ -1010,7 +1029,11 @@
     const msg = data.choices && data.choices[0] && data.choices[0].message;
     if (!msg) throw new Error(t('agent.err.invalidModelResponse', 'Invalid response from the model.'));
     let toolCalls = Array.isArray(msg.tool_calls)
-      ? msg.tool_calls.map(tc => ({ id: tc.id, name: tc.function?.name, arguments: safeParseJson(tc.function?.arguments) }))
+      ? msg.tool_calls.map(tc => ({
+          id: tc.id, name: tc.function?.name, arguments: safeParseJson(tc.function?.arguments),
+          // See toOpenAIHistory() above for why this is captured/echoed.
+          _thoughtSig: tc.extra_content?.google?.thought_signature,
+        }))
       : [];
     // Mistral reasoning models (native Magistral, or adjustable models with
     // reasoning_effort:'high') return `content` as a list of {type:'thinking'
@@ -1024,7 +1047,16 @@
       // Fallback for gateways/models without native function calling: if the
       // reply is a bare JSON object shaped like a tool call, treat it as one.
       const fb = extractFallbackToolCall(text);
-      if (fb) { toolCalls = [{ id: 'fb_' + Date.now(), name: fb.name, arguments: fb.arguments, _fallback: true }]; text = ''; }
+      if (fb) {
+        toolCalls = [{
+          id: 'fb_' + Date.now(), name: fb.name, arguments: fb.arguments, _fallback: true,
+          // Never actually signed by Gemini (we built this call ourselves
+          // from raw text) — use Google's documented bypass value so the
+          // next turn doesn't get rejected for a missing signature.
+          _thoughtSig: provider.type === 'gemini' ? 'skip_thought_signature_validator' : undefined,
+        }];
+        text = '';
+      }
     }
     // Normalize OpenAI's field names (prompt_tokens/completion_tokens) to the
     // same shape buildTokenBadge()/the Anthropic path use — same conversion
@@ -1056,9 +1088,21 @@
   let _liveBubble = null, _liveSteps = null;
   function rerenderCurrentRun() {
     if (!_liveBubble || !_liveSteps) return;
+    // formatText() rebuilds the whole trace from scratch on every call (a
+    // new/updated step, a status change, ...), which would otherwise wipe
+    // out any <details> the user manually expanded/collapsed to follow
+    // along while the run is still going. Tool steps only ever get
+    // appended, never reordered or removed, so the Nth <details.agent-trace>
+    // before the rebuild is still the Nth one after — capture open states
+    // by position and reapply them once the new DOM is in place.
+    const openStates = Array.from(_liveBubble.querySelectorAll('details.agent-trace')).map(d => d.open);
     _liveBubble.innerHTML = formatText(renderRunMarkdown(_liveSteps)) || '<p>…</p>';
+    _liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
     typesetMath(_liveBubble);
-    scrollToBottom();
+    // Only follow the run to the bottom if the user hasn't scrolled away
+    // (pinnedToBottom, tracked in kiconnect.js) — e.g. scrolled up to
+    // reread an earlier step while later ones are still running.
+    if (pinnedToBottom) scrollToBottom();
   }
   function renderRunMarkdown(steps) {
     return steps.map(step => {
@@ -1474,12 +1518,22 @@
   }
   async function deleteProjectFolder(folder) {
     if (!folder || !folder.agentProject) return;
-    if (!confirm(tf('agent.confirmDeleteProject', { name: folder.name }))) return;
+    const inside = chats.filter(c => c.folderId === folder.id);
+    if (!confirm(tf('agent.confirmDeleteProject', { name: folder.name, n: inside.length }))) return;
     try { await apiDeleteProject(folder.agentProject); } catch (e) { showToast(`❌ ${e.message}`); }
-    chats.forEach(c => { if (c.folderId === folder.id) c.folderId = null; });
+    // Deleting a project deletes its chats too (previously this only
+    // unlinked them via c.folderId=null, leaving them behind as regular
+    // chats — surprising given the confirm dialog said they'd be gone).
+    chats = chats.filter(c => c.folderId !== folder.id);
     folders = folders.filter(f => f.id !== folder.id);
+    if (typeof activeFolderId !== 'undefined' && activeFolderId === folder.id) activeFolderId = null;
+    if (currentChatId && !chats.some(c => c.id === currentChatId)) {
+      currentChatId = chats[0]?.id || null;
+      if (currentChatId) renderMessages(currentChat().messages);
+      else { const c = document.getElementById('messages'); c.innerHTML = ''; const e = document.getElementById('emptyState'); if (e) { c.appendChild(e); e.style.display = ''; } }
+    }
     save(); renderSidebar();
-    showToast(t('agent.projectDeleted', '🗑 Project removed (files remain on disk).'));
+    showToast(t('agent.projectDeleted', '🗑 Project and its chats removed (files remain on disk).'));
   }
 
   // Focuses a project for the composer: reuses the current chat if it's
@@ -1769,6 +1823,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       }
     });
     panel.addEventListener('click', e => e.stopPropagation());
+    // Close on any click anywhere else (autonomy/shell changes already
+    // save() immediately as they happen, so there's nothing to flush here)
+    // — the gear button's and the panel's own click handlers both stop
+    // propagation, so opening the panel or clicking inside it never
+    // triggers this.
+    document.addEventListener('click', () => panel.classList.remove('open'));
   }
 
   // ── Folder picker (browse real OS folders on the local machine to pick

@@ -467,6 +467,10 @@ let providers = [];
 let profiles  = [];
 let folders   = [];
 let profileFolders = [];   // NEW: folders for organizing agent profiles (separate from chat folders)
+// Whether the "No Folder" group in the Agent Profiles panel is collapsed.
+// Pure UI state (like the theme), so it lives in localStorage rather than
+// the encrypted account store.
+let unfiledProfilesCollapsed = localStorage.getItem('kic_unfiled_profiles_collapsed') === '1';
 let chats     = [];
 let currentChatId   = null;
 let activeFolderId  = undefined;
@@ -483,6 +487,21 @@ let activeStreamSnapshot = null;
 // bottom while streaming" behaviour — sending a new message or opening a
 // chat always still scrolls to the bottom once.
 let AUTO_SCROLL_DURING_STREAM = false;
+// Whether the message list is currently "pinned" to the bottom. Starts
+// true (pinned) after any explicit scrollToBottom() call (new message
+// sent, chat opened, ...). If the user scrolls away from the bottom
+// (e.g. up, to re-read something) while a response/agent run is still
+// in progress, we unpin — so the "snap to bottom" that happens once the
+// stream/run finishes is skipped and their scroll position is kept.
+// Scrolling back down near the bottom themselves re-pins automatically.
+let pinnedToBottom = true;
+// Returns whether the message list's scroll position is within
+// `threshold` px of the bottom.
+function isMessagesNearBottom(threshold) {
+  const c = document.getElementById('messages');
+  if (!c) return true;
+  return c.scrollHeight - c.scrollTop - c.clientHeight < (threshold || 80);
+}
 let editingProfileId  = null;
 let editingProviderId = null;
 let draggedChatId   = null;
@@ -1612,27 +1631,57 @@ function renderProfileList() {
   });
 
   if (profileFolders.length > 0) {
-    // "No folder" drop target, only shown once at least one real folder exists
+    // "No folder" group, only shown once at least one real folder exists —
+    // now collapsible like a real folder (was previously always expanded
+    // with no way to hide it, which got noisy once several unfiled
+    // profiles piled up).
+    const folderDiv = document.createElement('div');
+    folderDiv.className = 'folder unfiled-group';
     const header = document.createElement('div');
     header.className = 'folder-header';
-    const arrow = document.createElement('span'); arrow.className = 'folder-arrow open'; arrow.textContent = '▶';
-    const icon = document.createElement('span'); icon.className = 'folder-icon'; icon.textContent = '🗂️';
+    const arrow = document.createElement('span');
+    arrow.className = 'folder-arrow ' + (unfiledProfilesCollapsed ? '' : 'open');
+    arrow.textContent = '▶';
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon'; icon.textContent = unfiledProfilesCollapsed ? '📁' : '🗂️';
     const nameSpan = document.createElement('span'); nameSpan.className = 'folder-name'; nameSpan.textContent = t('js.noFolder');
     const countSpan = document.createElement('span'); countSpan.className = 'folder-count'; countSpan.textContent = unfiled.length;
     header.appendChild(arrow); header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan);
     header.addEventListener('dragover', e => { if (draggedProfileId) { e.preventDefault(); header.classList.add('drag-target'); } });
     header.addEventListener('dragleave', () => header.classList.remove('drag-target'));
     header.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, null); });
-    list.appendChild(header);
+    header.addEventListener('click', e => {
+      if (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT') return;
+      toggleUnfiledProfiles();
+    });
+    const itemsDiv = document.createElement('div');
+    itemsDiv.className = 'folder-chats' + (unfiledProfilesCollapsed ? ' collapsed' : '');
+    itemsDiv.id = 'pfc_unfiled';
+    itemsDiv.addEventListener('dragover', e => { if (draggedProfileId) e.preventDefault(); });
+    itemsDiv.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, null); });
+    unfiled.forEach(p => itemsDiv.appendChild(buildProfileItem(p)));
+    folderDiv.appendChild(header); folderDiv.appendChild(itemsDiv);
+    list.appendChild(folderDiv);
+    return;
   }
 
+  // No real folders exist yet — nothing to group against, so just list the
+  // (necessarily unfiled) profiles plainly without a collapsible wrapper.
   const unfiledDiv = document.createElement('div');
   unfiledDiv.className = 'profile-list';
-  unfiledDiv.style.marginTop = profileFolders.length ? '4px' : '0';
   unfiledDiv.addEventListener('dragover', e => { if (draggedProfileId) e.preventDefault(); });
   unfiledDiv.addEventListener('drop', e => { if (draggedProfileId) onDropProfileFolder(e, null); });
   unfiled.forEach(p => unfiledDiv.appendChild(buildProfileItem(p)));
   list.appendChild(unfiledDiv);
+}
+// Toggles (and persists) whether the "No Folder" group in the Agent
+// Profiles list is collapsed. Kept in localStorage (like the theme) rather
+// than the encrypted profileFolders store, since it's pure UI state, not
+// account data.
+function toggleUnfiledProfiles() {
+  unfiledProfilesCollapsed = !unfiledProfilesCollapsed;
+  localStorage.setItem('kic_unfiled_profiles_collapsed', unfiledProfilesCollapsed ? '1' : '');
+  renderProfileList();
 }
 
 // Builds the DOM element for a single profile entry (select/edit/delete
@@ -4427,7 +4476,7 @@ function _attachAIActions(chat, assistantText, usageData, streamEl) {
     typesetMath(newRow);
   }
 
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (pinnedToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
   updateChatTokenTotal();
   save();
 }
@@ -4796,7 +4845,12 @@ async function callModelForAgenticWebTurn(msgs, provider) {
   const msg = data.choices && data.choices[0] && data.choices[0].message;
   if (!msg) throw new Error('Invalid response from the model.');
   const toolCalls = Array.isArray(msg.tool_calls)
-    ? msg.tool_calls.map(tc => { let a = {}; try { a = JSON.parse(tc.function?.arguments || '{}'); } catch {} return { id: tc.id, name: tc.function?.name, arguments: a }; })
+    ? msg.tool_calls.map(tc => {
+        let a = {}; try { a = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+        // See runAgenticWebToolLoop() below for why this is captured/echoed
+        // — same Gemini thought_signature round-trip as the agent-mode fix.
+        return { id: tc.id, name: tc.function?.name, arguments: a, _thoughtSig: tc.extra_content?.google?.thought_signature };
+      })
     : [];
   const text = typeof msg.content === 'string' ? msg.content : '';
   return { text, toolCalls };
@@ -4830,7 +4884,18 @@ async function runAgenticWebToolLoop(initialMsgs, provider) {
       msgs.push({ role: 'assistant', content: turn.rawContent });
       msgs.push({ role: 'user', content: turn.toolCalls.map((c, i) => ({ type: 'tool_result', tool_use_id: c.id, content: JSON.stringify(results[i]) })) });
     } else {
-      msgs.push({ role: 'assistant', content: turn.text || null, tool_calls: turn.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })) });
+      msgs.push({
+        role: 'assistant', content: turn.text || null,
+        tool_calls: turn.toolCalls.map(c => ({
+          id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+          // Gemini 2.5+/3.x reject the *next* turn with 400 "Function call
+          // is missing a thought_signature..." unless each function call
+          // carries back the exact signature it was issued with — even
+          // when this is web_search, not the coding agent. Same fix as
+          // kiconnect-agent.js's toOpenAIHistory().
+          ...(c._thoughtSig ? { extra_content: { google: { thought_signature: c._thoughtSig } } } : {}),
+        })),
+      });
       turn.toolCalls.forEach((c, i) => msgs.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(results[i]) }));
     }
   }
@@ -5773,7 +5838,16 @@ function showTyping() {
 // Removes a previously shown typing indicator by its element ID.
 function removeTyping(id){document.getElementById(id)?.remove();}
 // Scrolls the message list to the bottom.
-function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;}
+function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;pinnedToBottom=true;}
+// Keep pinnedToBottom in sync with whatever the user actually does with
+// the scrollbar (mouse wheel, drag, keyboard, ...) — independent of
+// whether a normal chat stream (isStreaming) or an agent run (running,
+// defined in kiconnect-agent.js) is currently active, so both share the
+// same "did the user scroll away from the bottom?" signal.
+document.addEventListener('DOMContentLoaded', () => {
+  const messagesEl = document.getElementById('messages');
+  if (messagesEl) messagesEl.addEventListener('scroll', () => { pinnedToBottom = isMessagesNearBottom(); });
+});
 // Fills the message input with a suggestion chip's text and sends it immediately.
 function sendSuggestion(txt){document.getElementById('messageInput').value=txt;sendMessage();}
 
