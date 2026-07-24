@@ -167,10 +167,11 @@ function retranslateBubbleButtons() {
   document.querySelectorAll('.bubble-act-btn[data-action]').forEach(btn => {
     const action = btn.getAttribute('data-action');
     const keyMap = {
-      'copy': 'js.copy', 'edit': 'js.edit', 'branch': 'js.branch',
+      'copy': 'js.copy', 'copy-formatted': 'js.copyFormatted', 'edit': 'js.edit', 'branch': 'js.branch',
       'regenerate': 'js.regenerate', 'delete': 'js.delete'
     };
     if (keyMap[action]) btn.textContent = t(keyMap[action]);
+    if (action === 'copy-formatted') btn.title = t('js.copyFormattedTitle');
   });
   // retranslate personal notes in place (cheap DOM walk, no full re-render,
   // preserves scroll position, open/closed state and any text currently being typed)
@@ -3328,6 +3329,14 @@ function _buildBubbleChrome(row, wrap, bubble, msg, idx) {
     return btn;
   }
   actDiv.appendChild(makeActBtn(t('js.copy'),       '', (i) => copyBubble(actDiv.querySelector('.bubble-act-btn'), i), 'copy'));
+  // Copy rich content for Word and Markdown/LaTeX text for note apps.
+  const copyFormattedBtn = document.createElement('button');
+  copyFormattedBtn.className = 'bubble-act-btn';
+  copyFormattedBtn.textContent = t('js.copyFormatted');
+  copyFormattedBtn.title = t('js.copyFormattedTitle');
+  copyFormattedBtn.setAttribute('data-action', 'copy-formatted');
+  copyFormattedBtn.addEventListener('click', () => copyBubbleFormatted(bubble, copyFormattedBtn));
+  actDiv.appendChild(copyFormattedBtn);
   actDiv.appendChild(makeActBtn(t('js.edit'),       '', startEditBubble, 'edit'));
   actDiv.appendChild(makeActBtn(t('js.branch'),     '', branchFromHere, 'branch'));
   if (!isUser) actDiv.appendChild(makeActBtn(t('js.regenerate'), '', regenerate, 'regenerate'));
@@ -5919,6 +5928,147 @@ function copyBubble(btn, idx) {
     if(btn){btn.textContent=t('js.copied');btn.classList.add('copy-done');setTimeout(()=>{btn.textContent=t('js.copy');btn.classList.remove('copy-done');},2000);}
   }).catch(()=>toast(t('js.copyFailed')));
 }
+// Copy rich HTML for Word and Markdown/LaTeX text for note apps.
+async function copyBubbleFormatted(bubbleEl, btn) {
+  if (!bubbleEl) return;
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(bubbleEl.cloneNode(true));
+  const text = fragmentToClipboardText(fragment);
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([fragmentToClipboardHtml(fragment)], {type: 'text/html'}),
+        'text/plain': new Blob([text], {type: 'text/plain'}),
+      }),
+    ]);
+    if (!btn) return;
+    const original = t('js.copyFormatted');
+    btn.textContent = t('js.copied'); btn.classList.add('copy-done');
+    setTimeout(() => { btn.textContent = original; btn.classList.remove('copy-done'); }, 2000);
+  } catch (_) {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (!btn) return;
+      btn.textContent = t('js.copied'); btn.classList.add('copy-done');
+      setTimeout(() => { btn.textContent = t('js.copyFormatted'); btn.classList.remove('copy-done'); }, 2000);
+    } catch (_) {
+      toast(t('js.copyFailed'));
+    }
+  }
+}
+
+// Formula selections preserve MathML for Word and LaTeX for Markdown apps.
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('messages')?.addEventListener('copy', handleFormulaCopy);
+});
+
+function handleFormulaCopy(event) {
+  const messagesEl = document.getElementById('messages');
+  const selection = window.getSelection();
+  if (!messagesEl || !selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+  const range = selection.getRangeAt(0);
+  if (!messagesEl.contains(range.commonAncestorContainer) || !rangeTouchesFormula(range, messagesEl)) return;
+  expandRangeToFullFormulas(range, messagesEl);
+  event.preventDefault();
+  finishFormulaCopy(range);
+}
+
+async function finishFormulaCopy(range) {
+  try {
+    const fragment = range.cloneContents();
+    const html = fragmentToClipboardHtml(fragment);
+    const text = fragmentToClipboardText(fragment);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], {type: 'text/html'}),
+        'text/plain': new Blob([text], {type: 'text/plain'}),
+      }),
+    ]);
+  } catch (error) {
+    try {
+      const text = fragmentToClipboardText(range.cloneContents());
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      console.error('[KIC] Formula copy failed', error);
+      toast(t('js.copyFailed'));
+    }
+  }
+}
+
+function rangeTouchesFormula(range, root) {
+  return Array.from(root.querySelectorAll('.math-inline, .math-block')).some(el => range.intersectsNode(el));
+}
+
+function expandRangeToFullFormulas(range, root) {
+  root.querySelectorAll('.math-inline, .math-block').forEach(wrapper => {
+    if (!range.intersectsNode(wrapper)) return;
+    const formulaRange = document.createRange();
+    formulaRange.selectNode(wrapper);
+    if (range.compareBoundaryPoints(Range.START_TO_START, formulaRange) > 0) range.setStartBefore(wrapper);
+    if (range.compareBoundaryPoints(Range.END_TO_END, formulaRange) < 0) range.setEndAfter(wrapper);
+  });
+}
+
+function getFormulaData(wrapper) {
+  const isBlock = wrapper.classList.contains('math-block');
+  let latex = '';
+  const encoded = wrapper.getAttribute('data-latex');
+  if (encoded) {
+    try { latex = decodeURIComponent(escape(atob(encoded))); } catch (_) {}
+  }
+  if (!latex) latex = (wrapper.textContent || '').replace(/^\\\[|\\\]$|^\\\(|\\\)$|^\$\$?|\$\$?$/g, '').trim();
+  const math = wrapper.querySelector('mjx-assistive-mml math');
+  return {isBlock, latex, mathml: math ? mathmlForClipboard(math, isBlock) : ''};
+}
+
+function mathmlForClipboard(math, isBlock) {
+  const clone = math.cloneNode(true);
+  clone.setAttribute('xmlns', 'http://www.w3.org/1998/Math/MathML');
+  if (isBlock) clone.setAttribute('display', 'block');
+  return clone.outerHTML;
+}
+
+function formulaToClipboardHtml({latex, isBlock, mathml}) {
+  const fallback = `<span>${escHtml(isBlock ? `$$${latex}$$` : `$${latex}$`)}</span>`;
+  if (!mathml) return fallback;
+  const word = `<!--[if gte mso 9]>${mathml}<![endif]-->`;
+  const nonWord = `<!--[if !mso]><!-->${fallback}<!--<![endif]-->`;
+  return isBlock ? `<p class="MsoNormal">${word}${nonWord}</p>` : word + nonWord;
+}
+
+function fragmentToClipboardHtml(fragment) {
+  const container = document.createElement('div');
+  container.appendChild(fragment.cloneNode(true));
+  const replacements = [];
+  container.querySelectorAll('.math-inline, .math-block').forEach((wrapper, i) => {
+    replacements.push(formulaToClipboardHtml(getFormulaData(wrapper)));
+    wrapper.replaceWith(document.createComment(`KICMATH${i}`));
+  });
+  let html = container.innerHTML;
+  replacements.forEach((replacement, i) => { html = html.replace(`<!--KICMATH${i}-->`, () => replacement); });
+  return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><meta name="ProgId" content="Word.Document"></head><body><!--StartFragment-->${html}<!--EndFragment--></body></html>`;
+}
+
+function fragmentToClipboardText(fragment) {
+  const container = document.createElement('div');
+  container.appendChild(fragment.cloneNode(true));
+  return nodeToPlainText(container).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const _KIC_BLOCK_TAGS = new Set(['P','DIV','LI','TR','H1','H2','H3','H4','H5','H6','BLOCKQUOTE','PRE']);
+function nodeToPlainText(node) {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+  if (node.classList?.contains('math-inline') || node.classList?.contains('math-block')) {
+    const {latex, isBlock} = getFormulaData(node);
+    return isBlock ? `$$${latex}$$` : `$${latex}$`;
+  }
+  if (node.tagName === 'BR') return '\n';
+  let text = '';
+  node.childNodes.forEach(child => { text += nodeToPlainText(child); });
+  return _KIC_BLOCK_TAGS.has(node.tagName) ? text + '\n' : text;
+}
+
 // Copies the entire active chat's conversation as plain text to the clipboard.
 function copyFullChat() {
   const chat=currentChat(); if(!chat||!chat.messages.length){toast(t('js.noChatToCopy'));return;}
@@ -5995,28 +6145,32 @@ function formatText(raw) {
   // LaTeX Display: \[ ... \]
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
     const i = blocks.length;
-    blocks.push(`<div class="math-block">\\[${math}\\]</div>`);
+    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    blocks.push(`<div class="math-block" data-latex="${latexB64}">\\[${escHtml(math)}\\]</div>`);
     return PH(i);
   });
 
   // LaTeX Display: $$ ... $$
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
     const i = blocks.length;
-    blocks.push(`<div class="math-block">$$${math}$$</div>`);
+    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    blocks.push(`<div class="math-block" data-latex="${latexB64}">$$${escHtml(math)}$$</div>`);
     return PH(i);
   });
 
   // LaTeX Inline: \( ... \)
   s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
     const i = blocks.length;
-    blocks.push(`<span class="math-inline">\\(${math}\\)</span>`);
+    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
     return PH(i);
   });
 
   // LaTeX Inline: $...$ (kein Leerzeichen am Rand, kein Zeilenumbruch)
   s = s.replace(/\$([^\s$\n][^$\n]*?[^\s$\n]|\S)\$/g, (_, math) => {
     const i = blocks.length;
-    blocks.push(`<span class="math-inline">\\(${math}\\)</span>`);
+    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
     return PH(i);
   });
 
@@ -6086,7 +6240,7 @@ function formatText(raw) {
                      'ul','ol','li','code','pre','hr','table','thead','tbody','tr','th','td',
                      'div','span','button','a','u','sup','sub','mark','small','s','ins',
                      'abbr','cite','kbd','details','summary','blockquote','input','img'],
-      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64',
+      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','data-latex',
                      'type','checked','disabled','src','alt','loading'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
@@ -7368,7 +7522,7 @@ function setupEventListeners(){
 function printFullChat() {
   const chat = currentChat();
   if (!chat || !chat.messages.length) { toast(t('js.noChatToPrint')); return; }
-  // Titel setzen (nur bei @media print sichtbar)
+  // Set the title; it is visible only in print media.
   const titleEl = document.getElementById('printChatTitle');
   if (titleEl) {
     const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
