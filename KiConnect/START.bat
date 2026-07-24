@@ -1,10 +1,11 @@
 @echo off
+title KI Connect
+cd /d "%~dp0"
+
 echo KI Connect - Proxy starting...
 echo.
 
-REM CALL :skip
-
-REM Check for Python
+REM -- Check for Python -------------------------------------------
 python --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python not found. Please install Python: https://python.org
@@ -12,16 +13,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM -- Run update -----------------------------------------------
+REM -- Run update ---------------------------------------------------
 echo.
 echo Running update...
 call update.bat
 if errorlevel 1 (
     echo Warning: Update could not be completed.
 )
-
-:skip_update
-echo.
 
 echo.
 echo  ==========================================
@@ -30,8 +28,13 @@ echo  ==========================================
 echo.
 echo Installing / updating dependencies...
 pip install "flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" "cryptography>=42.0.0" --quiet --upgrade
-
-:skip
+if errorlevel 1 (
+    echo.
+    echo  [ERROR] Installation/Update failed!
+    echo  Please check your internet connection.
+    pause
+    exit /b 1
+)
 
 echo.
 echo Starting proxy (Waitress WSGI)...
@@ -39,10 +42,9 @@ echo Open in browser: http://localhost:5000
 echo Stop with:       Ctrl+C
 echo.
 
-REM Change to script directory
-cd /d "%~dp0"
+REM -- Start the proxy ----------------------------------------------
+python "%~dp0comm\kiconnect-proxy.py"
 
-REM Start the proxy
-python ./comm/kiconnect-proxy.py
-
+echo.
+echo Proxy has been terminated.
 pause

@@ -2,10 +2,9 @@
 title KI Connect
 cd /d "%~dp0"
 
-set PYTHON=%~dp0python\python.exe
-set PIP=%~dp0python\python.exe -m pip
-set PACKAGES=flask requests waitress cryptography
-set MIN_VERSIONS="flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" "cryptography>=42.0.0"
+set "PYTHON=%~dp0python\python.exe"
+set "PIP=%~dp0python\python.exe -m pip"
+set MIN_VERSIONS=flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0
 
 echo.
 echo  ==========================================
@@ -50,7 +49,7 @@ echo  Python:  %PYVER%
 echo  Path:    %PYTHON%
 echo.
 
-REM -- Make pip available if missing (embeddable package)
+REM -- Make pip available if missing (embeddable package) --------
 "%PYTHON%" -m pip --version >nul 2>&1
 if errorlevel 1 (
     echo  [INFO] pip not found - setting up...
@@ -73,33 +72,18 @@ if errorlevel 1 (
     echo.
 )
 
-REM -- Check dependencies ---------------------------------------
-echo  Checking dependencies...
-set MISSING=0
-
-for %%p in (%PACKAGES%) do (
-    "%PYTHON%" -c "import %%p" >nul 2>&1
-    if errorlevel 1 (
-        echo  [ .. ] %%p missing - installing...
-        set MISSING=1
-    ) else (
-        echo  [ OK ] %%p
-    )
-)
-
-if "%MISSING%"=="1" (
+REM -- Check + install/update dependencies via pip ----------------
+echo  Checking dependencies ^(incl. version check^)...
+echo.
+%PIP% install --upgrade %MIN_VERSIONS% --quiet
+if errorlevel 1 (
     echo.
-    echo  Installing missing packages...
-    %PIP% install %MIN_VERSIONS% --quiet
-    if errorlevel 1 (
-        echo.
-        echo  [ERROR] Installation failed!
-        echo  Please check your internet connection.
-        pause
-        exit /b 1
-    )
-    echo  [OK] All packages installed.
+    echo  [ERROR] Installation/Update failed!
+    echo  Please check your internet connection.
+    pause
+    exit /b 1
 )
+echo  [OK] All packages are present and up to date.
 
 echo.
 echo  ------------------------------------------

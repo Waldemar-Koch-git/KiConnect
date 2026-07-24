@@ -1,4 +1,5 @@
 @echo off
+setlocal
 title KI Connect - Update
 cd /d "%~dp0"
 
@@ -156,3 +157,4 @@ REM ============================================================
 
 
 :end
+endlocal
