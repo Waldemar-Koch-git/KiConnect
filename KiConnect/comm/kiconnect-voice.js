@@ -24,14 +24,36 @@
     ttsVoice:    '',
     sttAutoSend: false,
     dialogMode:  false,   // Dialog mode: read AI response aloud → then listen again
+    ttsProvider: 'browser',   // 'browser' | 'openai' | 'elevenlabs' | 'groq'
+    sttProvider: 'browser',   // 'browser' | 'groq'
+    sttSilenceMs: 3000,    // how long to wait in silence before auto-stopping listening
+    groqTtsVoice: 'troy',     // Groq/Orpheus TTS speaker persona
+    openaiTtsVoice: 'alloy',  // OpenAI gpt-4o-mini-tts speaker persona
     ...loadSettings(),
+  };
+
+  // Hard safety cap so listening can never run away indefinitely even if
+  // silence detection somehow never fires (background noise, muted mic, …).
+  // Not user-configurable on purpose — it's a backstop, not a feature.
+  var STT_MAX_LISTEN_MS = 90000;
+
+  // ── Bridge to the Tuning panel's Audio section (kiconnect.js) ──────
+  // ttsProvider/sttProvider are unsensitive choices that live here in `vs`
+  // (localStorage), same as rate/pitch/lang. The actual API keys live
+  // encrypted in config.audioProviders (kiconnect.js) and are only read
+  // here, never written. This is the small two-way bridge the Tuning
+  // panel's provider <select> elements use to read/write the choice.
+  window.kicVoiceGetSetting = function (key) { return vs[key]; };
+  window.kicVoiceSetSetting = function (key, value) {
+    vs[key] = value;
+    saveSettings({ [key]: value });
+    if (key === 'dialogMode') updateDialogBadge();
   };
 
   // ── State ──────────────────────────────────────────────────────
   let sttActive     = false;
   let ttsActive     = false;
   let dialogPending = false;
-  let webSpeechRec  = null;
   let btnMic, btnTts, btnVoiceSettings;
 
   // ── i18n helper function ──────────────────────────────────────
@@ -48,6 +70,14 @@
       }
     } catch(e) {}
     return fallback || key;
+  }
+  // Like t(), but substitutes {placeholder} tokens in the resolved string —
+  // used for messages with dynamic content (provider name, HTTP code, etc.)
+  // so a real translation still gets those values instead of being static.
+  function tv(key, fallbackTemplate, vars) {
+    let s = t(key, fallbackTemplate);
+    if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v ?? ''); });
+    return s;
   }
 
   // ── DOM helper functions ─────────────────────────────────────
@@ -121,6 +151,14 @@
       '.vs-chip-desc{display:flex;flex-direction:column;gap:1px;}',
       '.vs-chip-name{font-weight:600;font-size:12px;}',
       '.vs-chip-sub{font-size:10px;opacity:.7;font-family:"IBM Plex Mono",monospace;}',
+
+      /* Engine quick-switch chips (TTS/STT provider), rendered in a row that
+         wraps instead of the full-width stacked .vs-toggle-row chips. */
+      '.vs-chip-row{display:flex;flex-wrap:wrap;gap:6px;}',
+      '.vs-chip-row .vs-chip{padding:6px 10px;flex:0 0 auto;gap:6px;}',
+      '.vs-chip-row .vs-chip .vs-chip-name{font-weight:500;}',
+      '.vs-audio-more{font-size:11px;color:var(--accent,#3d7eff);cursor:pointer;margin:-4px 0 2px;text-decoration:underline;text-underline-offset:2px;}',
+      '.vs-audio-more:hover{opacity:.85;}',
 
       /* Dialog badge in the header */
       '#voiceDialogBadge{display:none;background:rgba(61,126,255,.15);border:1px solid var(--accent,#3d7eff);color:var(--accent,#3d7eff);font-size:10px;font-family:"IBM Plex Mono",monospace;padding:2px 8px;border-radius:20px;animation:dialog-blink 1.8s ease-in-out infinite;cursor:pointer;flex-shrink:0;margin-right:6px;}',
@@ -237,6 +275,20 @@
       '<div class="vs-body">',
 
         '<div class="vs-group">',
+          '<div class="vs-label" data-i18n="audio.ttsEngineLabel">Speech engine (TTS)</div>',
+          '<div class="vs-chip-row" id="vsTtsProviderRow"></div>',
+        '</div>',
+
+        '<div class="vs-group">',
+          '<div class="vs-label" data-i18n="audio.sttEngineLabel">Recognition engine (STT)</div>',
+          '<div class="vs-chip-row" id="vsSttProviderRow"></div>',
+        '</div>',
+
+        '<div class="vs-audio-more" id="vsAudioMoreLink" style="display:none;" data-i18n="audio.moreProvidersLink">🔑 Add more engines (API key) in Tuning → Audio →</div>',
+
+        '<hr class="vs-sep">',
+
+        '<div class="vs-group">',
           '<div class="vs-label" data-i18n="voice.sttLang">Recognition Language</div>',
           '<select class="vs-select" id="vsSttLang">',
             '<option value="de-DE">Deutsch (DE)</option>',
@@ -251,6 +303,7 @@
             '<option value="pl-PL">Polski</option>',
             '<option value="tr-TR">Türkçe</option>',
             '<option value="ar-SA">العربية</option>',
+            '<option value="fa-IR">فارسی</option>',
             '<option value="zh-CN">中文 (普通话)</option>',
             '<option value="ja-JP">日本語</option>',
             '<option value="ko-KR">한국어</option>',
@@ -261,11 +314,50 @@
           '</select>',
         '</div>',
 
+        '<div class="vs-group">',
+          '<div class="vs-label" data-i18n="voice.sttSilence">Auto-stop after silence</div>',
+          '<div class="vs-slider-row">',
+            '<input type="range" id="vsSttSilence" min="1" max="10" step="0.5" value="' + ((vs.sttSilenceMs || 3000) / 1000) + '">',
+            '<span class="vs-slider-val" id="vsSttSilenceVal">' + ((vs.sttSilenceMs || 3000) / 1000).toFixed(1) + 's</span>',
+          '</div>',
+        '</div>',
+
         '<hr class="vs-sep">',
 
-        '<div class="vs-group">',
+        '<div class="vs-group" id="vsTtsVoiceGroup">',
           '<div class="vs-label" data-i18n="voice.ttsVoice">Voice (Text → Speech)</div>',
           '<select class="vs-select" id="vsTtsVoice"><option value="">— <span data-i18n="voice.defaultVoice">Default</span> —</option></select>',
+        '</div>',
+
+        '<div class="vs-group" id="vsGroqTtsVoiceGroup" style="display:none;">',
+          '<div class="vs-label" data-i18n="voice.groqTtsVoice">Speaker (Groq TTS)</div>',
+          '<select class="vs-select" id="vsGroqTtsVoice">',
+            '<option value="troy">Troy (male)</option>',
+            '<option value="austin">Austin (male)</option>',
+            '<option value="daniel">Daniel (male)</option>',
+            '<option value="autumn">Autumn (female)</option>',
+            '<option value="diana">Diana (female)</option>',
+            '<option value="hannah">Hannah (female)</option>',
+          '</select>',
+        '</div>',
+
+        '<div class="vs-group" id="vsOpenaiTtsVoiceGroup" style="display:none;">',
+          '<div class="vs-label" data-i18n="voice.openaiTtsVoice">Speaker (OpenAI TTS)</div>',
+          '<select class="vs-select" id="vsOpenaiTtsVoice">',
+            '<option value="alloy">Alloy</option>',
+            '<option value="ash">Ash</option>',
+            '<option value="ballad">Ballad</option>',
+            '<option value="coral">Coral</option>',
+            '<option value="echo">Echo</option>',
+            '<option value="fable">Fable</option>',
+            '<option value="onyx">Onyx</option>',
+            '<option value="nova">Nova</option>',
+            '<option value="sage">Sage</option>',
+            '<option value="shimmer">Shimmer</option>',
+            '<option value="verse">Verse</option>',
+            '<option value="marin">Marin</option>',
+            '<option value="cedar">Cedar</option>',
+          '</select>',
         '</div>',
 
         '<div class="vs-group">',
@@ -276,7 +368,7 @@
           '</div>',
         '</div>',
 
-        '<div class="vs-group">',
+        '<div class="vs-group" id="vsTtsPitchGroup">',
           '<div class="vs-label" data-i18n="voice.ttsPitch">Pitch</div>',
           '<div class="vs-slider-row">',
             '<input type="range" id="vsTtsPitch" min="0.5" max="5.0" step="0.1" value="' + vs.ttsPitch + '">',
@@ -319,6 +411,15 @@
     langSel.addEventListener('change', function () {
       vs.sttLang = langSel.value;
       saveSettings({ sttLang: vs.sttLang });
+    });
+
+    // Silence timeout (how long to keep listening after the user stops talking)
+    var silenceSlider = panel.querySelector('#vsSttSilence');
+    var silenceVal     = panel.querySelector('#vsSttSilenceVal');
+    silenceSlider.addEventListener('input', function () {
+      vs.sttSilenceMs = Math.round(parseFloat(silenceSlider.value) * 1000);
+      silenceVal.textContent = parseFloat(silenceSlider.value).toFixed(1) + 's';
+      saveSettings({ sttSilenceMs: vs.sttSilenceMs });
     });
 
     // Speed
@@ -365,16 +466,119 @@
 
     // Close
     panel.querySelector('#vsClose').addEventListener('click', closeVoiceSettingsPanel);
+    // NOTE: uses composedPath() rather than panel.contains(e.target). Several
+    // controls in here (the TTS/STT provider chips, in particular) rebuild
+    // their container's innerHTML on click, which detaches the very node
+    // that was just clicked from the DOM. By the time this bubbled listener
+    // on `document` runs, panel.contains(e.target) would then wrongly return
+    // false (a detached node has no parent) and slam the panel shut right
+    // after every click inside it. composedPath() is captured at dispatch
+    // time and stays correct regardless of later DOM mutations.
     document.addEventListener('click', function (e) {
-      if (!panel.contains(e.target) && e.target !== btnVoiceSettings && !btnVoiceSettings.contains(e.target)) {
-        closeVoiceSettingsPanel();
-      }
+      var path = (typeof e.composedPath === 'function') ? e.composedPath() : null;
+      var insidePanel = path
+        ? (path.indexOf(panel) !== -1 || path.indexOf(btnVoiceSettings) !== -1)
+        : (panel.contains(e.target) || e.target === btnVoiceSettings || btnVoiceSettings.contains(e.target));
+      if (!insidePanel) closeVoiceSettingsPanel();
+    });
+
+    // Groq TTS speaker
+    var groqVoiceSel = panel.querySelector('#vsGroqTtsVoice');
+    groqVoiceSel.value = vs.groqTtsVoice || 'troy';
+    groqVoiceSel.addEventListener('change', function () {
+      vs.groqTtsVoice = groqVoiceSel.value;
+      saveSettings({ groqTtsVoice: vs.groqTtsVoice });
+    });
+
+    // OpenAI TTS speaker
+    var openaiVoiceSel = panel.querySelector('#vsOpenaiTtsVoice');
+    openaiVoiceSel.value = vs.openaiTtsVoice || 'alloy';
+    openaiVoiceSel.addEventListener('change', function () {
+      vs.openaiTtsVoice = openaiVoiceSel.value;
+      saveSettings({ openaiTtsVoice: vs.openaiTtsVoice });
     });
 
     populateTtsVoices();
     if (window.speechSynthesis) {
       speechSynthesis.addEventListener('voiceschanged', populateTtsVoices);
     }
+
+    renderAudioEngineSection(panel);
+  }
+
+  // ── Engine quick-switch chips (TTS/STT) ─────────────────────────
+  // Only lists providers that either need no key (browser) or already have
+  // one configured in the Tuning panel — so a provider only shows up here
+  // once it's actually usable, per the user's ask.
+  var TTS_PROVIDERS = [
+    { id: 'browser',    icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser',    nameFallback: 'Browser' },
+    { id: 'openai',     icon: '🟢', needsKey: true,  nameKey: 'audio.providerOpenAI',     nameFallback: 'OpenAI' },
+    { id: 'elevenlabs', icon: '🎙️', needsKey: true,  nameKey: 'audio.providerElevenLabs', nameFallback: 'ElevenLabs' },
+    { id: 'groq',       icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroq',       nameFallback: 'Groq' },
+  ];
+  var STT_PROVIDERS = [
+    { id: 'browser', icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser',       nameFallback: 'Browser' },
+    { id: 'groq',    icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroqWhisper',   nameFallback: 'Groq Whisper' },
+  ];
+
+  // Renders the chip row for one provider list into `container`, marking the
+  // currently active one; returns true if at least one provider is still
+  // locked behind a missing key (used to show/hide the "add more" link).
+  function renderProviderChips(container, providers, vsKey) {
+    if (!container) return false;
+    var current = vs[vsKey] || 'browser';
+    var available = providers.filter(function (p) { return !p.needsKey || hasAudioProviderKey(p.id); });
+    if (!available.some(function (p) { return p.id === current; })) {
+      current = 'browser';
+      vs[vsKey] = 'browser';
+      saveSettings((function () { var o = {}; o[vsKey] = 'browser'; return o; })());
+    }
+    container.innerHTML = '';
+    available.forEach(function (p) {
+      var chip = document.createElement('div');
+      chip.className = 'vs-chip vs-chip-sm' + (p.id === current ? ' active' : '');
+      chip.innerHTML = '<span class="vs-chip-icon">' + p.icon + '</span><span class="vs-chip-name">' + t(p.nameKey, p.nameFallback) + '</span>';
+      chip.addEventListener('click', function () {
+        vs[vsKey] = p.id;
+        var o = {}; o[vsKey] = p.id; saveSettings(o);
+        renderAudioEngineSection(document.getElementById('voiceSettingsPanel'));
+      });
+      container.appendChild(chip);
+    });
+    return providers.some(function (p) { return p.needsKey && !hasAudioProviderKey(p.id); });
+  }
+
+  function updateTtsProviderDependentVisibility() {
+    var provider = vs.ttsProvider || 'browser';
+    var voiceGroup = document.getElementById('vsTtsVoiceGroup');
+    var pitchGroup = document.getElementById('vsTtsPitchGroup');
+    var groqVoiceGroup = document.getElementById('vsGroqTtsVoiceGroup');
+    var openaiVoiceGroup = document.getElementById('vsOpenaiTtsVoiceGroup');
+    if (voiceGroup) voiceGroup.style.display = provider === 'browser' ? '' : 'none';
+    if (pitchGroup) pitchGroup.style.display = provider === 'browser' ? '' : 'none';
+    if (groqVoiceGroup) groqVoiceGroup.style.display = provider === 'groq' ? '' : 'none';
+    if (openaiVoiceGroup) openaiVoiceGroup.style.display = provider === 'openai' ? '' : 'none';
+  }
+
+  // Re-renders both chip rows — called on panel build and every time the
+  // panel is opened, so newly added API keys (entered via Tuning → Audio)
+  // show up here without needing a page reload.
+  function renderAudioEngineSection(panel) {
+    if (!panel) return;
+    var ttsLocked = renderProviderChips(panel.querySelector('#vsTtsProviderRow'), TTS_PROVIDERS, 'ttsProvider');
+    var sttLocked = renderProviderChips(panel.querySelector('#vsSttProviderRow'), STT_PROVIDERS, 'sttProvider');
+    var moreLink = panel.querySelector('#vsAudioMoreLink');
+    if (moreLink) {
+      moreLink.style.display = (ttsLocked || sttLocked) ? 'block' : 'none';
+      if (!moreLink._clickBound) {
+        moreLink._clickBound = true;
+        moreLink.addEventListener('click', function () {
+          closeVoiceSettingsPanel();
+          openAudioTuningPanel();
+        });
+      }
+    }
+    updateTtsProviderDependentVisibility();
   }
 
   function populateTtsVoices() {
@@ -405,7 +609,10 @@
     var panel = document.getElementById('voiceSettingsPanel');
     if (!panel) return;
     panel.classList.toggle('open');
-    if (panel.classList.contains('open')) positionVoiceSettingsPanel();
+    if (panel.classList.contains('open')) {
+      positionVoiceSettingsPanel();
+      renderAudioEngineSection(panel);
+    }
   }
 
   // Positions the panel directly above its own gear button (with viewport
@@ -438,93 +645,566 @@
     if (panel) panel.classList.remove('open');
   }
 
-  // ── STT ──────────────────────────────────────────────────────────
+  // ── Access to config.audioProviders (kiconnect.js, read-only) ──────
+  // `config` is not declared locally here — it resolves to kiconnect.js's
+  // top-level `let config`, a global lexical binding shared across all
+  // classic <script> tags on the page (same mechanism as TRANSLATIONS/
+  // currentLang, see the comment on t() above). kiconnect.js loads first,
+  // so config already exists by the time this file runs.
+  function audioProviderKey(provider) {
+    try { return (config && config.audioProviders && config.audioProviders[provider] && config.audioProviders[provider].apiKey) || ''; }
+    catch (e) { return ''; }
+  }
+  function hasAudioProviderKey(provider) {
+    return provider === 'browser' || !!audioProviderKey(provider);
+  }
+  function openAudioTuningPanel() {
+    try { if (typeof openTuningPanel === 'function') openTuningPanel(); } catch (e) {}
+  }
+  function noKeyToast(icon) {
+    showToast(icon + ' ' + t('voice.noApiKey', 'No API key set for this provider — check Tuning → Audio.'));
+    openAudioTuningPanel();
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // TTS engines — one per provider, all exposing the same interface:
+  //   speak(text, opts, {onstart, onend, onerror}) → {pause(), resume(), stop()}
+  // This lets speakLastAssistantMessage()/speakBubble() and the bubble
+  // Play/Pause/Resume/Stop submenu stay provider-agnostic: they just hold
+  // on to whatever controller the active engine handed back.
+  // ══════════════════════════════════════════════════════════════════
+  var ttsEngines = {
+    browser: {
+      speak: function (text, opts, cbs) {
+        if (!window.speechSynthesis) {
+          showToast('🔇 ' + t('voice.ttsUnavailable', 'TTS not available.'));
+          if (cbs.onerror) cbs.onerror('unavailable');
+          return { pause: function () {}, resume: function () {}, stop: function () {} };
+        }
+        speechSynthesis.cancel();
+        var utter = new SpeechSynthesisUtterance(text);
+        utter.lang  = opts.lang;
+        utter.rate  = opts.rate;
+        utter.pitch = opts.pitch;
+        if (opts.voiceURI) {
+          var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === opts.voiceURI; });
+          if (match.length) utter.voice = match[0];
+        }
+        utter.onstart = function () { if (cbs.onstart) cbs.onstart(); };
+        utter.onend   = function () { if (cbs.onend) cbs.onend(); };
+        utter.onerror = function () { if (cbs.onerror) cbs.onerror('speechSynthesis-error'); };
+        speechSynthesis.speak(utter);
+        return {
+          pause:  function () { speechSynthesis.pause(); },
+          resume: function () { speechSynthesis.resume(); },
+          stop:   function () { speechSynthesis.cancel(); },
+        };
+      }
+    },
+    openai:     createHttpTtsEngine(fetchOpenAiTtsBlob),
+    elevenlabs: createHttpTtsEngine(fetchElevenLabsTtsBlob),
+    groq:       createChunkedHttpTtsEngine(fetchGroqTtsBlob, GROQ_TTS_MAX_CHARS),
+  };
+
+  // Groq's Orpheus TTS models cap `input` at 200 characters per request
+  // (see https://console.groq.com/docs/text-to-speech/orpheus#limitations).
+  // Kept a little under that as safety margin for multi-byte characters.
+  var GROQ_TTS_MAX_CHARS = 190;
+
+  // Splits `text` into chunks no longer than `maxLen`, preferring to break
+  // on sentence boundaries (. ! ? followed by whitespace) so pauses land
+  // naturally; falls back to a hard word-boundary split for any run-on
+  // sentence longer than maxLen.
+  function chunkTextForTts(text, maxLen) {
+    var sentences = text.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [text];
+    var chunks = [];
+    var current = '';
+    sentences.forEach(function (raw) {
+      var s = raw.trim();
+      if (!s) return;
+      if (s.length > maxLen) {
+        if (current) { chunks.push(current); current = ''; }
+        var words = s.split(/\s+/);
+        var piece = '';
+        words.forEach(function (w) {
+          var candidate = piece ? piece + ' ' + w : w;
+          if (candidate.length > maxLen) {
+            if (piece) chunks.push(piece);
+            piece = w.length > maxLen ? w.slice(0, maxLen) : w;
+          } else {
+            piece = candidate;
+          }
+        });
+        if (piece) chunks.push(piece);
+        return;
+      }
+      var combined = current ? current + ' ' + s : s;
+      if (combined.length > maxLen) {
+        if (current) chunks.push(current);
+        current = s;
+      } else {
+        current = combined;
+      }
+    });
+    if (current) chunks.push(current);
+    return chunks.length ? chunks : [text];
+  }
+
+  // Wraps an async "text → audio Blob" fetcher into the common TTS engine
+  // interface, but first splits `text` into <=maxChars chunks and plays
+  // them back-to-back through one <audio> element (queue advances on
+  // `onended`). Needed for providers (Groq/Orpheus) with a short per-request
+  // input limit; onstart fires once, on the very first chunk, and onend
+  // fires once, after the last chunk finishes.
+  function createChunkedHttpTtsEngine(fetchBlobFn, maxChars) {
+    return {
+      speak: function (text, opts, cbs) {
+        var chunks = chunkTextForTts(text, maxChars);
+        var idx = 0, audioEl = null, stopped = false, url = null, started = false;
+
+        function playNext() {
+          if (stopped) return;
+          if (idx >= chunks.length) { if (cbs.onend) cbs.onend(); return; }
+          var piece = chunks[idx++];
+          fetchBlobFn(piece, opts).then(function (blob) {
+            if (stopped) return;
+            if (url) URL.revokeObjectURL(url);
+            url = URL.createObjectURL(blob);
+            audioEl = new Audio(url);
+            try { audioEl.playbackRate = opts.rate || 1; } catch (e) {}
+            audioEl.onplay = function () { if (!started) { started = true; if (cbs.onstart) cbs.onstart(); } };
+            audioEl.onended = function () { playNext(); };
+            audioEl.onerror = function () { if (url) URL.revokeObjectURL(url); if (cbs.onerror) cbs.onerror('audio-playback-error'); };
+            audioEl.play().catch(function () { if (cbs.onerror) cbs.onerror('audio-play-blocked'); });
+          }).catch(function (err) {
+            if (err && err.message === 'no-key') noKeyToast('🔊');
+            if (cbs.onerror) cbs.onerror(err && err.message);
+          });
+        }
+
+        playNext();
+        return {
+          pause:  function () { if (audioEl) audioEl.pause(); },
+          resume: function () { if (audioEl) audioEl.play().catch(function () {}); },
+          stop:   function () { stopped = true; if (audioEl) { audioEl.pause(); audioEl.src = ''; } if (url) URL.revokeObjectURL(url); },
+        };
+      }
+    };
+  }
+
+  // Wraps an async "text → audio Blob" fetcher into the common TTS engine
+  // interface, playing the result through a plain <audio> element. The
+  // controller is returned synchronously (before the fetch resolves) so
+  // callers can attach it to _currentTtsController right away; pause/resume
+  // calls that land before the audio element exists are harmless no-ops.
+  function createHttpTtsEngine(fetchBlobFn) {
+    return {
+      speak: function (text, opts, cbs) {
+        var audioEl = null, stopped = false, url = null;
+        fetchBlobFn(text, opts).then(function (blob) {
+          if (stopped) return;
+          url = URL.createObjectURL(blob);
+          audioEl = new Audio(url);
+          try { audioEl.playbackRate = opts.rate || 1; } catch (e) {}
+          audioEl.onplay = function () { if (cbs.onstart) cbs.onstart(); };
+          audioEl.onended = function () { if (url) URL.revokeObjectURL(url); if (cbs.onend) cbs.onend(); };
+          audioEl.onerror = function () { if (url) URL.revokeObjectURL(url); if (cbs.onerror) cbs.onerror('audio-playback-error'); };
+          audioEl.play().catch(function () { if (cbs.onerror) cbs.onerror('audio-play-blocked'); });
+        }).catch(function (err) {
+          if (err && err.message === 'no-key') noKeyToast('🔊');
+          if (cbs.onerror) cbs.onerror(err && err.message);
+        });
+        return {
+          pause:  function () { if (audioEl) audioEl.pause(); },
+          resume: function () { if (audioEl) audioEl.play().catch(function () {}); },
+          stop:   function () { stopped = true; if (audioEl) { audioEl.pause(); audioEl.src = ''; } },
+        };
+      }
+    };
+  }
+
+  // Extracts the provider's actual error message (e.g. Groq/OpenAI put it at
+  // error.message in the JSON body) so failures show *why* a request was
+  // rejected, not just the bare status code. Encoded into the Error's
+  // message as 'tts-http-<code>::<detail>' since the engine callback chain
+  // only passes a string through onerror(); ttsErrorToast() below decodes it.
+  async function ttsHttpError(res) {
+    var detail = '';
+    try {
+      var data = await res.clone().json();
+      var raw = (data && data.error && (data.error.message || data.error)) || (data && data.message) || '';
+      detail = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    } catch (e) {
+      try { detail = (await res.clone().text()).slice(0, 300); } catch (e2) {}
+    }
+    return new Error('tts-http-' + res.status + (detail ? '::' + detail : ''));
+  }
+
+  async function fetchOpenAiTtsBlob(text) {
+    var apiKey = audioProviderKey('openai');
+    if (!apiKey) throw new Error('no-key');
+    var voice = vs.openaiTtsVoice || 'alloy';
+    var res = await fetch(proxyUrl('https://api.openai.com/v1/audio/speech'), {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice: voice, input: text, response_format: 'mp3' }),
+    });
+    if (!res.ok) throw await ttsHttpError(res);
+    return res.blob();
+  }
+
+  async function fetchGroqTtsBlob(text) {
+    var apiKey = audioProviderKey('groq');
+    if (!apiKey) throw new Error('no-key');
+    // 'playai-tts' was decommissioned by Groq — current model is the
+    // Orpheus v1 English TTS (max 200 chars/request, hence the chunking
+    // in createChunkedHttpTtsEngine above). Voice is user-selectable in
+    // the Voice Settings panel (vs.groqTtsVoice). See:
+    // https://console.groq.com/docs/text-to-speech/orpheus
+    var voice = vs.groqTtsVoice || 'troy';
+    var res = await fetch(proxyUrl('https://api.groq.com/openai/v1/audio/speech'), {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'canopylabs/orpheus-v1-english', voice: voice, input: text, response_format: 'wav' }),
+    });
+    if (!res.ok) throw await ttsHttpError(res);
+    return res.blob();
+  }
+
+  async function fetchElevenLabsTtsBlob(text) {
+    var apiKey = audioProviderKey('elevenlabs');
+    if (!apiKey) throw new Error('no-key');
+    var voiceId = ((config && config.audioProviders && config.audioProviders.elevenlabs && config.audioProviders.elevenlabs.voiceId) || '21m00Tcm4TlvDq8ikWAM').trim();
+    var res = await fetch(proxyUrl('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(voiceId)), {
+      method: 'POST',
+      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+      body: JSON.stringify({ text: text, model_id: 'eleven_multilingual_v2' }),
+    });
+    if (!res.ok) throw await ttsHttpError(res);
+    return res.blob();
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // STT engines — one per provider, common interface:
+  //   start(opts, {onstart, oninterim, onend, onerror}) → {stop()}
+  // Groq/Whisper has no streaming API, so oninterim is never called for it
+  // (a "recognizing…" placeholder is shown in the textarea instead — see
+  // startStt() below); the transcript only arrives once, in onend().
+  // ══════════════════════════════════════════════════════════════════
+  var sttEngines = {
+    browser: {
+      start: function (opts, cbs) {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) {
+          showToast('⚠️ ' + t('voice.sttUnavailable', 'Web Speech API not available.'));
+          if (cbs.onerror) cbs.onerror('unavailable');
+          return { stop: function () {} };
+        }
+        var rec = new SR();
+        // continuous=true + our own silence timer (instead of the browser's
+        // built-in, non-configurable, often-too-short end-of-speech cutoff)
+        // so vs.sttSilenceMs actually governs when listening stops.
+        rec.continuous     = true;
+        rec.interimResults = true;
+        rec.lang           = opts.lang;
+        var finalText = '';
+        var silenceTimer = null, maxTimer = null, stoppedByUs = false;
+
+        function armSilenceTimer() {
+          if (silenceTimer) clearTimeout(silenceTimer);
+          silenceTimer = setTimeout(function () {
+            stoppedByUs = true;
+            try { rec.stop(); } catch (e) {}
+          }, Math.max(1000, vs.sttSilenceMs || 3000));
+        }
+
+        rec.onstart = function () {
+          armSilenceTimer();
+          maxTimer = setTimeout(function () { stoppedByUs = true; try { rec.stop(); } catch (e) {} }, STT_MAX_LISTEN_MS);
+          if (cbs.onstart) cbs.onstart();
+        };
+        rec.onresult = function (e) {
+          var interim = '';
+          for (var i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
+            else                       interim   += e.results[i][0].transcript;
+          }
+          armSilenceTimer(); // any activity (interim or final) resets the silence clock
+          if (cbs.oninterim) cbs.oninterim(interim);
+        };
+        rec.onend   = function () {
+          if (silenceTimer) clearTimeout(silenceTimer);
+          if (maxTimer) clearTimeout(maxTimer);
+          if (cbs.onend) cbs.onend(finalText.trim());
+        };
+        rec.onerror = function (e) {
+          // 'no-speech' fires naturally with continuous=true whenever the
+          // engine briefly hears nothing; our own silence timer already
+          // handles the "stop after N seconds of quiet" behavior, so treat
+          // a no-speech error as a normal end rather than a real failure.
+          if (e.error === 'no-speech') return;
+          if (silenceTimer) clearTimeout(silenceTimer);
+          if (maxTimer) clearTimeout(maxTimer);
+          if (cbs.onerror) cbs.onerror(e.error);
+        };
+        try { rec.start(); }
+        catch (err) { if (cbs.onerror) cbs.onerror('start-failed'); }
+        return { stop: function () { stoppedByUs = true; if (silenceTimer) clearTimeout(silenceTimer); if (maxTimer) clearTimeout(maxTimer); try { rec.stop(); } catch (e) {} } };
+      }
+    },
+    groq: {
+      start: function (opts, cbs) {
+        var recorder = null, stream = null, chunks = [], stopped = false;
+        var audioCtx = null, analyser = null, vadRaf = null, silenceTimer = null, maxTimer = null;
+        if (!navigator.mediaDevices || !window.MediaRecorder) {
+          if (cbs.onerror) cbs.onerror('unavailable');
+          return { stop: function () {} };
+        }
+
+        function stopRecorder() {
+          if (recorder && recorder.state !== 'inactive') recorder.stop();
+          else if (stream) stream.getTracks().forEach(function (tr) { tr.stop(); });
+        }
+
+        // Groq's transcription endpoint has no streaming/VAD of its own — the
+        // MediaRecorder would otherwise just record forever until the mic
+        // button is clicked. We run a small Web Audio API level meter on the
+        // live stream and auto-stop once volume has stayed under a quiet
+        // threshold for vs.sttSilenceMs.
+        function startSilenceDetection(liveStream) {
+          try {
+            var Ctx = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new Ctx();
+            var source = audioCtx.createMediaStreamSource(liveStream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
+            var data = new Uint8Array(analyser.fftSize);
+            var SILENCE_RMS = 0.012;
+
+            function armSilenceTimer() {
+              if (silenceTimer) clearTimeout(silenceTimer);
+              silenceTimer = setTimeout(function () { stopRecorder(); }, Math.max(1000, vs.sttSilenceMs || 3000));
+            }
+            armSilenceTimer();
+
+            function tick() {
+              if (stopped) return;
+              analyser.getByteTimeDomainData(data);
+              var sumSquares = 0;
+              for (var i = 0; i < data.length; i++) {
+                var v = (data[i] - 128) / 128;
+                sumSquares += v * v;
+              }
+              var rms = Math.sqrt(sumSquares / data.length);
+              if (rms > SILENCE_RMS) armSilenceTimer(); // heard something → push the deadline back
+              vadRaf = requestAnimationFrame(tick);
+            }
+            vadRaf = requestAnimationFrame(tick);
+          } catch (e) { /* level-meter is a best-effort convenience; recording still works without it */ }
+        }
+
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+          if (stopped) { s.getTracks().forEach(function (tr) { tr.stop(); }); return; }
+          stream = s;
+          try { recorder = new MediaRecorder(stream); }
+          catch (err) { if (cbs.onerror) cbs.onerror('recorder-failed'); return; }
+          recorder.ondataavailable = function (e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
+          recorder.onstart = function () {
+            startSilenceDetection(stream);
+            maxTimer = setTimeout(function () { stopRecorder(); }, STT_MAX_LISTEN_MS);
+            if (cbs.onstart) cbs.onstart();
+          };
+          recorder.onstop = async function () {
+            stopped = true;
+            if (silenceTimer) clearTimeout(silenceTimer);
+            if (maxTimer) clearTimeout(maxTimer);
+            if (vadRaf) cancelAnimationFrame(vadRaf);
+            if (audioCtx) { try { audioCtx.close(); } catch (e) {} }
+            stream.getTracks().forEach(function (tr) { tr.stop(); });
+            if (!chunks.length) { if (cbs.onend) cbs.onend(''); return; }
+            var blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+            try {
+              var text = await transcribeWithGroq(blob, opts.lang);
+              if (cbs.onend) cbs.onend((text || '').trim());
+            } catch (err) {
+              if (err && err.message === 'no-key') { if (cbs.onerror) cbs.onerror('no-key'); }
+              else if (cbs.onerror) cbs.onerror(err && err.message || 'transcribe-failed');
+            }
+          };
+          recorder.start();
+        }).catch(function () { if (cbs.onerror) cbs.onerror('not-allowed'); });
+        return {
+          stop: function () {
+            stopped = true;
+            if (silenceTimer) clearTimeout(silenceTimer);
+            if (maxTimer) clearTimeout(maxTimer);
+            if (vadRaf) cancelAnimationFrame(vadRaf);
+            stopRecorder();
+          }
+        };
+      }
+    }
+  };
+
+  async function transcribeWithGroq(blob, lang) {
+    var apiKey = audioProviderKey('groq');
+    if (!apiKey) throw new Error('no-key');
+    var form = new FormData();
+    form.append('file', blob, 'audio.webm');
+    form.append('model', 'whisper-large-v3');
+    if (lang) form.append('language', (lang.split('-')[0] || '').toLowerCase());
+    var res = await fetch(proxyUrl('https://api.groq.com/openai/v1/audio/transcriptions'), {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey },
+      body: form,
+    });
+    if (!res.ok) throw new Error('stt-http-' + res.status);
+    var data = await res.json();
+    return data.text || '';
+  }
+
+  // ── STT (provider-agnostic entry points) ────────────────────────
+  var currentSttSession = null;
+
   function toggleStt() {
     if (sttActive) stopStt(); else startStt();
   }
 
   function startStt() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      showToast('⚠️ ' + t('voice.sttUnavailable', 'Web Speech API not available.'));
-      return;
+    var provider = vs.sttProvider || 'browser';
+    if (!hasAudioProviderKey(provider)) { noKeyToast('🎤'); return; }
+    var engine = sttEngines[provider] || sttEngines.browser;
+
+    var ta = getTextarea();
+    var base = ta ? ta.value : '';
+    if (ta) ta.dataset.voiceBase = base;
+
+    if (provider !== 'browser' && ta) {
+      // No streaming STT for HTTP providers → show a placeholder instead of
+      // live interim text, replaced with the real transcript in onend().
+      ta.value = base + (base ? ' ' : '') + '⏺ ' + t('voice.recognizing', 'recognizing…');
+      if (typeof autoResize === 'function') autoResize(ta);
     }
-    webSpeechRec = new SR();
-    webSpeechRec.continuous     = false;
-    webSpeechRec.interimResults = true;
-    webSpeechRec.lang           = vs.sttLang;
 
-    var finalText = '';
-
-    webSpeechRec.onstart = function () {
-      setMicState(true);
-      var ta = getTextarea();
-      if (ta) ta.dataset.voiceBase = ta.value;
-    };
-
-    webSpeechRec.onresult = function (e) {
-      var interim = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
-        else                       interim   += e.results[i][0].transcript;
-      }
-      var ta = getTextarea();
-      if (ta) {
-        var base = ta.dataset.voiceBase || '';
-        ta.value = base + (base && interim ? ' ' : '') + interim;
-        if (typeof autoResize === 'function') autoResize(ta);
-      }
-    };
-
-    webSpeechRec.onend = function () {
-      setMicState(false);
-      var ta = getTextarea();
-      if (ta) {
-        var base = ta.dataset.voiceBase || '';
-        delete ta.dataset.voiceBase;
-        var full = (base + (base && finalText ? ' ' : '') + finalText).trim();
-        ta.value = full;
-        if (typeof autoResize === 'function') autoResize(ta);
-
-        if (full && (vs.sttAutoSend || vs.dialogMode)) {
-          setTimeout(function () {
-            if (typeof sendMessage === 'function') sendMessage();
-            else { var sb = document.getElementById('sendBtn'); if (sb) sb.click(); }
-          }, 150);
+    currentSttSession = engine.start({ lang: vs.sttLang }, {
+      onstart: function () { setMicState(true); },
+      oninterim: function (interim) {
+        var el = getTextarea();
+        if (el) {
+          var b = el.dataset.voiceBase || '';
+          el.value = b + (b && interim ? ' ' : '') + interim;
+          if (typeof autoResize === 'function') autoResize(el);
         }
-      }
-      webSpeechRec = null;
-    };
-
-    webSpeechRec.onerror = function (e) {
-      setMicState(false);
-      var ta = getTextarea();
-      if (ta) delete ta.dataset.voiceBase;
-      if      (e.error === 'not-allowed') showToast('🎤 ' + t('voice.micDenied', 'Microphone access denied.'));
-      else if (e.error === 'no-speech')   showToast('🔇 ' + t('voice.noSpeech',  'No speech detected.'));
-      else                                showToast('STT: ' + e.error);
-      webSpeechRec = null;
-    };
-
-    try { webSpeechRec.start(); }
-    catch (err) {
-      showToast(t('voice.micFailed', 'Microphone could not be started.'));
-      setMicState(false);
-    }
+      },
+      onend: function (finalText) {
+        setMicState(false);
+        currentSttSession = null;
+        var el = getTextarea();
+        if (el) {
+          var b = el.dataset.voiceBase || '';
+          delete el.dataset.voiceBase;
+          var full = (b + (b && finalText ? ' ' : '') + finalText).trim();
+          el.value = full;
+          if (typeof autoResize === 'function') autoResize(el);
+          if (full && (vs.sttAutoSend || vs.dialogMode)) {
+            setTimeout(function () {
+              if (typeof sendMessage === 'function') sendMessage();
+              else { var sb = document.getElementById('sendBtn'); if (sb) sb.click(); }
+            }, 150);
+          }
+        }
+      },
+      onerror: function (err) {
+        setMicState(false);
+        currentSttSession = null;
+        var el = getTextarea();
+        if (el) delete el.dataset.voiceBase;
+        if      (err === 'not-allowed' || err === 'mic-denied') showToast('🎤 ' + t('voice.micDenied', 'Microphone access denied.'));
+        else if (err === 'no-speech')                           showToast('🔇 ' + t('voice.noSpeech',  'No speech detected.'));
+        else if (err === 'no-key')                               noKeyToast('🎤');
+        else if (err === 'unavailable')                          showToast('⚠️ ' + t('voice.sttUnavailable', 'Speech recognition not available.'));
+        else                                                     showToast('STT: ' + err);
+      },
+    });
   }
 
   function stopStt() {
-    if (webSpeechRec) webSpeechRec.stop();
+    if (currentSttSession) currentSttSession.stop();
     setMicState(false);
   }
 
-  // ── TTS ──────────────────────────────────────────────────────────
+  // ── TTS (provider-agnostic entry points) ─────────────────────────
+  var _currentTtsController = null;
+
+  function stopCurrentTtsController() {
+    if (_currentTtsController) { try { _currentTtsController.stop(); } catch (e) {} }
+    _currentTtsController = null;
+  }
+
+  // Speaks `text` with whatever provider is currently selected (vs.ttsProvider),
+  // routing pause/resume/stop through whichever engine ends up handling it.
+  // Any previously playing TTS (browser or HTTP) is stopped first — only one
+  // thing can read aloud at a time, same as the original speechSynthesis-only
+  // behavior.
+  function speakTextWithCurrentProvider(text, cbs) {
+    stopCurrentTtsController();
+    var provider = vs.ttsProvider || 'browser';
+    if (!hasAudioProviderKey(provider)) {
+      noKeyToast('🔊');
+      if (cbs.onerror) cbs.onerror('no-key');
+      return null;
+    }
+    var engine = ttsEngines[provider] || ttsEngines.browser;
+    var opts = { lang: vs.sttLang, rate: vs.ttsRate, pitch: vs.ttsPitch, voiceURI: vs.ttsVoice };
+    _currentTtsController = engine.speak(text, opts, {
+      onstart: function () { if (cbs.onstart) cbs.onstart(); },
+      onend:   function () { _currentTtsController = null; if (cbs.onend) cbs.onend(); },
+      onerror: function (err) { _currentTtsController = null; ttsErrorToast(provider, err); if (cbs.onerror) cbs.onerror(err); },
+    });
+    return _currentTtsController;
+  }
+
+  // Surfaces TTS failures that would otherwise fail silently (previously
+  // onerror just reset UI state with no user-visible feedback). Decodes
+  // 'tts-http-<code>::<detail>' (see ttsHttpError above) into a readable
+  // message, including the provider's own error text when available —
+  // also logged to console in full, since the toast auto-hides quickly and
+  // long provider messages get truncated there.
+  function ttsErrorToast(provider, err) {
+    if (!err || err === 'no-key') return; // 'no-key' is already toasted by noKeyToast() before the engine even runs
+    var httpMatch = /^tts-http-(\d+)(?:::([\s\S]*))?$/.exec(err);
+    if (httpMatch) {
+      var code = httpMatch[1];
+      var detail = httpMatch[2] || '';
+      if (detail) console.error('[TTS ' + provider + '] HTTP ' + code + ':', detail);
+      var suffix = detail ? ' — ' + (detail.length > 140 ? detail.slice(0, 140) + '…' : detail) : '';
+      if (code === '429') {
+        showToast('⏳ ' + tv('voice.ttsQuota', 'TTS ({provider}): quota/balance exhausted (429).{suffix}', { provider, suffix }));
+      } else if (code === '401' || code === '403') {
+        showToast('🔑 ' + tv('voice.ttsAuth', 'TTS ({provider}): API key invalid or rejected ({code}).{suffix}', { provider, code, suffix }));
+      } else if (code === '400') {
+        showToast('⚠️ ' + tv('voice.ttsBadRequest', 'TTS ({provider}): request rejected (400){suffix}.', { provider, suffix: suffix || ' — check model/parameters' }));
+      } else {
+        showToast('⚠️ ' + tv('voice.ttsHttpError', 'TTS ({provider}): error HTTP {code}.{suffix}', { provider, code, suffix }));
+      }
+      return;
+    }
+    if (err === 'audio-play-blocked') {
+      showToast('🔇 ' + t('voice.ttsBlocked', 'Playback blocked — please click the page and try again.'));
+    } else if (err === 'audio-playback-error') {
+      showToast('⚠️ ' + t('voice.ttsPlaybackError', 'Audio playback error.'));
+    } else if (err !== 'unavailable' && err !== 'speechSynthesis-error') {
+      showToast('⚠️ TTS (' + provider + '): ' + err);
+    }
+  }
+
   function toggleTts() {
     if (ttsActive) stopTts(); else speakLastAssistantMessage(null);
   }
 
   function stopTts() {
-    if (window.speechSynthesis) speechSynthesis.cancel();
+    stopCurrentTtsController();
     setTtsState(false);
     dialogPending = false;
   }
@@ -540,39 +1220,17 @@
   }
 
   function speakLastAssistantMessage(onEnd) {
-    if (!window.speechSynthesis) {
-      showToast('🔇 ' + t('voice.ttsUnavailable', 'TTS not available.'));
-      return;
-    }
-    speechSynthesis.cancel();
-
     var text = getLastAssistantText();
     if (!text) {
       showToast(t('voice.noReply', 'No reply found to read aloud.'));
       return;
     }
-
-    var utter  = new SpeechSynthesisUtterance(text);
-    utter.lang  = vs.sttLang;
-    utter.rate  = vs.ttsRate;
-    utter.pitch = vs.ttsPitch;
-
-    if (vs.ttsVoice) {
-      var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === vs.ttsVoice; });
-      if (match.length) utter.voice = match[0];
-    }
-
-    utter.onstart = function () { setTtsState(true); };
-    utter.onend   = function () {
-      setTtsState(false);
-      if (typeof onEnd === 'function') onEnd();
-    };
-    utter.onerror = function () {
-      setTtsState(false);
-      dialogPending = false;
-    };
-
-    speechSynthesis.speak(utter);
+    var ctrl = speakTextWithCurrentProvider(text, {
+      onstart: function () { setTtsState(true); },
+      onend:   function () { setTtsState(false); if (typeof onEnd === 'function') onEnd(); },
+      onerror: function () { setTtsState(false); dialogPending = false; },
+    });
+    if (!ctrl) setTtsState(false);
   }
 
   // ── Bubble TTS (per-bubble voice controls) ───────────────────────
@@ -620,38 +1278,30 @@
   }
 
   function speakBubble(voiceCtrlEl) {
-    if (!window.speechSynthesis) { showToast('🔇 TTS not available.'); return; }
-    speechSynthesis.cancel();
     var text = getBubbleText(voiceCtrlEl);
-    if (!text) { showToast('No text to read.'); return; }
+    if (!text) { showToast(t('voice.noTextToRead', 'No text to read.')); return; }
 
     _currentBubbleCtrl = voiceCtrlEl;
     var btn = voiceCtrlEl.querySelector('.bubble-voice-btn');
 
-    var utter = new SpeechSynthesisUtterance(text);
-    utter.lang  = vs.sttLang;
-    utter.rate  = vs.ttsRate;
-    utter.pitch = vs.ttsPitch;
-    if (vs.ttsVoice) {
-      var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === vs.ttsVoice; });
-      if (match.length) utter.voice = match[0];
-    }
-    utter.onstart = function () {
-      if (btn) btn.classList.add('playing');
-      updateBubbleSubmenuState(voiceCtrlEl, 'playing');
-    };
-    utter.onend = function () {
-      if (btn) btn.classList.remove('playing');
-      voiceCtrlEl.querySelector('.voice-submenu').classList.remove('open');
-      updateBubbleSubmenuState(voiceCtrlEl, 'idle');
-      _currentBubbleCtrl = null;
-    };
-    utter.onerror = function () {
-      if (btn) btn.classList.remove('playing');
-      updateBubbleSubmenuState(voiceCtrlEl, 'idle');
-      _currentBubbleCtrl = null;
-    };
-    speechSynthesis.speak(utter);
+    speakTextWithCurrentProvider(text, {
+      onstart: function () {
+        if (btn) btn.classList.add('playing');
+        updateBubbleSubmenuState(voiceCtrlEl, 'playing');
+      },
+      onend: function () {
+        if (btn) btn.classList.remove('playing');
+        var menu = voiceCtrlEl.querySelector('.voice-submenu');
+        if (menu) menu.classList.remove('open');
+        updateBubbleSubmenuState(voiceCtrlEl, 'idle');
+        _currentBubbleCtrl = null;
+      },
+      onerror: function () {
+        if (btn) btn.classList.remove('playing');
+        updateBubbleSubmenuState(voiceCtrlEl, 'idle');
+        _currentBubbleCtrl = null;
+      },
+    });
   }
 
   function hookBubbleVoiceControls() {
@@ -678,13 +1328,13 @@
         if (action === 'play') {
           speakBubble(ctrl);
         } else if (action === 'pause') {
-          if (window.speechSynthesis) speechSynthesis.pause();
+          if (_currentTtsController) _currentTtsController.pause();
           if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'paused');
         } else if (action === 'resume') {
-          if (window.speechSynthesis) speechSynthesis.resume();
+          if (_currentTtsController) _currentTtsController.resume();
           if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'playing');
         } else if (action === 'stop') {
-          if (window.speechSynthesis) speechSynthesis.cancel();
+          stopCurrentTtsController();
           if (_currentBubbleCtrl) {
             _currentBubbleCtrl.querySelector('.bubble-voice-btn').classList.remove('playing');
             _currentBubbleCtrl.querySelector('.voice-submenu').classList.remove('open');
@@ -776,7 +1426,7 @@
   // Language change hook — no panel rebuild, DOM update only via data-i18n
   window._kicVoiceRetranslate = function () {
     var panel = document.getElementById('voiceSettingsPanel');
-    if (panel) _retranslatePanelDom(panel);
+    if (panel) { _retranslatePanelDom(panel); renderAudioEngineSection(panel); }
     // Update button titles
     if (btnMic) {
       btnMic.title = sttActive ? t('voice.micStop', 'Stop recording') : t('voice.micStart', 'Start voice input');
