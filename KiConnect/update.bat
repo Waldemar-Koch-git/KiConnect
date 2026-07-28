@@ -65,6 +65,14 @@ call :download "comm\kiconnect-proxy.py"
 call :download "comm\kiconnect-voice.js"
 
 echo.
+echo  Downloading language files...
+REM -- comm\_lang didn't exist in older versions - :download creates
+REM    missing folders on its own, so this works on any PC. -----------
+for %%L in (ar bn de el en es fa fr hi it pa ru ta tr ur zh) do (
+    call :download "comm\_lang\%%L.js"
+)
+
+echo.
 call :ensure_render
 
 echo.
