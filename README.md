@@ -18,7 +18,7 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 - **Optional web search.** If you turn it on, the AI can look things up on the internet before answering.
 - **Images and PDFs.** You can paste images or upload PDF files so the AI can read them.
 - **Speak instead of type.** There's voice input as well as a read-aloud function for replies.
-- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Indian (Hindi, Tamil, Bengali, Punjabi, Urdu).
+- **Multiple languages.** The interface is available in: English, German, French, Spanish, Italian, Turkish, Russian, Greek, Simplified Chinese, Arabic, Indian (Hindi, Tamil, Bengali, Punjabi, Urdu), Persian (Farsi).
 - **Several color themes.** From light to dark, including pure-black variants for OLED screens.
 
 ---

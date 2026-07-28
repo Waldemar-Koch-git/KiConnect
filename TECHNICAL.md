@@ -1,4 +1,4 @@
-# Ki-Connect – Technical Documentation
+# Ki-Connect - Technical Documentation
 
 This file contains the technical details of Ki-Connect. A general, non-technical introduction can be found in [README.md](README.md).
 
@@ -18,13 +18,13 @@ Ki-Connect is a locally-run, client-side-encrypted chat client for various AI pr
 - Browser-independent persistence: data lives in `./datas/` on the local server; any browser (Chrome, Firefox, Edge, …) accesses the same accounts
 - Extended Thinking / Reasoning for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.)
   - Anthropic Claude 4+ (Opus, Sonnet, Haiku): Adaptive Thinking with effort levels (low/medium/high) via the `output_config` API
-  - Anthropic Claude 3.7: legacy token budget (1k–32k) plus prompt caching (roughly 90% fewer tokens)
+  - Anthropic Claude 3.7: legacy token budget (1k-32k) plus prompt caching (roughly 90% fewer tokens)
   - OpenAI: reasoning effort (low/medium/high)
 - Optional, user-activated web search: when enabled via the web-search toggle in the toolbar, messages are augmented with live web results before being sent to the AI. It is off by default and only runs when the user turns it on (or sets it to "Always")
   - Modes: manual button, Auto (for current-events queries), Always, or Off
-  - Free engines (no key required): DuckDuckGo, Startpage, SearXNG, Qwant, Yahoo – with automatic fallback chaining
+  - Free engines (no key required): DuckDuckGo, Startpage, SearXNG, Qwant, Yahoo - with automatic fallback chaining
   - Premium engines (API key required): Brave Search, Google Custom Search, Bing/Azure, Mojeek, Yandex
-  - Configurable result count (3–30), 30-minute result cache, locale-aware queries
+  - Configurable result count (3-30), 30-minute result cache, locale-aware queries
   - Automatic URL fetching: if the user's message contains links, the page content is fetched and included as context
 - Chat organization with folders, drag & drop (chats and folders), and branches
 - Image and PDF support (vision models, Ctrl+V paste, PDF text extraction)
@@ -48,6 +48,7 @@ Ki-Connect is a locally-run, client-side-encrypted chat client for various AI pr
   - Bengali (bn)
   - Punjabi (pa)
   - Urdu (ur)
+  - Farsi (fa) <Persian>
 - 12 built-in themes, including OLED variants
   - Standard: `dark`, `white`, `nord`, `dracula`, `forest`, `mocha`, `rose`, `solarized`
   - OLED (pure black): `dark_oled`, `gold_oled`, `emerald_oled`, `red_oled`
@@ -115,6 +116,7 @@ Intended for users without an installed Python. Expects a self-contained, embedd
 ### update.bat
 Downloads the current program files directly from the GitHub repository (`Waldemar-Koch-git/KiConnect`), provided an internet connection is available:
 - `comm/kiconnect.css`, `.html`, `.js`, `-languages-i18n.js`, `-proxy.py`, `-voice.js`
+- all `comm/_lang/*.js` files (the folder is created automatically if it doesn't exist yet, e.g. on older installs)
 - `update.bat` itself
 - additionally checks whether the `comm/_render` folder exists and has content; if it is empty or missing, `_render.zip` is downloaded and extracted automatically
 
@@ -130,7 +132,7 @@ Ki-Connect supports two print modes:
 The printer button in the sidebar toolbar outputs the entire active chat as a print-optimized page. The chat title appears as a heading. Any LaTeX formulas are fully rendered before printing (MathJax must be loaded).
 
 ### Print single message
-The printer icon in a message's action buttons opens a preview dialog. After confirmation, only that single message – including code blocks and formulas – is output in a separate print window.
+The printer icon in a message's action buttons opens a preview dialog. After confirmation, only that single message - including code blocks and formulas - is output in a separate print window.
 
 > Note: some browsers block pop-up windows by default. If the print dialog does not appear, allow pop-ups for `localhost` in your browser settings.
 
@@ -168,16 +170,16 @@ This manual method works on any operating system with Python installed (Windows,
    - **KI Connect NRW**: OpenAI-compatible, server URL: `https://chat.kiconnect.nrw/api/v1`
    - **OpenAI**: API key from [platform.openai.com](https://platform.openai.com)
    - **Anthropic/Claude**: API key from [console.anthropic.com](https://console.anthropic.com)
-   - **OpenRouter**: API key from [openrouter.ai](https://openrouter.ai) – 200+ models
+   - **OpenRouter**: API key from [openrouter.ai](https://openrouter.ai) - 200+ models
    - **Mistral AI**: API key from [console.mistral.ai](https://console.mistral.ai)
    - **Google Gemini**: API key from [aistudio.google.com](https://aistudio.google.com)
    - **xAI Grok**: API key from [console.x.ai](https://console.x.ai)
-   - **Groq**: API key from [console.groq.com](https://console.groq.com) – ultra-fast inference
-   - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) – including DeepSeek 4 & reasoning
+   - **Groq**: API key from [console.groq.com](https://console.groq.com) - ultra-fast inference
+   - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) - including DeepSeek 4 & reasoning
    - **MiniMax**: Api key from [platform.minimax.io](https://platform.minimax.io/console/access)
    - **GLM**: API key from [z.ai](https://z.ai/manage-apikey/apikey-list)
    - **Custom server**: any OpenAI-compatible API (server URL + optional API key)
-3. Select a model – live model lists from providers (brain icon = thinking-capable)
+3. Select a model - live model lists from providers (brain icon = thinking-capable)
 4. Optional: create a user profile for different personas/roles
 
 ---
@@ -187,10 +189,10 @@ This manual method works on any operating system with Python installed (Windows,
 Web search is **off by default**. Ki-Connect can optionally augment messages with live web results before sending them to the AI, but only once the user enables it via the web-search button/toggle in the toolbar (or the Tuning panel). Nothing is searched automatically unless that option has been switched on.
 
 ### Search modes
-- **Manual** (default when enabled) – click the search button next to the input field to enable search for the next message
-- **Auto** – automatically searches for queries about current events, recent news, or time-sensitive topics
-- **Always** – every message triggers a web search
-- **Off** – web search disabled (the default state)
+- **Manual** (default when enabled) - click the search button next to the input field to enable search for the next message
+- **Auto** - automatically searches for queries about current events, recent news, or time-sensitive topics
+- **Always** - every message triggers a web search
+- **Off** - web search disabled (the default state)
 
 ### Search engines
 | Engine | Key required | Notes |
@@ -217,9 +219,9 @@ If the user's message contains `http://` or `https://` links, Ki-Connect automat
 A sidebar folder becomes a "project" by linking it (via `agentProject`) to a real folder on disk, registered through the proxy's Agent-API. Focusing a chat on that folder runs each message through an agentic tool loop instead of a plain completion; there is only one model picker in the app (the header's), used for both normal chat and agent turns.
 
 ### Access modes (per project)
-- **Simulate** – reports what it would do; no file is changed and no command runs
-- **Confirm** – asks for confirmation before every file change or command
-- **Auto** – applies changes without asking
+- **Simulate** - reports what it would do; no file is changed and no command runs
+- **Confirm** - asks for confirmation before every file change or command
+- **Auto** - applies changes without asking
 
 Shell command execution is a separate, explicit opt-in per project and is off by default regardless of access mode.
 
@@ -270,7 +272,7 @@ Ki-Connect supports multiple local accounts on the same machine. All data is sto
     └── chats.json              (chat history, AES-256-GCM encrypted)
 ```
 
-> Note: `_registry.json` contains no sensitive data – only account names, the PBKDF2 password hash, and the encryption salt. Chats, API keys, and all content are stored exclusively encrypted in the account subfolders. All accounts share the same server process and machine, so this is account separation for cooperating users on one computer, not isolation between mutually untrusted tenants.
+> Note: `_registry.json` contains no sensitive data - only account names, the PBKDF2 password hash, and the encryption salt. Chats, API keys, and all content are stored exclusively encrypted in the account subfolders. All accounts share the same server process and machine, so this is account separation for cooperating users on one computer, not isolation between mutually untrusted tenants.
 
 Chrome, Firefox, and Edge on the same PC access the same accounts and chats without manual synchronization.
 
@@ -280,8 +282,8 @@ Chrome, Firefox, and Edge on the same PC access the same accounts and chats with
 
 For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.):
 
-- **Anthropic Claude 4+** (Opus 4.6, Sonnet 4.6, Haiku 4.5): adaptive thinking – three effort levels (low/medium/high) using the new `output_config.effort` API. Temperature is automatically omitted for these models.
-- **Anthropic Claude 3.7**: legacy mode – continuous token budget (1,024–32,000 tokens)
+- **Anthropic Claude 4+** (Opus 4.6, Sonnet 4.6, Haiku 4.5): adaptive thinking - three effort levels (low/medium/high) using the new `output_config.effort` API. Temperature is automatically omitted for these models.
+- **Anthropic Claude 3.7**: legacy mode - continuous token budget (1,024-32,000 tokens)
 - **OpenAI**: discrete levels (low/medium/high) for reasoning effort
 - **Display**: collapsible "thinking process" block above the response
 
@@ -343,7 +345,7 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 
 | Risk | Assessment | Recommendation |
 |---|---|---|
-| Compromised systems (malware) | Limited protection – malware with user rights can access the browser/proxy | Use on clean systems only; rotate API keys if suspicious |
+| Compromised systems (malware) | Limited protection - malware with user rights can access the browser/proxy | Use on clean systems only; rotate API keys if suspicious |
 | Man-in-the-middle | TLS validation active (`verify=True`), proxy forwards HTTPS directly | Use on trusted networks only |
 | XSS via AI output | DOMPurify filters, but complex payloads are theoretically possible | Exercise caution with suspicious outputs |
 | Browser restart | After closing the tab: brief re-login required (RAM key gone) | Expected, secure behavior |
@@ -377,6 +379,6 @@ flowchart LR
 
 ## License
 
-This project is licensed under a custom non-commercial license (MIT-style terms, non-commercial use only; not OSI-approved) – see [LICENSE](LICENSE). Non-commercial use, copying, modification, merging, publishing, and distribution are permitted, provided the copyright notice and license text are included. Commercial use, selling, or sublicensing for commercial purposes is not permitted without prior written permission from the author. The software is provided "as is", without warranty of any kind.
+This project is licensed under a custom non-commercial license (MIT-style terms, non-commercial use only; not OSI-approved) - see [LICENSE](LICENSE). Non-commercial use, copying, modification, merging, publishing, and distribution are permitted, provided the copyright notice and license text are included. Commercial use, selling, or sublicensing for commercial purposes is not permitted without prior written permission from the author. The software is provided "as is", without warranty of any kind.
 
 **Disclaimer:** This software is provided "as is". No liability is accepted for API costs, data loss, or security incidents. Use at your own risk.
