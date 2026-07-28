@@ -1126,7 +1126,7 @@ CORS_HEADERS = {
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': (
         'Authorization, Content-Type, x-api-key, '
-        'X-Subscription-Token, '
+        'X-Subscription-Token, xi-api-key, '
         'anthropic-version, anthropic-dangerous-direct-browser-access, '
         'HTTP-Referer, X-Title, '
         'Ocp-Apim-Subscription-Key'           # Bing Search API
@@ -1159,6 +1159,7 @@ SECURITY_HEADERS = {
         "https://api.x.ai https://api.groq.com "
         "https://api.deepseek.com https://api.minimax.io "
         "https://api.z.ai https://api.moonshot.ai "
+        "https://api.elevenlabs.io "
         "https://api.search.brave.com https://html.duckduckgo.com "
         "https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com "
         "https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com "
@@ -1168,6 +1169,11 @@ SECURITY_HEADERS = {
         "https://searx.tiekoetter.com https://search.sapti.me https://searx.prvcy.eu "
         "https://searx.fmac.xyz https://search.ononoki.org; "
         "img-src 'self' data: blob:; "
+        # TTS providers (OpenAI/ElevenLabs/Groq) return audio bytes that get
+        # played back via `new Audio(URL.createObjectURL(blob))` — needs
+        # media-src to allow blob:, otherwise it silently falls back to
+        # default-src 'self' and playback is blocked.
+        "media-src 'self' blob:; "
         "font-src 'self'; "
         "worker-src blob:; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
@@ -1227,6 +1233,7 @@ def _proxy_request(target_url):
     ALLOWED_REQ_HEADERS = {
         'authorization','content-type','x-api-key',
         'x-subscription-token',
+        'xi-api-key',                          # ElevenLabs TTS auth
         'anthropic-version','anthropic-dangerous-direct-browser-access','anthropic-beta',
         'accept','http-referer','x-title','origin',
         'ocp-apim-subscription-key',          # Bing Search API
@@ -1269,7 +1276,7 @@ def _proxy_request(target_url):
                 for chunk in upstream.iter_content(chunk_size=8192):
                     if chunk: yield chunk
             except Exception as e:
-                print(f'  Stream-Fehler: {type(e).__name__}')
+                print(f'  Stream error: {type(e).__name__}')
 
         print(f'  <- {upstream.status_code}')
         return Response(generate(), status=upstream.status_code, headers=resp_headers)

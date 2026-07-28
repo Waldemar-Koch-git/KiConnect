@@ -87,7 +87,7 @@ function applyTranslations() {
   });
   const btn = document.getElementById('langBtnLabel');
   if (btn) btn.textContent = LANGUAGES[currentLang]?.code || currentLang.toUpperCase();
-  document.documentElement.dir = ['ar', 'ur'].includes(currentLang) ? 'rtl' : 'ltr';
+  document.documentElement.dir = (typeof RTL_LANGS !== 'undefined' ? RTL_LANGS : ['ar', 'ur']).includes(currentLang) ? 'rtl' : 'ltr';
   document.documentElement.lang = currentLang;
   if (typeof syncCustomDropdown === 'function') {
     const hiddenSel = document.getElementById('modelSelector');
@@ -490,6 +490,10 @@ const DEFAULT_CONFIG = {
   thinkingEnabled: false, thinkingIntensity: 2, thinkingBudget: 8000,
   webSearchMode: 'manual', webSearchEngine: 'free', webSearchApiKey: '', webSearchResultCount: 8,
   webSearchEnabled: false, webLinkEnabled: false,
+  // TTS/STT provider API keys (OpenAI, ElevenLabs, Groq). Lives inside `config` (not
+  // localStorage) so it goes through the same AES-GCM-256 encrypt/decrypt cycle as
+  // everything else in save()/load(). Read (read-only) by kiconnect-voice.js.
+  audioProviders: { openai: { apiKey: '' }, elevenlabs: { apiKey: '', voiceId: '' }, groq: { apiKey: '' } },
 };
 // Returns a deep copy of DEFAULT_CONFIG, used to initialize or reset app configuration.
 function freshConfig() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
@@ -1238,6 +1242,7 @@ const USE_PROXY = (window.location.hostname === 'localhost' || window.location.h
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
   'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai', 'api.moonshot.ai',
+  'api.elevenlabs.io',
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
   'www.googleapis.com','api.bing.microsoft.com','api.mojeek.com','yandex.com',
@@ -1981,6 +1986,15 @@ function syncSettingsPanel() {
   if (webCountEl) webCountEl.value = config.webSearchResultCount || 8;
   if (webCountVal) webCountVal.textContent = config.webSearchResultCount || 8;
   updateWebSearchButton();
+  // ttsProvider/sttProvider are chosen values that live in kiconnect-voice.js's own
+  // (unencrypted, non-sensitive) settings object, not in `config` — only the API
+  // keys themselves live in config.audioProviders. window.kicVoiceGetSetting/
+  // SetSetting is the small bridge kiconnect-voice.js exposes for that.
+  const ttsProviderEl = document.getElementById('ttsProviderSelect');
+  const sttProviderEl = document.getElementById('sttProviderSelect');
+  if (ttsProviderEl) ttsProviderEl.value = (window.kicVoiceGetSetting?.('ttsProvider')) || 'browser';
+  if (sttProviderEl) sttProviderEl.value = (window.kicVoiceGetSetting?.('sttProvider')) || 'browser';
+  updateAudioProviderKeyUI();
   // Populate account name field
   const accNameInput = document.getElementById('accountNameInput');
   if (accNameInput && _activeAccountId) {
@@ -4984,6 +4998,117 @@ function updateWebSearchKeyUI(engine) {
   if (input) input.placeholder = i.ph;
 }
 
+// TTS providers that require an API key (everything except the free browser voice).
+function ttsProviderNeedsKey(p) { return p === 'openai' || p === 'elevenlabs' || p === 'groq'; }
+// STT providers that require an API key (everything except the free browser STT).
+function sttProviderNeedsKey(p) { return p === 'groq'; }
+
+// t() falls back to the raw key when a translation is missing, which isn't
+// presentable UI text. ta() falls back to a real string instead — used for
+// the new Audio keys, since kiconnect-languages-i18n.js is deliberately not
+// touched in this change (real translations to be added separately later).
+function ta(key, fallback) { const v = t(key); return v === key ? fallback : v; }
+
+const AUDIO_PROVIDER_KEY_INFO = {
+  openai:     { label: () => ta('audio.ttsKeyLabelOpenAI', 'OpenAI API key'),     hint: () => ta('audio.ttsHintOpenAI', 'tts-1 / tts-1-hd / gpt-4o-mini-tts. Usage-based pricing. Stored encrypted with your account data.'),     ph: 'sk-...' },
+  elevenlabs: { label: () => ta('audio.ttsKeyLabelElevenLabs', 'ElevenLabs API key'), hint: () => ta('audio.ttsHintElevenLabs', 'Very natural voices, more expensive. Requires your own ElevenLabs account. Stored encrypted with your account data.'), ph: 'el_...' },
+  groq:       { label: () => ta('audio.ttsKeyLabelGroq', 'Groq API key'),       hint: () => ta('audio.ttsHintGroq', 'Cheap, OpenAI-compatible. Stored encrypted with your account data.'),       ph: 'gsk_...' },
+};
+
+// Shows/hides + relabels the TTS and STT API-key fields in the Audio tuning-panel
+// section depending on the selected provider, and fills them with the (decrypted)
+// value already stored in config.audioProviders. Same pattern as updateWebSearchKeyUI().
+function updateAudioProviderKeyUI() {
+  config.audioProviders = config.audioProviders || {};
+
+  // ── TTS ──
+  const ttsProvider  = document.getElementById('ttsProviderSelect')?.value || 'browser';
+  const ttsGroup      = document.getElementById('ttsApiKeyGroup');
+  const ttsLabel      = document.getElementById('ttsApiKeyLabel');
+  const ttsHint       = document.getElementById('ttsApiKeyHint');
+  const ttsInput      = document.getElementById('ttsApiKey');
+  const voiceIdGroup  = document.getElementById('ttsVoiceIdGroup');
+  const voiceIdInput  = document.getElementById('ttsVoiceId');
+  if (ttsGroup) {
+    const needsKey = ttsProviderNeedsKey(ttsProvider);
+    ttsGroup.style.display = needsKey ? 'block' : 'none';
+    if (needsKey) {
+      const info = AUDIO_PROVIDER_KEY_INFO[ttsProvider];
+      if (ttsLabel) ttsLabel.textContent = info.label();
+      if (ttsHint)  ttsHint.textContent  = info.hint();
+      if (ttsInput) ttsInput.placeholder = info.ph;
+      if (ttsInput) ttsInput.value = config.audioProviders[ttsProvider]?.apiKey || '';
+    }
+  }
+  if (voiceIdGroup) {
+    voiceIdGroup.style.display = ttsProvider === 'elevenlabs' ? 'block' : 'none';
+    if (voiceIdInput && ttsProvider === 'elevenlabs') voiceIdInput.value = config.audioProviders.elevenlabs?.voiceId || '';
+  }
+
+  // ── STT ──
+  const sttProvider = document.getElementById('sttProviderSelect')?.value || 'browser';
+  const sttGroup     = document.getElementById('sttApiKeyGroup');
+  const sttLabel     = document.getElementById('sttApiKeyLabel');
+  const sttHint      = document.getElementById('sttApiKeyHint');
+  const sttInput     = document.getElementById('sttApiKey');
+  if (sttGroup) {
+    const needsKey = sttProviderNeedsKey(sttProvider);
+    sttGroup.style.display = needsKey ? 'block' : 'none';
+    if (needsKey) {
+      if (sttLabel) sttLabel.textContent = ta('audio.sttKeyLabelGroq', 'Groq API key');
+      if (sttHint)  sttHint.textContent  = ta('audio.sttHintGroq', 'Cheap, good with dialects. No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.');
+      if (sttInput) sttInput.value = config.audioProviders.groq?.apiKey || '';
+    }
+  }
+}
+
+// ── Tuning panel: generic collapse/expand for every top-level section ──
+// Wraps each #tuningPanel section's content (from its .section-header up to
+// the next .section-header or <hr class="divider">, whichever comes first —
+// the divider itself is left outside the wrapper so it stays visible as a
+// permanent boundary even while the preceding section is collapsed) into a
+// .tuning-section div, adds a clickable arrow to the header, and persists the
+// open/closed state per section in localStorage. Idempotent — runs once.
+function initTuningSectionCollapse() {
+  const panel = document.getElementById('tuningPanel');
+  if (!panel || panel.dataset.collapseInit) return;
+  panel.dataset.collapseInit = '1';
+
+  const headers = Array.from(panel.querySelectorAll(':scope > .section-header'));
+  headers.forEach(header => {
+    const sectionId = (header.getAttribute('data-i18n') || header.textContent || '')
+      .trim().replace(/\s+/g, '-').toLowerCase() || 'section';
+
+    header.classList.add('tuning-collapsible');
+    const arrow = document.createElement('span');
+    arrow.className = 'tuning-section-arrow';
+    arrow.textContent = '▸';
+    header.insertBefore(arrow, header.firstChild);
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'tuning-section';
+    wrapper.dataset.sectionId = sectionId;
+    let node = header.nextSibling;
+    const toMove = [];
+    while (node && !(node.nodeType === 1 && (node.classList.contains('section-header') || (node.tagName === 'HR' && node.classList.contains('divider'))))) {
+      toMove.push(node);
+      node = node.nextSibling;
+    }
+    toMove.forEach(n => wrapper.appendChild(n));
+    header.insertAdjacentElement('afterend', wrapper);
+
+    const storeKey = 'kic_tuning_collapsed_' + sectionId;
+    const collapsed = localStorage.getItem(storeKey) === '1';
+    if (collapsed) { wrapper.classList.add('collapsed'); header.classList.add('collapsed'); }
+
+    header.addEventListener('click', () => {
+      const nowCollapsed = wrapper.classList.toggle('collapsed');
+      header.classList.toggle('collapsed', nowCollapsed);
+      try { localStorage.setItem(storeKey, nowCollapsed ? '1' : '0'); } catch {}
+    });
+  });
+}
+
 const SEARXNG_PUBLIC_INSTANCES = [
   'https://searx.be','https://searxng.world','https://search.bus-hit.me',
   'https://searx.tiekoetter.com','https://search.sapti.me',
@@ -6451,7 +6576,7 @@ function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t
 // Opens the Settings panel.
 function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
 // Opens the Tuning panel.
-function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');}
+function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');initTuningSectionCollapse();}
 // Opens the Profiles panel.
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
 // Updates the intro/welcome panel's provider-status summary text.
@@ -7341,6 +7466,39 @@ function setupEventListeners(){
     config.webSearchEngine = e.target.value || 'free';
     updateWebSearchKeyUI(config.webSearchEngine);
     save();
+  });
+
+  // Audio (TTS/STT providers)
+  document.getElementById('ttsProviderSelect')?.addEventListener('change', e=>{
+    const provider = e.target.value || 'browser';
+    window.kicVoiceSetSetting?.('ttsProvider', provider);
+    updateAudioProviderKeyUI();
+    save();
+  });
+  document.getElementById('ttsApiKey')?.addEventListener('input', e=>{
+    const provider = document.getElementById('ttsProviderSelect')?.value || 'openai';
+    config.audioProviders = config.audioProviders || {};
+    config.audioProviders[provider] = config.audioProviders[provider] || {};
+    config.audioProviders[provider].apiKey = e.target.value.trim();
+    scheduleTuningSave();
+  });
+  document.getElementById('ttsVoiceId')?.addEventListener('input', e=>{
+    config.audioProviders = config.audioProviders || {};
+    config.audioProviders.elevenlabs = config.audioProviders.elevenlabs || {};
+    config.audioProviders.elevenlabs.voiceId = e.target.value.trim();
+    scheduleTuningSave();
+  });
+  document.getElementById('sttProviderSelect')?.addEventListener('change', e=>{
+    const provider = e.target.value || 'browser';
+    window.kicVoiceSetSetting?.('sttProvider', provider);
+    updateAudioProviderKeyUI();
+    save();
+  });
+  document.getElementById('sttApiKey')?.addEventListener('input', e=>{
+    config.audioProviders = config.audioProviders || {};
+    config.audioProviders.groq = config.audioProviders.groq || {};
+    config.audioProviders.groq.apiKey = e.target.value.trim();
+    scheduleTuningSave();
   });
 
   // Thinking Toggle

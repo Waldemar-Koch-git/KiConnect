@@ -1,33 +1,31 @@
 // ================================================================
-// kiconnect-agent.js  –  Coding-Agent module (v3.0)
+// kiconnect-agent.js – Coding-Agent module (v3.0)
 //
 // Self-contained, bolt-on module (same pattern as kiconnect-voice.js).
 // Design:
 //
-//   - A "project" is just a REAL sidebar folder (the same `folders`
-//     array the app already renders) that carries an extra
-//     `agentProject` field pointing at its registered real-filesystem
-//     folder on the local proxy (see /agent/projects). That's why
-//     project folders show up exactly where every other folder does —
-//     because they *are* folders.
-//   - The chat you're focused on is "project-focused" simply if its
-//     `folderId` points at such a folder. A small chip next to the
-//     mic/TTS controls, and a matching toggle next to the header's
-//     model picker, let you focus/unfocus/create a project without
-//     leaving the normal chat flow — pick a project, type, send, same
-//     as any other message. No separate task box, no separate log.
-//   - There is deliberately only ONE model picker in the whole app —
-//     the header's — for both normal chat and agent turns. Whatever
-//     model/provider is selected there (including its thinking/
-//     reasoning-effort settings) is what the agent uses too; nothing
-//     agent-specific is duplicated. Per project, only the autonomy
-//     mode (auto / confirm / simulate) is remembered separately, since
+//   - A "project" is a REAL sidebar folder (the same `folders` array
+//     the app already renders) with an extra `agentProject` field
+//     pointing at its registered filesystem folder on the local proxy
+//     (see /agent/projects). Project folders appear wherever normal
+//     folders do, because they are folders.
+//   - A chat is "project-focused" simply when its `folderId` points at
+//     such a folder. A chip next to the mic/TTS controls, plus a
+//     toggle next to the header's model picker, let you focus/unfocus/
+//     create a project without leaving the normal chat flow — pick a
+//     project, type, send, same as any other message. No separate task
+//     box or log.
+//   - There is deliberately only ONE model picker app-wide — the
+//     header's — for both normal chat and agent turns, including its
+//     thinking/reasoning-effort settings; nothing agent-specific is
+//     duplicated. Per project, only the autonomy mode
+//     (auto / confirm / simulate) is remembered separately, since
 //     that's a policy choice, not a model choice.
 //   - Sending a message in a focused chat runs the agent's tool loop
-//     instead of a plain completion. The reply appears as a normal
-//     assistant bubble; each tool call is rendered as a collapsed
-//     <details> card (closed by default) so the chat stays readable —
-//     similar to how Claude Code / Codex show step traces.
+//     instead of a plain completion. The reply is a normal assistant
+//     bubble; each tool call renders as a collapsed <details> card
+//     (closed by default) to keep the chat readable — similar to how
+//     Claude Code / Codex show step traces.
 // ================================================================
 
 (function () {

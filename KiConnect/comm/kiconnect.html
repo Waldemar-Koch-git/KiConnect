@@ -10,8 +10,9 @@
     default-src 'self';
     script-src  'self';
     style-src   'self' 'unsafe-inline';
-    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com https://api.langsearch.com;
+    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.elevenlabs.io https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com https://api.langsearch.com;
     img-src     'self' data: blob:;
+    media-src   'self' blob:;
     font-src    'self';
     worker-src  blob:;
     frame-src   'none';
@@ -33,7 +34,7 @@
        previously the two disagreed
        (meta said 'self', header said 'none'); the header always won in
        practice, this just removes the confusing mismatch. -->
-  <title>AI✨ Chat/Agent (3.1.0)</title>
+  <title>AI✨ Chat/Agent (3.2.0)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -358,7 +359,50 @@
     </div>
   </div>
 
-  <!-- 5. Math rendering (LaTeX / MathJax) -->
+  <!-- 5. Audio (TTS/STT providers) -->
+  <hr class="divider">
+  <div class="section-header" data-i18n="audio.title">🔊 Audio</div>
+
+  <div class="setting-group">
+    <div class="setting-label" data-i18n="audio.ttsLabel">Speech output (TTS)</div>
+    <select class="setting-input" id="ttsProviderSelect">
+      <option value="browser" data-i18n="audio.ttsBrowser">Browser/system voice (free)</option>
+      <option value="openai" data-i18n="audio.ttsOpenAI">OpenAI TTS (key required)</option>
+      <option value="elevenlabs" data-i18n="audio.ttsElevenLabs">ElevenLabs (key required)</option>
+      <option value="groq" data-i18n="audio.ttsGroq">Groq TTS (key required)</option>
+    </select>
+  </div>
+  <div class="setting-group" id="ttsApiKeyGroup" style="display:none;">
+    <div class="setting-label" id="ttsApiKeyLabel" data-i18n="audio.ttsKeyLabelOpenAI">OpenAI API key</div>
+    <input class="setting-input" type="password" id="ttsApiKey" placeholder="sk-...">
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" id="ttsApiKeyHint" data-i18n="audio.ttsHintOpenAI">
+      Stored encrypted with your account data.
+    </div>
+  </div>
+  <div class="setting-group" id="ttsVoiceIdGroup" style="display:none;">
+    <div class="setting-label" data-i18n="audio.ttsVoiceId">Voice ID (ElevenLabs)</div>
+    <input class="setting-input" type="text" id="ttsVoiceId" placeholder="21m00Tcm4TlvDq8ikWAM">
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" data-i18n="audio.ttsVoiceIdHint">
+      Free-text voice ID from ElevenLabs (default: "Rachel").
+    </div>
+  </div>
+
+  <div class="setting-group" style="margin-top:18px;">
+    <div class="setting-label" data-i18n="audio.sttLabel">Speech recognition (STT)</div>
+    <select class="setting-input" id="sttProviderSelect">
+      <option value="browser" data-i18n="audio.sttBrowser">Browser/Web Speech API (free)</option>
+      <option value="groq" data-i18n="audio.sttGroq">Groq Whisper (key required)</option>
+    </select>
+  </div>
+  <div class="setting-group" id="sttApiKeyGroup" style="display:none;">
+    <div class="setting-label" id="sttApiKeyLabel" data-i18n="audio.sttKeyLabelGroq">Groq API key</div>
+    <input class="setting-input" type="password" id="sttApiKey" placeholder="gsk_...">
+    <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" id="sttApiKeyHint" data-i18n="audio.sttHintGroq">
+      Stored encrypted with your account data. No live interim text with Whisper (no streaming) — a spinner is shown while recognizing instead.
+    </div>
+  </div>
+
+  <!-- 6. Math rendering (LaTeX / MathJax) -->
   <hr class="divider">
   <div class="section-header" data-i18n="tuning.mathTitle">🧮 Math rendering</div>
   <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;" data-i18n="tuning.mathDesc">
