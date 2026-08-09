@@ -24,11 +24,13 @@
     ttsVoice:    '',
     sttAutoSend: false,
     dialogMode:  false,   // Dialog mode: read AI response aloud → then listen again
-    ttsProvider: 'browser',   // 'browser' | 'openai' | 'elevenlabs' | 'groq'
-    sttProvider: 'browser',   // 'browser' | 'groq'
+    ttsProvider: 'browser',   // 'browser' | 'openai' | 'elevenlabs' | 'groq' | 'gemini'
+    sttProvider: 'browser',   // 'browser' | 'groq' | 'gemini'
     sttSilenceMs: 3000,    // how long to wait in silence before auto-stopping listening
     groqTtsVoice: 'troy',     // Groq/Orpheus TTS speaker persona
     openaiTtsVoice: 'alloy',  // OpenAI gpt-4o-mini-tts speaker persona
+    geminiTtsVoice: 'Kore',   // Gemini TTS prebuilt voice name
+    gcloudTtsVoice: 'Aoede',  // Google Cloud TTS Chirp 3: HD persona (combined with vs.sttLang → "de-DE-Chirp3-HD-Aoede")
     ...loadSettings(),
   };
 
@@ -38,11 +40,8 @@
   var STT_MAX_LISTEN_MS = 90000;
 
   // ── Bridge to the Tuning panel's Audio section (kiconnect.js) ──────
-  // ttsProvider/sttProvider are unsensitive choices that live here in `vs`
-  // (localStorage), same as rate/pitch/lang. The actual API keys live
-  // encrypted in config.audioProviders (kiconnect.js) and are only read
-  // here, never written. This is the small two-way bridge the Tuning
-  // panel's provider <select> elements use to read/write the choice.
+  // Provider choices live in `vs` (localStorage); API keys stay encrypted in
+  // config.audioProviders and are only read here, never written.
   window.kicVoiceGetSetting = function (key) { return vs[key]; };
   window.kicVoiceSetSetting = function (key, value) {
     vs[key] = value;
@@ -53,13 +52,13 @@
   // ── State ──────────────────────────────────────────────────────
   let sttActive     = false;
   let ttsActive     = false;
+  let ttsPaused     = false;
   let dialogPending = false;
-  let btnMic, btnTts, btnVoiceSettings;
+  let btnMic, btnTts, btnTtsPause, btnVoiceSettings;
 
-  // ── i18n helper function ──────────────────────────────────────
-  // TRANSLATIONS (const) and currentLang (let) are defined as
-  // global lexical bindings in other scripts – they do NOT appear on window,
-  // but are accessible as plain identifiers from within this IIFE.
+  // ── i18n helper ──────────────────────────────────────────────
+  // TRANSLATIONS/currentLang are global lexical bindings (not on window) but
+  // still accessible as plain identifiers from inside this IIFE.
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
@@ -71,9 +70,7 @@
     } catch(e) {}
     return fallback || key;
   }
-  // Like t(), but substitutes {placeholder} tokens in the resolved string —
-  // used for messages with dynamic content (provider name, HTTP code, etc.)
-  // so a real translation still gets those values instead of being static.
+  // Like t(), but substitutes {placeholder} tokens (dynamic values like provider/HTTP code).
   function tv(key, fallbackTemplate, vars) {
     let s = t(key, fallbackTemplate);
     if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v ?? ''); });
@@ -108,6 +105,10 @@
   var SVG_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
 
   var SVG_SPEAKER_STOP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke="#e74c3c"/><line x1="17" y1="9" x2="23" y2="15" stroke="#e74c3c"/></svg>';
+
+  // Pause/Resume toggle next to the main 🔊 button while it's active.
+  var SVG_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+  var SVG_RESUME = '<svg viewBox="0 0 24 24" fill="currentColor" width="15" height="15"><polygon points="6 4 20 12 6 20 6 4"/></svg>';
 
   var SVG_GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
@@ -177,12 +178,56 @@
     btnMic.innerHTML = active ? SVG_MIC_STOP : SVG_MIC;
   }
 
-  function setTtsState(active) {
-    ttsActive = active;
-    if (!btnTts) return;
-    btnTts.classList.toggle('voice-active', active);
-    btnTts.title    = active ? t('voice.ttsStop',  'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
-    btnTts.innerHTML = active ? SVG_SPEAKER_STOP : SVG_SPEAKER;
+  // ── Unified TTS UI sync ────────────────────────────────────────────
+  // Only one thing can be read aloud at a time (see stopCurrentTtsController),
+  // so the main 🔊 button and whichever bubble's Play button is involved
+  // must always show the same play/pause state, no matter which one the
+  // user clicked ("induced" state). state: 'idle' | 'playing' | 'paused'.
+  // bubbleCtrl: the .bubble-voice-controls element that triggered playback,
+  // or null when triggered from the main button (in which case we mirror
+  // onto the last-assistant-message bubble, since the main button reads
+  // that same text).
+  function syncTtsUi(state, bubbleCtrl) {
+    ttsActive = state !== 'idle';
+    ttsPaused = state === 'paused';
+
+    if (btnTts) {
+      btnTts.classList.toggle('voice-active', ttsActive);
+      btnTts.title    = ttsActive ? t('voice.ttsStop',  'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
+      btnTts.innerHTML = ttsActive ? SVG_SPEAKER_STOP : SVG_SPEAKER;
+    }
+    setTtsPauseButtonState(state === 'idle' ? 'hidden' : state);
+
+    var targetBubble = state === 'idle' ? null : (bubbleCtrl || findLastBubbleVoiceControls());
+    if (_currentBubbleCtrl && _currentBubbleCtrl !== targetBubble) setBubbleVoiceUi(_currentBubbleCtrl, 'idle');
+    if (targetBubble) setBubbleVoiceUi(targetBubble, state);
+    _currentBubbleCtrl = targetBubble;
+  }
+
+  // Shows/hides + relabels the little Pause/Resume button next to the main
+  // 🔊 button. 'hidden' when nothing is playing, 'playing' shows a Pause
+  // icon, 'paused' shows a Resume icon.
+  function setTtsPauseButtonState(state) {
+    if (!btnTtsPause) return;
+    if (state === 'hidden') {
+      btnTtsPause.style.display = 'none';
+      return;
+    }
+    btnTtsPause.style.display = '';
+    var paused = state === 'paused';
+    btnTtsPause.innerHTML = paused ? SVG_RESUME : SVG_PAUSE;
+    btnTtsPause.title = paused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
+  }
+
+  function toggleTtsPause() {
+    if (!_currentTtsController) return;
+    if (ttsPaused) {
+      _currentTtsController.resume();
+      syncTtsUi('playing', _currentBubbleCtrl);
+    } else {
+      _currentTtsController.pause();
+      syncTtsUi('paused', _currentBubbleCtrl);
+    }
   }
 
   // ── Insert buttons (LEFT of send button) ───────────────────
@@ -212,6 +257,16 @@
     btnTts.innerHTML = SVG_SPEAKER;
     btnTts.addEventListener('click', toggleTts);
 
+    // Pause/Resume — hidden until playback starts (see setTtsPauseButtonState).
+    btnTtsPause = document.createElement('button');
+    btnTtsPause.type      = 'button';
+    btnTtsPause.id        = 'voiceTtsPauseBtn';
+    btnTtsPause.className = 'voice-btn';
+    btnTtsPause.style.display = 'none';
+    btnTtsPause.title     = t('voice.ttsPause', 'Pause speech output');
+    btnTtsPause.innerHTML = SVG_PAUSE;
+    btnTtsPause.addEventListener('click', function (e) { e.stopPropagation(); toggleTtsPause(); });
+
     btnVoiceSettings = document.createElement('button');
     btnVoiceSettings.type      = 'button';
     btnVoiceSettings.id        = 'voiceSettingsBtn';
@@ -225,6 +280,7 @@
     // "voice" group, visually distinct from the other input-actions icons.
     group.appendChild(btnMic);
     group.appendChild(btnTts);
+    group.appendChild(btnTtsPause);
     group.appendChild(btnVoiceSettings);
     actions.insertBefore(group, sendBtn);
 
@@ -358,6 +414,39 @@
             '<option value="marin">Marin</option>',
             '<option value="cedar">Cedar</option>',
           '</select>',
+        '</div>',
+
+        '<div class="vs-group" id="vsGeminiTtsVoiceGroup" style="display:none;">',
+          '<div class="vs-label" data-i18n="voice.geminiTtsVoice">Speaker (Gemini TTS)</div>',
+          '<select class="vs-select" id="vsGeminiTtsVoice">',
+            '<option value="Kore">Kore (female, firm)</option>',
+            '<option value="Puck">Puck (male, upbeat)</option>',
+            '<option value="Charon">Charon (male, informative)</option>',
+            '<option value="Fenrir">Fenrir (male, excitable)</option>',
+            '<option value="Leda">Leda (female, youthful)</option>',
+            '<option value="Aoede">Aoede (female, breezy)</option>',
+            '<option value="Orus">Orus (male, firm)</option>',
+            '<option value="Zephyr">Zephyr (female, bright)</option>',
+            '<option value="Enceladus">Enceladus (male, breathy)</option>',
+            '<option value="Algieba">Algieba (male, smooth)</option>',
+          '</select>',
+        '</div>',
+
+        '<div class="vs-group" id="vsGcloudTtsVoiceGroup" style="display:none;">',
+          '<div class="vs-label" data-i18n="voice.gcloudTtsVoice">Speaker (Google Cloud TTS – Chirp 3: HD)</div>',
+          '<select class="vs-select" id="vsGcloudTtsVoice">',
+            '<option value="Aoede">Aoede (female)</option>',
+            '<option value="Puck">Puck (male)</option>',
+            '<option value="Charon">Charon (male)</option>',
+            '<option value="Kore">Kore (female)</option>',
+            '<option value="Fenrir">Fenrir (male)</option>',
+            '<option value="Leda">Leda (female)</option>',
+            '<option value="Orus">Orus (male)</option>',
+            '<option value="Zephyr">Zephyr (female)</option>',
+            '<option value="Enceladus">Enceladus (male)</option>',
+            '<option value="Algieba">Algieba (male)</option>',
+          '</select>',
+          '<div style="font-size:10px;color:var(--muted,#666b7e);margin-top:4px;font-family:\'IBM Plex Mono\',monospace;line-height:1.4;" data-i18n="voice.gcloudTtsVoiceHint">Combined with the recognition language above (e.g. "de-DE" → "de-DE-Chirp3-HD-…"). Not every voice exists in every language.</div>',
         '</div>',
 
         '<div class="vs-group">',
@@ -498,6 +587,22 @@
       saveSettings({ openaiTtsVoice: vs.openaiTtsVoice });
     });
 
+    // Gemini TTS speaker
+    var geminiVoiceSel = panel.querySelector('#vsGeminiTtsVoice');
+    geminiVoiceSel.value = vs.geminiTtsVoice || 'Kore';
+    geminiVoiceSel.addEventListener('change', function () {
+      vs.geminiTtsVoice = geminiVoiceSel.value;
+      saveSettings({ geminiTtsVoice: vs.geminiTtsVoice });
+    });
+
+    // Google Cloud TTS (Chirp 3: HD) speaker
+    var gcloudVoiceSel = panel.querySelector('#vsGcloudTtsVoice');
+    gcloudVoiceSel.value = vs.gcloudTtsVoice || 'Aoede';
+    gcloudVoiceSel.addEventListener('change', function () {
+      vs.gcloudTtsVoice = gcloudVoiceSel.value;
+      saveSettings({ gcloudTtsVoice: vs.gcloudTtsVoice });
+    });
+
     populateTtsVoices();
     if (window.speechSynthesis) {
       speechSynthesis.addEventListener('voiceschanged', populateTtsVoices);
@@ -515,10 +620,13 @@
     { id: 'openai',     icon: '🟢', needsKey: true,  nameKey: 'audio.providerOpenAI',     nameFallback: 'OpenAI' },
     { id: 'elevenlabs', icon: '🎙️', needsKey: true,  nameKey: 'audio.providerElevenLabs', nameFallback: 'ElevenLabs' },
     { id: 'groq',       icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroq',       nameFallback: 'Groq' },
+    { id: 'gemini',     icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini',     nameFallback: 'Gemini' },
+    { id: 'gcloud',     icon: '☁️', needsKey: true,  nameKey: 'audio.providerGcloud',     nameFallback: 'Google Cloud TTS' },
   ];
   var STT_PROVIDERS = [
     { id: 'browser', icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser',       nameFallback: 'Browser' },
     { id: 'groq',    icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroqWhisper',   nameFallback: 'Groq Whisper' },
+    { id: 'gemini',  icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini',        nameFallback: 'Gemini' },
   ];
 
   // Renders the chip row for one provider list into `container`, marking the
@@ -554,10 +662,14 @@
     var pitchGroup = document.getElementById('vsTtsPitchGroup');
     var groqVoiceGroup = document.getElementById('vsGroqTtsVoiceGroup');
     var openaiVoiceGroup = document.getElementById('vsOpenaiTtsVoiceGroup');
+    var geminiVoiceGroup = document.getElementById('vsGeminiTtsVoiceGroup');
+    var gcloudVoiceGroup = document.getElementById('vsGcloudTtsVoiceGroup');
     if (voiceGroup) voiceGroup.style.display = provider === 'browser' ? '' : 'none';
     if (pitchGroup) pitchGroup.style.display = provider === 'browser' ? '' : 'none';
     if (groqVoiceGroup) groqVoiceGroup.style.display = provider === 'groq' ? '' : 'none';
     if (openaiVoiceGroup) openaiVoiceGroup.style.display = provider === 'openai' ? '' : 'none';
+    if (geminiVoiceGroup) geminiVoiceGroup.style.display = provider === 'gemini' ? '' : 'none';
+    if (gcloudVoiceGroup) gcloudVoiceGroup.style.display = provider === 'gcloud' ? '' : 'none';
   }
 
   // Re-renders both chip rows — called on panel build and every time the
@@ -666,6 +778,40 @@
     openAudioTuningPanel();
   }
 
+  // ── Guard against MathJax's own Explorer/Speech feature ─────────────
+  // MathJax 4's combined bundles (tex-chtml.js) ship with the "explorer" a11y
+  // extension enabled by default. On mousedown over any rendered formula it
+  // calls its own internal cancelVoice(), which — since there is only ever
+  // one global window.speechSynthesis — unconditionally kills whatever
+  // utterance is currently playing, including ours (confirmed via stack
+  // trace: cancelVoice() called from MouseDown, both inside tex-chtml.js).
+  // Intercepting the click itself turned out unreliable (MathJax's own
+  // listener setup/timing can't be relied on to lose that race). Instead we
+  // guard the shared resource directly: window.speechSynthesis.cancel() is
+  // wrapped so that while our own browser-TTS is actively speaking, any
+  // *external* caller's cancel() is swallowed instead of tearing playback
+  // down. Our own code always bypasses the wrapper via _nativeSpeechCancel,
+  // so it can still legitimately cancel (new speak() request, explicit
+  // stop()) at any time. This only matters for the 'browser' TTS engine;
+  // HTTP-based providers (OpenAI/ElevenLabs/Groq/Gemini) play through
+  // <audio> and never touch speechSynthesis, so formulas stay fully
+  // interactive with those regardless.
+  var _nativeSpeechCancel = null;
+  var _browserEngineSpeaking = false; // true only while OUR utterance is actually playing
+  (function installCancelGuard() {
+    if (!window.speechSynthesis || window.speechSynthesis.__kicCancelGuarded) return;
+    var ss = window.speechSynthesis;
+    _nativeSpeechCancel = ss.cancel.bind(ss);
+    ss.cancel = function () {
+      if (!_browserEngineSpeaking) return _nativeSpeechCancel();
+      // Swallowed: something other than our own code (confirmed to be
+      // MathJax's formula explorer, see note above) tried to cancel the
+      // shared speechSynthesis queue while we're actively reading aloud.
+      // This is expected and harmless — playback just continues.
+    };
+    ss.__kicCancelGuarded = true;
+  })();
+
   // ══════════════════════════════════════════════════════════════════
   // TTS engines — one per provider, all exposing the same interface:
   //   speak(text, opts, {onstart, onend, onerror}) → {pause(), resume(), stop()}
@@ -681,35 +827,241 @@
           if (cbs.onerror) cbs.onerror('unavailable');
           return { pause: function () {}, resume: function () {}, stop: function () {} };
         }
-        speechSynthesis.cancel();
-        var utter = new SpeechSynthesisUtterance(text);
-        utter.lang  = opts.lang;
-        utter.rate  = opts.rate;
-        utter.pitch = opts.pitch;
-        if (opts.voiceURI) {
-          var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === opts.voiceURI; });
-          if (match.length) utter.voice = match[0];
+        _nativeSpeechCancel();
+
+        // Chrome's native speech engine has an undocumented internal length
+        // ceiling on a single utterance: past it, speak() just does nothing
+        // at all — no onstart, no onerror, no sound, nothing. Short/medium
+        // replies are well under it so they're fine; long replies (e.g. a
+        // full long-form answer) silently go nowhere after the click, which
+        // looks exactly like a dead button. Splitting into sentence-bounded
+        // chunks and queuing them back-to-back sidesteps it entirely — same
+        // chunkTextForTts() the HTTP TTS providers already use for their own
+        // (documented) per-request limits — and the chunk boundaries are
+        // inaudible since the next utterance is queued immediately.
+        var chunks = chunkTextForTts(text, BROWSER_TTS_CHUNK_MAX_CHARS);
+        var chunkIdx = 0;
+        var utter = null;
+
+        // ── Reliability workarounds for well-known Web Speech API bugs ──
+        // 1) Chrome/Edge sometimes silently drop an utterance if speak() is
+        //    called synchronously right after cancel() — the queue hasn't
+        //    been flushed yet. Deferring to a macrotask avoids that.
+        // 2) Calling pause() before the utterance has actually started
+        //    (i.e. before onstart fires) is silently ignored by Chrome —
+        //    speech.speaking is still false at that point, so pause() has
+        //    nothing to act on and the utterance just plays through as if
+        //    nothing happened. We buffer an early pause() request and apply
+        //    it as soon as onstart fires.
+        // 3) Chrome stops firing progress on long utterances (~15s+) if the
+        //    engine is left untouched — a periodic harmless pause()+resume()
+        //    "kick" while actively speaking (not while intentionally paused)
+        //    prevents playback from silently dying partway through, which
+        //    otherwise looks exactly like "stop" firing on its own.
+        // 4) The kick itself (3) can misfire: on some Chrome builds, calling
+        //    pause() immediately followed by resume() occasionally makes the
+        //    engine tear the utterance down instead of just pausing it —
+        //    speechSynthesis.speaking flips to false and onerror fires with
+        //    'interrupted'/'canceled', indistinguishable from real outside
+        //    interference. Confirmed via event logging: this fires with *no*
+        //    preceding user interaction, only after a kick. Since we know
+        //    our own last kick's timestamp, an error arriving right after it
+        //    is treated as a kick self-abort, not a real stop: we resume
+        //    speaking from the last known word boundary instead of giving up.
+        var started = false, pendingPause = false, userPaused = false, keepAliveTimer = null;
+        var canceled = false; // true once stop() has been called, even before speak() was actually issued
+        var lastKickAt = 0;   // timestamp of the most recent keep-alive pause()/resume() kick
+        var lastBoundaryIdx = 0; // charIndex of the last word boundary we heard within the CURRENT chunk, for recovery
+        var recoveryAttempts = 0;
+        var MAX_RECOVERY_ATTEMPTS = 5;
+        var KICK_ERROR_WINDOW_MS = 1500; // error within this window of a kick is blamed on the kick
+
+        function clearKeepAlive() {
+          if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
         }
-        utter.onstart = function () { if (cbs.onstart) cbs.onstart(); };
-        utter.onend   = function () { if (cbs.onend) cbs.onend(); };
-        utter.onerror = function () { if (cbs.onerror) cbs.onerror('speechSynthesis-error'); };
-        speechSynthesis.speak(utter);
+        function startKeepAlive() {
+          clearKeepAlive();
+          keepAliveTimer = setInterval(function () {
+            if (!speechSynthesis.speaking) { clearKeepAlive(); return; }
+            if (userPaused) return; // don't fight an intentional pause
+            lastKickAt = Date.now();
+            try { speechSynthesis.pause(); speechSynthesis.resume(); } catch (e) {}
+          }, 12000);
+        }
+
+        function makeUtterance(chunkText) {
+          var u = new SpeechSynthesisUtterance(chunkText);
+          u.lang  = opts.lang;
+          u.rate  = opts.rate;
+          u.pitch = opts.pitch;
+          if (opts.voiceURI) {
+            var match = speechSynthesis.getVoices().filter(function (v) { return v.voiceURI === opts.voiceURI; });
+            if (match.length) u.voice = match[0];
+          }
+          return u;
+        }
+
+        // Wires up on{start,boundary,end,error} on a given utterance so the
+        // initial utterance, any recovery-restart utterance, and any
+        // next-chunk utterance all behave identically. `isRestart` suppresses
+        // cbs.onstart() so callers don't see a second "speech started"
+        // callback for the same logical speak() — that covers both kick
+        // recovery restarts and chunk-to-chunk advances (only the very first
+        // chunk's first attempt should ever fire cbs.onstart).
+        function attachHandlers(u, isRestart) {
+          u.onstart = function () {
+            started = true;
+            _browserEngineSpeaking = true;
+            startKeepAlive();
+            if (pendingPause) { pendingPause = false; userPaused = true; speechSynthesis.pause(); }
+            if (!isRestart && cbs.onstart) cbs.onstart();
+          };
+          u.onboundary = function (ev) {
+            if (ev && typeof ev.charIndex === 'number') lastBoundaryIdx = ev.charIndex;
+          };
+          u.onend = function () {
+            clearKeepAlive();
+            if (canceled) { _browserEngineSpeaking = false; return; }
+            chunkIdx++;
+            if (chunkIdx < chunks.length) {
+              // More chunks queued — this is an internal seam, not the end
+              // of the reply, so no cbs.onend() here; playChunk() below
+              // fires a fresh onstart-suppressed utterance immediately.
+              lastBoundaryIdx = 0;
+              recoveryAttempts = 0;
+              playChunk(chunkIdx);
+            } else {
+              _browserEngineSpeaking = false;
+              if (cbs.onend) cbs.onend();
+            }
+          };
+          // event.error is 'canceled'/'interrupted' whenever *anything* calls
+          // speechSynthesis.cancel() — including our own stop()/pause() below
+          // (expected, already flagged via `canceled`/`userPaused`), our own
+          // keep-alive kick misfiring (see note 4 above — recovered silently
+          // below), or genuine outside interference (another script, an
+          // extension, a browser/OS accessibility feature). MathJax's own
+          // formula-explorer cancel() calls are now blocked before they ever
+          // reach here (see installCancelGuard above), so this should mostly
+          // only ever see our own expected cancels and the rare real kick
+          // misfire from here on.
+          u.onerror = function (ev) {
+            clearKeepAlive();
+            var reason = (ev && ev.error) || 'unknown';
+            var expected = canceled || (userPaused && reason === 'canceled');
+            if (expected) {
+              _browserEngineSpeaking = false;
+              if (cbs.onerror) cbs.onerror('speechSynthesis-error');
+              return;
+            }
+            var kickCausedIt = (Date.now() - lastKickAt) < KICK_ERROR_WINDOW_MS
+              && (reason === 'interrupted' || reason === 'canceled');
+            if (kickCausedIt && recoveryAttempts < MAX_RECOVERY_ATTEMPTS && lastBoundaryIdx < chunks[chunkIdx].length) {
+              recoveryAttempts++;
+              console.warn('[KIC voice] keep-alive kick self-aborted speech (reason: ' + reason + ') — resuming chunk ' + chunkIdx + ' from char ' + lastBoundaryIdx + ' (attempt ' + recoveryAttempts + '/' + MAX_RECOVERY_ATTEMPTS + ')');
+              restartFrom(lastBoundaryIdx);
+              return;
+            }
+            _browserEngineSpeaking = false;
+            if (kickCausedIt) {
+              console.warn('[KIC voice] keep-alive kick self-aborted speech and recovery gave up (reason: ' + reason + ')');
+            } else {
+              console.warn('[KIC voice] speechSynthesis stopped unexpectedly:', reason);
+            }
+            if (cbs.onerror) cbs.onerror('speechSynthesis-error:' + reason);
+          };
+        }
+
+        // Re-issues the remainder of the CURRENT chunk as a fresh utterance,
+        // carrying over voice/rate/pitch/lang. Used for kick recovery; shares
+        // the same wiring path as normal chunk playback, so pause()/resume()/
+        // stop() below keep working transparently against whichever
+        // utterance is currently live (they close over the mutable `utter`
+        // variable). Mutates chunks[chunkIdx] to the remaining text so
+        // onboundary's charIndex (relative to whatever utterance is live)
+        // and any *second* recovery within the same chunk stay consistent.
+        function restartFrom(charIndex) {
+          if (canceled) return;
+          var remaining = chunks[chunkIdx].slice(charIndex);
+          if (!remaining) return;
+          chunks[chunkIdx] = remaining;
+          lastBoundaryIdx = 0;
+          utter = makeUtterance(remaining);
+          attachHandlers(utter, /* isRestart */ true);
+          setTimeout(function () {
+            if (canceled) return;
+            speechSynthesis.speak(utter);
+          }, 0);
+        }
+
+        // Plays chunks[idx]. `idx > 0` suppresses cbs.onstart (already fired
+        // for chunk 0) the same way a kick-recovery restart does.
+        function playChunk(idx) {
+          utter = makeUtterance(chunks[idx]);
+          attachHandlers(utter, /* isRestart */ idx > 0);
+          setTimeout(function () {
+            // A newer speak() request may have called stop() on this very
+            // controller before this deferred call ever ran — in that case
+            // the utterance must never reach the queue, or it plays anyway
+            // right alongside whatever superseded it (see 'canceled' above).
+            if (canceled) return;
+            speechSynthesis.speak(utter);
+          }, 0);
+        }
+
+        playChunk(0);
+
         return {
-          pause:  function () { speechSynthesis.pause(); },
-          resume: function () { speechSynthesis.resume(); },
-          stop:   function () { speechSynthesis.cancel(); },
+          pause: function () {
+            if (canceled) return;
+            if (!started) { pendingPause = true; return; } // applied once onstart fires
+            userPaused = true;
+            speechSynthesis.pause();
+          },
+          resume: function () {
+            if (canceled) return;
+            pendingPause = false;
+            userPaused = false;
+            speechSynthesis.resume();
+          },
+          stop: function () {
+            canceled = true;
+            pendingPause = false;
+            userPaused = false;
+            _browserEngineSpeaking = false;
+            clearKeepAlive();
+            _nativeSpeechCancel();
+          },
         };
       }
     },
     openai:     createHttpTtsEngine(fetchOpenAiTtsBlob),
     elevenlabs: createHttpTtsEngine(fetchElevenLabsTtsBlob),
     groq:       createChunkedHttpTtsEngine(fetchGroqTtsBlob, GROQ_TTS_MAX_CHARS),
+    gemini:     createHttpTtsEngine(fetchGeminiTtsBlob),
+    gcloud:     createChunkedHttpTtsEngine(fetchGcloudTtsBlob, GCLOUD_TTS_MAX_CHARS),
   };
+
+  // Chrome's native speechSynthesis has no *documented* per-utterance limit
+  // (unlike Groq/Cloud TTS below, which reject oversized requests outright),
+  // but in practice speak() silently no-ops well before the ~32k-char figure
+  // sometimes cited for the Web Speech API spec — the exact point seems to
+  // depend on voice/OS. Kept comfortably low so it never gets anywhere near
+  // whatever the real ceiling is on a given machine, while still being large
+  // enough that chunk seams (inaudible, but each is a fresh queue() call)
+  // stay infrequent for normal-length replies.
+  var BROWSER_TTS_CHUNK_MAX_CHARS = 1000;
 
   // Groq's Orpheus TTS models cap `input` at 200 characters per request
   // (see https://console.groq.com/docs/text-to-speech/orpheus#limitations).
   // Kept a little under that as safety margin for multi-byte characters.
   var GROQ_TTS_MAX_CHARS = 190;
+
+  // Cloud TTS's text:synthesize endpoint caps request input at ~5000 bytes
+  // of UTF-8 text; kept well under that as safety margin for multi-byte
+  // characters (umlauts, emoji, ...) and because Chirp 3: HD in particular
+  // tends to reject very long single requests with a 400.
+  var GCLOUD_TTS_MAX_CHARS = 3000;
 
   // Splits `text` into chunks no longer than `maxLen`, preferring to break
   // on sentence boundaries (. ! ? followed by whitespace) so pauses land
@@ -884,6 +1236,113 @@
     return res.blob();
   }
 
+  // Gemini's generateContent TTS returns JSON with base64-encoded *raw* PCM
+  // audio (no WAV header) at inlineData.data — unlike OpenAI/Groq/ElevenLabs,
+  // which hand back a ready-to-play audio Blob directly. So we decode the
+  // base64, read the actual sample rate out of inlineData.mimeType (looks
+  // like "audio/L16;codec=pcm;rate=24000" — don't hardcode it, Google can
+  // change it), and wrap it in a minimal 44-byte WAV header ourselves so the
+  // result is a normal playable Blob, same as every other engine here.
+  // See: https://ai.google.dev/gemini-api/docs/speech-generation
+  function pcmBase64ToWavBlob(base64, sampleRate, numChannels, bitsPerSample) {
+    var binary = atob(base64);
+    var len = binary.length;
+    var pcmBytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) pcmBytes[i] = binary.charCodeAt(i);
+    var blockAlign = numChannels * (bitsPerSample / 8);
+    var byteRate = sampleRate * blockAlign;
+    var buffer = new ArrayBuffer(44 + pcmBytes.length);
+    var view = new DataView(buffer);
+    function writeStr(offset, str) { for (var j = 0; j < str.length; j++) view.setUint8(offset + j, str.charCodeAt(j)); }
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + pcmBytes.length, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);         // fmt chunk size
+    view.setUint16(20, 1, true);          // PCM format
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeStr(36, 'data');
+    view.setUint32(40, pcmBytes.length, true);
+    new Uint8Array(buffer, 44).set(pcmBytes);
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
+  async function fetchGeminiTtsBlob(text) {
+    var apiKey = audioProviderKey('gemini');
+    if (!apiKey) throw new Error('no-key');
+    var voice = vs.geminiTtsVoice || 'Kore';
+    // gemini-2.5-flash-preview-tts is the broadly-available TTS model on the
+    // free AI Studio tier; see https://ai.google.dev/gemini-api/docs/speech-generation
+    // Key goes in the ?key= query param rather than the x-goog-api-key header,
+    // since the proxy's forwarded-header allowlist (kiconnect-proxy.py) doesn't
+    // include that header and this avoids having to widen it.
+    var res = await fetch(proxyUrl('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=' + encodeURIComponent(apiKey)), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: text }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+        },
+      }),
+    });
+    if (!res.ok) throw await ttsHttpError(res);
+    var data = await res.json();
+    var part = data && data.candidates && data.candidates[0] && data.candidates[0].content &&
+               data.candidates[0].content.parts && data.candidates[0].content.parts[0];
+    var inline = part && part.inlineData;
+    if (!inline || !inline.data) throw new Error('tts-http-200::no-audio-in-response');
+    var rate = 24000;
+    var m = inline.mimeType && /rate=(\d+)/.exec(inline.mimeType);
+    if (m) rate = parseInt(m[1], 10);
+    return pcmBase64ToWavBlob(inline.data, rate, 1, 16);
+  }
+
+  // Decodes a plain base64 string (no data: prefix) into a Blob — used for
+  // Cloud TTS, which — unlike Gemini's generateContent — hands back audio
+  // already encoded as real MP3 bytes, so no PCM/WAV wrapping is needed here.
+  function base64ToBlob(base64, mimeType) {
+    var binary = atob(base64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  // Google Cloud Text-to-Speech (Chirp 3: HD) — a separate product from the
+  // Gemini API above: different auth key (needs a GCP project with the
+  // Text-to-Speech API enabled + a billing account, not just an AI Studio
+  // key), different domain (texttospeech.googleapis.com), but a much more
+  // generous *monthly* free quota instead of Gemini's per-minute rate limit.
+  // Voice names follow "<languageCode>-Chirp3-HD-<Persona>", e.g.
+  // "de-DE-Chirp3-HD-Aoede" — languageCode comes from opts.lang (the same
+  // BCP-47 code used for STT, see vs.sttLang) since Cloud TTS needs the
+  // voice to actually match the target language.
+  // See: https://cloud.google.com/text-to-speech/docs/chirp3-hd
+  async function fetchGcloudTtsBlob(text, opts) {
+    var apiKey = audioProviderKey('gcloud');
+    if (!apiKey) throw new Error('no-key');
+    var lang = (opts && opts.lang) || vs.sttLang || 'en-US';
+    var voice = vs.gcloudTtsVoice || 'Aoede';
+    var res = await fetch(proxyUrl('https://texttospeech.googleapis.com/v1/text:synthesize?key=' + encodeURIComponent(apiKey)), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: { text: text },
+        voice: { languageCode: lang, name: lang + '-Chirp3-HD-' + voice },
+        audioConfig: { audioEncoding: 'MP3' },
+      }),
+    });
+    if (!res.ok) throw await ttsHttpError(res);
+    var data = await res.json();
+    if (!data.audioContent) throw new Error('tts-http-200::no-audio-in-response');
+    return base64ToBlob(data.audioContent, 'audio/mp3');
+  }
+
   // ══════════════════════════════════════════════════════════════════
   // STT engines — one per provider, common interface:
   //   start(opts, {onstart, oninterim, onend, onerror}) → {stop()}
@@ -952,7 +1411,17 @@
         return { stop: function () { stoppedByUs = true; if (silenceTimer) clearTimeout(silenceTimer); if (maxTimer) clearTimeout(maxTimer); try { rec.stop(); } catch (e) {} } };
       }
     },
-    groq: {
+    groq:   createRecorderSttEngine(transcribeWithGroq),
+    gemini: createRecorderSttEngine(transcribeWithGemini),
+  };
+
+  // Shared "record with mic-level silence detection, then send the whole
+  // clip to an HTTP transcription endpoint" engine — used by both Groq
+  // (Whisper) and Gemini (no dedicated STT endpoint, so it's fed the audio
+  // via a normal multimodal generateContent call instead). `transcribeFn`
+  // is `(blob, lang) => Promise<string>`.
+  function createRecorderSttEngine(transcribeFn) {
+    return {
       start: function (opts, cbs) {
         var recorder = null, stream = null, chunks = [], stopped = false;
         var audioCtx = null, analyser = null, vadRaf = null, silenceTimer = null, maxTimer = null;
@@ -1025,7 +1494,7 @@
             if (!chunks.length) { if (cbs.onend) cbs.onend(''); return; }
             var blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
             try {
-              var text = await transcribeWithGroq(blob, opts.lang);
+              var text = await transcribeFn(blob, opts.lang);
               if (cbs.onend) cbs.onend((text || '').trim());
             } catch (err) {
               if (err && err.message === 'no-key') { if (cbs.onerror) cbs.onerror('no-key'); }
@@ -1044,8 +1513,8 @@
           }
         };
       }
-    }
-  };
+    };
+  }
 
   async function transcribeWithGroq(blob, lang) {
     var apiKey = audioProviderKey('groq');
@@ -1062,6 +1531,48 @@
     if (!res.ok) throw new Error('stt-http-' + res.status);
     var data = await res.json();
     return data.text || '';
+  }
+
+  function blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onloadend = function () {
+        var result = reader.result || '';       // "data:<mime>;base64,XXXX"
+        var idx = result.indexOf(',');
+        resolve(idx >= 0 ? result.slice(idx + 1) : result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // Gemini has no dedicated transcription endpoint (unlike Groq/Whisper) —
+  // the recorded clip is sent as an inline audio part in a normal multimodal
+  // generateContent call, with a prompt instructing the model to return only
+  // the transcript. See: https://ai.google.dev/gemini-api/docs/audio
+  async function transcribeWithGemini(blob, lang) {
+    var apiKey = audioProviderKey('gemini');
+    if (!apiKey) throw new Error('no-key');
+    var base64 = await blobToBase64(blob);
+    var langHint = lang ? (' The spoken language is ' + lang + '.') : '';
+    var res = await fetch(proxyUrl('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(apiKey)), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: 'Transcribe the following audio verbatim. Reply with only the raw transcript text — no commentary, no quotation marks, no formatting.' + langHint },
+            { inlineData: { mimeType: blob.type || 'audio/webm', data: base64 } },
+          ],
+        }],
+        generationConfig: { temperature: 0 },
+      }),
+    });
+    if (!res.ok) throw new Error('stt-http-' + res.status);
+    var data = await res.json();
+    var parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+    var text = (parts || []).map(function (p) { return p.text || ''; }).join('');
+    return text.trim();
   }
 
   // ── STT (provider-agnostic entry points) ────────────────────────
@@ -1194,6 +1705,11 @@
       showToast('🔇 ' + t('voice.ttsBlocked', 'Playback blocked — please click the page and try again.'));
     } else if (err === 'audio-playback-error') {
       showToast('⚠️ ' + t('voice.ttsPlaybackError', 'Audio playback error.'));
+    } else if (err.indexOf('speechSynthesis-error:') === 0) {
+      // Unexpected external cancellation (see utter.onerror above) — the
+      // plain 'speechSynthesis-error' (our own intentional stop/pause) is
+      // still silent on purpose.
+      showToast('⚠️ ' + tv('voice.ttsInterrupted', 'Speech output was interrupted from outside the app ({reason}).', { reason: err.slice('speechSynthesis-error:'.length) }));
     } else if (err !== 'unavailable' && err !== 'speechSynthesis-error') {
       showToast('⚠️ TTS (' + provider + '): ' + err);
     }
@@ -1205,7 +1721,7 @@
 
   function stopTts() {
     stopCurrentTtsController();
-    setTtsState(false);
+    syncTtsUi('idle', null);
     dialogPending = false;
   }
 
@@ -1215,7 +1731,15 @@
     var bubble = rows[rows.length - 1].querySelector('.bubble');
     if (!bubble) return '';
     var clone = bubble.cloneNode(true);
-    clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge').forEach(function (el) { el.remove(); });
+    // .math-inline/.math-block hold raw LaTeX source (\frac{}{}, \int, _, ^, …)
+    // until/unless MathJax has fully typeset them — and even the typeset
+    // MathJax output can carry an assistive-MathML annotation with that same
+    // raw source in its text content. Either way this garbles TTS input and,
+    // for longer formula-heavy replies, has been seen to make Chrome's
+    // network-based Google voices abort the whole utterance silently (while
+    // Edge's local Microsoft voices just mangle through it audibly) — so we
+    // strip formulas the same way code blocks are already stripped.
+    clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .math-inline, .math-block').forEach(function (el) { el.remove(); });
     return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
@@ -1226,128 +1750,97 @@
       return;
     }
     var ctrl = speakTextWithCurrentProvider(text, {
-      onstart: function () { setTtsState(true); },
-      onend:   function () { setTtsState(false); if (typeof onEnd === 'function') onEnd(); },
-      onerror: function () { setTtsState(false); dialogPending = false; },
+      onstart: function () { syncTtsUi('playing', null); },
+      onend:   function () { syncTtsUi('idle', null); if (typeof onEnd === 'function') onEnd(); },
+      onerror: function () { syncTtsUi('idle', null); dialogPending = false; },
     });
-    if (!ctrl) setTtsState(false);
+    if (!ctrl) syncTtsUi('idle', null);
   }
 
   // ── Bubble TTS (per-bubble voice controls) ───────────────────────
+  // Mirrors the main input-row control's design: a 🔊 button that starts
+  // playback and, while active, doubles as Stop — plus a small Pause/Resume
+  // button that only appears during playback. Both this and the main
+  // button stay mirrored via syncTtsUi() above.
 
   var _currentBubbleCtrl = null;
+
+  function findLastBubbleVoiceControls() {
+    var rows = document.querySelectorAll('.message-row.ai');
+    if (!rows.length) return null;
+    return rows[rows.length - 1].querySelector('.bubble-voice-controls');
+  }
+
+  function setBubbleVoiceUi(ctrl, state) {
+    if (!ctrl) return;
+    var btn   = ctrl.querySelector('.bubble-voice-btn');
+    var pause = ctrl.querySelector('.bubble-voice-pause-btn');
+    var active = state !== 'idle';
+    if (btn) {
+      btn.classList.toggle('playing', active);
+      btn.title = active ? t('voice.ttsStop', 'Stop speech output') : t('voice.readAloud', 'Read aloud');
+    }
+    if (pause) {
+      pause.style.display = active ? '' : 'none';
+      var paused = state === 'paused';
+      pause.innerHTML = paused ? SVG_RESUME : SVG_PAUSE;
+      pause.title = paused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
+    }
+  }
 
   function getBubbleText(voiceCtrlEl) {
     var bubble = voiceCtrlEl.closest('.bubble-wrap') && voiceCtrlEl.closest('.bubble-wrap').querySelector('.bubble');
     if (!bubble) return '';
     var clone = bubble.cloneNode(true);
-    clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .bubble-voice-controls').forEach(function (el) { el.remove(); });
+    // See the matching comment in getLastAssistantText() above — same
+    // reasoning applies to the per-bubble 🔊 button.
+    clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .bubble-voice-controls, .math-inline, .math-block').forEach(function (el) { el.remove(); });
     return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
-  }
-
-  function ensureSubmenu(voiceCtrlEl) {
-    var existing = voiceCtrlEl.querySelector('.voice-submenu');
-    if (existing) return existing;
-    var menu = document.createElement('div');
-    menu.className = 'voice-submenu';
-    menu.innerHTML = [
-      '<button class="voice-submenu-btn" data-va="play">▶ Play</button>',
-      '<button class="voice-submenu-btn" data-va="pause">⏸ Pause</button>',
-      '<button class="voice-submenu-btn" data-va="resume" style="display:none">▶ Resume</button>',
-      '<button class="voice-submenu-btn" data-va="stop">⏹ Stop</button>',
-    ].join('');
-    voiceCtrlEl.appendChild(menu);
-    return menu;
-  }
-
-  function updateBubbleSubmenuState(voiceCtrlEl, state) {
-    var menu = voiceCtrlEl.querySelector('.voice-submenu');
-    if (!menu) return;
-    var pause  = menu.querySelector('[data-va="pause"]');
-    var resume = menu.querySelector('[data-va="resume"]');
-    if (state === 'playing') {
-      if (pause)  pause.style.display  = '';
-      if (resume) resume.style.display = 'none';
-    } else if (state === 'paused') {
-      if (pause)  pause.style.display  = 'none';
-      if (resume) resume.style.display = '';
-    } else {
-      if (pause)  pause.style.display  = '';
-      if (resume) resume.style.display = 'none';
-    }
   }
 
   function speakBubble(voiceCtrlEl) {
     var text = getBubbleText(voiceCtrlEl);
     if (!text) { showToast(t('voice.noTextToRead', 'No text to read.')); return; }
 
-    _currentBubbleCtrl = voiceCtrlEl;
-    var btn = voiceCtrlEl.querySelector('.bubble-voice-btn');
-
-    speakTextWithCurrentProvider(text, {
-      onstart: function () {
-        if (btn) btn.classList.add('playing');
-        updateBubbleSubmenuState(voiceCtrlEl, 'playing');
-      },
-      onend: function () {
-        if (btn) btn.classList.remove('playing');
-        var menu = voiceCtrlEl.querySelector('.voice-submenu');
-        if (menu) menu.classList.remove('open');
-        updateBubbleSubmenuState(voiceCtrlEl, 'idle');
-        _currentBubbleCtrl = null;
-      },
-      onerror: function () {
-        if (btn) btn.classList.remove('playing');
-        updateBubbleSubmenuState(voiceCtrlEl, 'idle');
-        _currentBubbleCtrl = null;
-      },
+    var ctrl = speakTextWithCurrentProvider(text, {
+      onstart: function () { syncTtsUi('playing', voiceCtrlEl); },
+      onend:   function () { syncTtsUi('idle', null); },
+      onerror: function () { syncTtsUi('idle', null); },
     });
+    if (!ctrl) syncTtsUi('idle', null);
   }
 
   function hookBubbleVoiceControls() {
     document.addEventListener('click', function (e) {
-      // Toggle submenu on 🔊 button click
-      var bubbleBtn = e.target.closest('.bubble-voice-btn');
-      if (bubbleBtn) {
+      // 🔊 button: starts playback, or — while this bubble is the one
+      // currently playing/paused — acts as Stop (same as the main button).
+      var playBtn = e.target.closest('.bubble-voice-btn');
+      if (playBtn) {
         e.stopPropagation();
-        var ctrl = bubbleBtn.closest('.bubble-voice-controls');
-        var menu = ensureSubmenu(ctrl);
-        var isOpen = menu.classList.contains('open');
-        // Close all other open submenus
-        document.querySelectorAll('.voice-submenu.open').forEach(function (m) { m.classList.remove('open'); });
-        if (!isOpen) menu.classList.add('open');
-        return;
-      }
-
-      // Submenu action buttons
-      var actionBtn = e.target.closest('.voice-submenu-btn');
-      if (actionBtn) {
-        e.stopPropagation();
-        var ctrl = actionBtn.closest('.bubble-voice-controls');
-        var action = actionBtn.getAttribute('data-va');
-        if (action === 'play') {
-          speakBubble(ctrl);
-        } else if (action === 'pause') {
-          if (_currentTtsController) _currentTtsController.pause();
-          if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'paused');
-        } else if (action === 'resume') {
-          if (_currentTtsController) _currentTtsController.resume();
-          if (ctrl === _currentBubbleCtrl) updateBubbleSubmenuState(ctrl, 'playing');
-        } else if (action === 'stop') {
+        var ctrl = playBtn.closest('.bubble-voice-controls');
+        if (ctrl === _currentBubbleCtrl && ttsActive) {
           stopCurrentTtsController();
-          if (_currentBubbleCtrl) {
-            _currentBubbleCtrl.querySelector('.bubble-voice-btn').classList.remove('playing');
-            _currentBubbleCtrl.querySelector('.voice-submenu').classList.remove('open');
-            updateBubbleSubmenuState(_currentBubbleCtrl, 'idle');
-            _currentBubbleCtrl = null;
-          }
+          syncTtsUi('idle', null);
+        } else {
+          speakBubble(ctrl);
         }
         return;
       }
 
-      // Click outside → close all submenus
-      if (!e.target.closest('.bubble-voice-controls')) {
-        document.querySelectorAll('.voice-submenu.open').forEach(function (m) { m.classList.remove('open'); });
+      // Small Pause/Resume button, only visible while this bubble is active.
+      var pauseBtn = e.target.closest('.bubble-voice-pause-btn');
+      if (pauseBtn) {
+        e.stopPropagation();
+        var ctrl = pauseBtn.closest('.bubble-voice-controls');
+        if (ctrl !== _currentBubbleCtrl || !_currentTtsController) return;
+        if (ttsPaused) {
+          _currentTtsController.resume();
+          syncTtsUi('playing', ctrl);
+        } else {
+          _currentTtsController.pause();
+          syncTtsUi('paused', ctrl);
+        }
+        return;
       }
     });
   }
@@ -1433,6 +1926,9 @@
     }
     if (btnTts) {
       btnTts.title = ttsActive ? t('voice.ttsStop', 'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
+    }
+    if (btnTtsPause && btnTtsPause.style.display !== 'none') {
+      btnTtsPause.title = ttsPaused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
     }
     if (btnVoiceSettings) {
       btnVoiceSettings.title = t('voice.settingsTitle', 'Voice Settings');

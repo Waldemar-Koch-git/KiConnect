@@ -1,17 +1,11 @@
 // ================================================================
-// kiconnect.js  –  KI Connect application logic
+// kiconnect.js – KI Connect application logic
 // Requires: kiconnect-languages-i18n.js (loaded before this file)
 // ================================================================
 
 // ── PDF.js worker wiring ─────────────────────────────────────────
-// Formerly kiconnect-pdf-init.js, a separate file loaded right after
-// _render/pdf.js so it could run "immediately after pdf.js" like the
-// inline <script> it replaced. That ordering was never actually
-// required: GlobalWorkerOptions.workerSrc only has to be set before the
-// first getDocument() call, which happens lazily inside extractPdfText()
-// further down this file — long after this script tag runs (kiconnect.js
-// itself loads after _render/pdf.js in kiconnect.html). Folded in here to
-// cut down on the number of tiny standalone files in the project.
+// workerSrc must be set before the first getDocument() call (happens lazily
+// inside extractPdfText()); merged here from the former kiconnect-pdf-init.js.
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
   window._pdfjsLib = pdfjsLib;
@@ -20,34 +14,58 @@ if (typeof pdfjsLib !== 'undefined') {
 // ── Theme ─────────────────────────────────────────────────────────
 const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
-// Applies a theme by name to the document root and updates the active theme swatch; falls back to 'dark' if the name is unknown.
+// Swatch data: [theme, label, tooltip]. The 12 near-identical HTML blocks
+// these replace are now built by buildThemeSwatches().
+const THEME_SWATCHES = [
+  ['dark', 'Dark', 'Dark'], ['white', 'White', 'White'], ['nord', 'Nord', 'Nord'],
+  ['dracula', 'Dracula', 'Dracula'], ['forest', 'Forest', 'Forest'],
+  ['mocha', 'Mocha', 'Mocha'], ['rose', 'Rose', 'Rose'], ['solarized', 'Solar', 'Solarized'],
+];
+const THEME_SWATCHES_OLED = [
+  ['dark_oled', 'Dark', 'Dark (OLED)'], ['gold_oled', 'Gold', 'Gold (OLED)'],
+  ['emerald_oled', 'Emerald', 'Emerald (OLED)'], ['red_oled', 'Red', 'Red (OLED)'],
+];
+
+function buildThemeSwatches() {
+  const saved = localStorage.getItem('kic_theme') || 'dark';
+  [[THEME_SWATCHES, 'themeSwitcher'], [THEME_SWATCHES_OLED, 'themeSwitcherOled']].forEach(([list, id]) => {
+    const box = document.getElementById(id);
+    if (!box) return;
+    box.innerHTML = list.map(([theme, label, title]) =>
+      '<div>' +
+        `<div class="theme-swatch${theme === saved ? ' active' : ''}" data-theme="${theme}" title="${title}">` +
+          '<div class="theme-swatch-inner"><div class="theme-swatch-top"></div>' +
+          '<div class="theme-swatch-bottom"><span></span><span></span><span></span></div></div>' +
+        '</div>' +
+        `<div class="theme-swatch-label">${label}</div>` +
+      '</div>').join('');
+  });
+}
+buildThemeSwatches();
+
+// Applies a theme to the document root, falls back to 'dark' if unknown.
 function applyTheme(name) {
   if (!THEMES.includes(name)) name = 'dark';
   document.documentElement.setAttribute('data-theme', name);
-  // Update swatch active states
   document.querySelectorAll('.theme-swatch').forEach(sw => {
     sw.classList.toggle('active', sw.getAttribute('data-theme') === name);
   });
 }
 
-// Applies a theme and persists the choice to localStorage.
+// Applies and persists the chosen theme.
 function setTheme(name) {
   applyTheme(name);
   localStorage.setItem('kic_theme', name);
 }
 
-// Apply saved theme immediately (before DOMContentLoaded to avoid flash)
+// Apply saved theme immediately (before DOMContentLoaded to avoid a flash).
 (function() {
   const saved = localStorage.getItem('kic_theme') || 'dark';
   document.documentElement.setAttribute('data-theme', saved);
 })();
 
-// Theme swatches used to carry inline onclick="setTheme('...')" attributes, but the
-// CSP's script-src is 'self' with no 'unsafe-inline', which silently blocks inline
-// event-handler attributes (this is what broke theme switching - the CSS itself was
-// always fine, data-theme on <html> just never changed). Bound here instead, via a
-// single delegated listener on <body> so it covers both #themeSwitcher (regular
-// themes) and #themeSwitcherOled (OLED themes) without depending on either id.
+// One delegated click listener on <body> handles both theme switchers. Bound here
+// (not inline onclick) because the CSP blocks inline event-handler attributes.
 document.addEventListener('DOMContentLoaded', () => {
   document.body.addEventListener('click', (e) => {
     const swatch = e.target.closest('.theme-swatch');
@@ -58,18 +76,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 let currentLang = localStorage.getItem('kic_lang') || 'en';
 
-// Looks up a translation string for the current language, falling back to English then to the raw key.
+// Translation lookup with English → raw-key fallback.
 function t(key) {
   const lang = TRANSLATIONS[currentLang] || TRANSLATIONS['en'];
   return lang[key] ?? TRANSLATIONS['en'][key] ?? key;
 }
-// Like t(), but also substitutes {placeholder} variables in the translated string.
+// Like t(), but substitutes {placeholder} vars.
 function tf(key, vars) {
   let s = t(key);
   if (vars) Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll(`{${k}}`, v); });
   return s;
 }
-// Re-applies all data-i18n text/placeholder/title attributes on the page for the current language.
+// Applies all data-i18n attributes for the current language.
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
@@ -94,7 +112,7 @@ function applyTranslations() {
     if (hiddenSel && !hiddenSel.value) syncCustomDropdown();
   }
 }
-// Switches the active UI language, persists it, and refreshes every language-dependent UI part (bubbles, chips, tour, dropdown, sidebar).
+// Switches the UI language, persists it, refreshes all language-dependent UI.
 function setLang(code) {
   currentLang = code;
   localStorage.setItem('kic_lang', code);
@@ -242,9 +260,8 @@ document.addEventListener('click', e => {
 
 // ─── Konstanten ───────────────────────────────────────────────────
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
-// Labels are the real company operating the API, not the model name.
-// 'google' was 'gemini' and 'zhipu' was 'glm' — see LEGACY_PROVIDER_TYPE_MAP
-// in decryptProvider() for migration of already-saved providers.
+// Labels = the company operating the API, not the model name. 'google' was 'gemini'
+// and 'zhipu' was 'glm' (see LEGACY_PROVIDER_TYPE_MAP in decryptProvider()).
 const PROVIDER_TYPES = {
   'openai-compat':   { label:'OpenAI-kompatibel (...)',	           needsUrl:true  },
   'kiconnect-nrw':   { label:'KI Connect NRW (Gateway)',           needsUrl:false },
@@ -261,7 +278,7 @@ const PROVIDER_TYPES = {
   'kimi':            { label:'Moonshot AI (Kimi)',                 needsUrl:false },
 };
 const PROVIDER_HINTS = {
-  'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances …',
+  'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances … · non-localhost addresses need a one-time double confirmation',
   'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-compatible',
   'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3/4/5+',
   'openai-direct': '💡 API Key : platform.openai.com · 🧠 with Reasoning',
@@ -275,8 +292,8 @@ const PROVIDER_HINTS = {
   'zhipu':         '💡 API Key : z.ai · OpenAI-compatible · 🧠 Thinking for GLM models',
   'kimi':          '💡 API Key : platform.moonshot.ai · OpenAI-compatible · lange Kontexte · 🧠 Thinking bei K2-Thinking/K3',
 };
-// Static entries only needed for providers that don't expose live model metadata
-// (e.g. OpenRouter labels). Anthropic + Claude patterns are handled by regex in isThinkingCapable().
+// Static entries for providers without live model metadata (Anthropic/Claude are
+// handled by regex in isThinkingCapable()).
 const THINKING_MODELS = new Set([
   'o1','o1-mini','o1-pro','o3','o3-mini','o4-mini','o4-mini-high',
   'gpt-4.5-preview','gpt-4.1','gpt-4.1-mini',
@@ -354,21 +371,18 @@ const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
 
 // ── Image storage limit (user-configurable, default 500 KB) ──────
-// Stored in localStorage as 'kic_max_img_bytes' (plain — not sensitive)
+// Kept in localStorage as 'kic_max_img_bytes' (plain, not sensitive).
 const DEFAULT_MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
-// Returns the user-configured max size (bytes) an image may have to be kept in storage, or the default.
+// Returns the configured max image size in bytes (default if unset).
 function getMaxImageStorageBytes() {
   const v = parseInt(localStorage.getItem('kic_max_img_bytes') || '0');
   return v > 0 ? v : DEFAULT_MAX_IMAGE_STORAGE_BYTES;
 }
-// Persists the max image storage size (bytes) to localStorage.
 function setMaxImageStorageBytes(bytes) {
   localStorage.setItem('kic_max_img_bytes', String(bytes));
 }
-// Alias for legacy references inside this file
-const MAX_IMAGE_STORAGE_BYTES = 0; // not used directly — always call getMaxImageStorageBytes()
 
-// ── OpenRouter model-meta cache ───────────────────────────────────
+// ── OpenRouter model-meta cache (localStorage) ───────────────────
 let _orModelMeta = {};
 (function _loadOrCache() {
   try {
@@ -376,15 +390,13 @@ let _orModelMeta = {};
     if (raw) _orModelMeta = JSON.parse(raw);
   } catch(e) { _orModelMeta = {}; }
 })();
-// Persists the cached OpenRouter model metadata to localStorage.
 function _saveOrCache() {
   try { localStorage.setItem('kic_or_model_meta', JSON.stringify(_orModelMeta)); } catch(e) {}
 }
 
-// ── Anthropic model-capabilities cache ────────────────────────────
-// Populated dynamically in fetchModels() from the live /v1/models API.
-// Stores per-model flags so the API call logic never needs hard-coded model-name checks.
-// Schema: { [modelId]: { adaptiveThinking: bool, noTemperature: bool } }
+// ── Anthropic model-capabilities cache (localStorage) ────────────
+// Filled from the live /v1/models API in fetchModels(); per-model flags
+// (adaptiveThinking, noTemperature) avoid hard-coded model-name checks.
 let _anthropicModelCaps = {};
 (function _loadAnthropicCaps() {
   try {
@@ -392,39 +404,25 @@ let _anthropicModelCaps = {};
     if (raw) _anthropicModelCaps = JSON.parse(raw);
   } catch(e) { _anthropicModelCaps = {}; }
 })();
-// Persists the cached Anthropic model capability flags to localStorage.
 function _saveAnthropicCaps() {
   try { localStorage.setItem('kic_anthropic_model_caps', JSON.stringify(_anthropicModelCaps)); } catch(e) {}
 }
 
-/**
- * Claude generations that PREDATE extended-thinking support at all.
- * Kept as an opt-OUT list (rather than an opt-in list of every supported
- * model) so that new Claude releases — new version numbers (4.7, 4.8, 5, ...)
- * or entirely new family names (e.g. "fable", "mythos") — are recognized as
- * thinking-capable automatically, without this code needing to be updated
- * for every model launch. Anthropic's convention is that new model
- * generations keep or extend thinking support rather than drop it, so
- * treating "unknown new model" as "modern" is the safer default.
- */
+// Claude generations that PREDATE extended-thinking support. Opt-out list
+// (not opt-in) so new releases are auto-recognized as thinking-capable —
+// "unknown new model" defaults to modern, the safer default.
 const CLAUDE_NO_THINKING_RE = /^claude-(instant|2(\.\d+)?(-|$)|3-(opus|sonnet|haiku)(-|$)|3-5-(sonnet|haiku))/i;
 // Claude 3.7 Sonnet: has extended thinking, but via the legacy
 // type:"enabled" + budget_tokens format rather than adaptive effort.
 const CLAUDE_LEGACY_THINKING_RE = /^claude-3-7-sonnet/i;
 
-// Returns true for any Claude model from the "modern" (Claude 4 and later)
-// generation — i.e. a Claude model that isn't in the legacy opt-out lists
-// above. This is the single source of truth the functions below build on.
+// True for modern (Claude 4+) models — i.e. not in the legacy opt-out lists.
 function _isModernClaudeGen(bare) {
   return /^claude-/i.test(bare) && !CLAUDE_NO_THINKING_RE.test(bare) && !CLAUDE_LEGACY_THINKING_RE.test(bare);
 }
 
-/**
- * Returns true when a Claude model uses the new adaptive thinking API
- * (type:"adaptive" + output_config.effort) instead of the legacy
- * type:"enabled" + budget_tokens format.
- * Falls back to a regex for models not yet seen in the live API.
- */
+// True when a Claude model uses adaptive thinking (type:"adaptive" + output_config.effort)
+// instead of the legacy type:"enabled" + budget_tokens format; regex fallback for unseen models.
 function isAdaptiveThinkingModel(modelId) {
   if (!modelId) return false;
   const bare = modelId.split('/').pop();
@@ -434,11 +432,8 @@ function isAdaptiveThinkingModel(modelId) {
   return _isModernClaudeGen(bare);
 }
 
-/**
- * Returns true when a Claude model accepts the temperature parameter.
- * Extended-thinking models (both legacy and adaptive) reject temperature.
- * Falls back to regex if the model hasn't been fetched from the live API yet.
- */
+// True when a Claude model accepts temperature (extended-thinking models reject
+// it); regex fallback for models not yet fetched from the live API.
 function isTemperatureSupported(modelId) {
   if (!modelId) return true;
   const bare = modelId.split('/').pop();
@@ -447,7 +442,7 @@ function isTemperatureSupported(modelId) {
   return !_isModernClaudeGen(bare);
 }
 
-// Returns the built-in default max-output-tokens for a model ID, using known models, cached OpenRouter metadata, or name-based heuristics as fallback.
+// Default max-output-tokens: known model → cached OpenRouter meta → name heuristics.
 function getModelDefaultMax(modelId) {
   if (!modelId) return 8096;
   const known = KNOWN_MODELS[modelId];
@@ -475,7 +470,7 @@ function getModelDefaultMax(modelId) {
   if (/^glm-4-32b/i.test(modelId)) return 16384;
   return 4096;
 }
-// Returns the effective max-output-tokens for a model: a user override if set, otherwise the default.
+// Effective max-output-tokens: user override if set, otherwise the default.
 function getModelMaxOutput(modelId) {
   if (!modelId) return 8096;
   const override = config.userModelMaxOverrides?.[modelId];
@@ -493,7 +488,7 @@ const DEFAULT_CONFIG = {
   // TTS/STT provider API keys (OpenAI, ElevenLabs, Groq). Lives inside `config` (not
   // localStorage) so it goes through the same AES-GCM-256 encrypt/decrypt cycle as
   // everything else in save()/load(). Read (read-only) by kiconnect-voice.js.
-  audioProviders: { openai: { apiKey: '' }, elevenlabs: { apiKey: '', voiceId: '' }, groq: { apiKey: '' } },
+  audioProviders: { openai: { apiKey: '' }, elevenlabs: { apiKey: '', voiceId: '' }, groq: { apiKey: '' }, gemini: { apiKey: '' }, gcloud: { apiKey: '' } },
 };
 // Returns a deep copy of DEFAULT_CONFIG, used to initialize or reset app configuration.
 function freshConfig() { return JSON.parse(JSON.stringify(DEFAULT_CONFIG)); }
@@ -502,9 +497,7 @@ let providers = [];
 let profiles  = [];
 let folders   = [];
 let profileFolders = [];   // NEW: folders for organizing agent profiles (separate from chat folders)
-// Whether the "No Folder" group in the Agent Profiles panel is collapsed.
-// Pure UI state (like the theme), so it lives in localStorage rather than
-// the encrypted account store.
+// Collapsed state of the "No Folder" group (pure UI state → localStorage).
 let unfiledProfilesCollapsed = localStorage.getItem('kic_unfiled_profiles_collapsed') === '1';
 let chats     = [];
 let currentChatId   = null;
@@ -515,23 +508,11 @@ let abortController = null;
 let activeStreamSnapshot = null;
 
 // ── Auto-scroll behaviour ───────────────────────────────────────────
-// While a response is streaming in, the message list normally auto-scrolls
-// to the bottom on every chunk. Set this to false to keep your scroll
-// position (e.g. if you scrolled up to re-read something while a long
-// answer is still generating). This only affects the "keep pinned to
-// bottom while streaming" behaviour — sending a new message or opening a
-// chat always still scrolls to the bottom once.
+// The list stays pinned to the bottom while streaming unless the user scrolls
+// up (unpin → position kept when the stream ends); scrolling down re-pins.
 let AUTO_SCROLL_DURING_STREAM = false;
-// Whether the message list is currently "pinned" to the bottom. Starts
-// true (pinned) after any explicit scrollToBottom() call (new message
-// sent, chat opened, ...). If the user scrolls away from the bottom
-// (e.g. up, to re-read something) while a response/agent run is still
-// in progress, we unpin — so the "snap to bottom" that happens once the
-// stream/run finishes is skipped and their scroll position is kept.
-// Scrolling back down near the bottom themselves re-pins automatically.
 let pinnedToBottom = true;
-// Returns whether the message list's scroll position is within
-// `threshold` px of the bottom.
+// True when the message list is within `threshold` px of the bottom.
 function isMessagesNearBottom(threshold) {
   const c = document.getElementById('messages');
   if (!c) return true;
@@ -552,16 +533,12 @@ const WEB_SEARCH_RESULT_MAX = 30;
 let _selectedChatIds = new Set();
 let _multiSelectMode = false;
 
-// ═══════════════════════════════════════════════════════════════
-// CRYPTO — PBKDF2 + Full Storage Encryption
-// ═══════════════════════════════════════════════════════════════
+// ── CRYPTO — PBKDF2 + full storage encryption ──────────────────
 
 let _cryptoKey = null;
 let _sessionPassphrase = null;
 
-// == Brute-force lockout (UI-side, RAM only) ========================
-// Counts failed login attempts per account in memory.
-// NO localStorage/sessionStorage -> no bypass by clearing cache.
+// Brute-force lockout (RAM only, no storage — prevents cache-based bypass).
 const _loginFailures = {}; // { accountId: { count, lockedUntil } }
 const BF_MAX_ATTEMPTS = 5;
 const BF_BASE_DELAY_MS = 30000; // 30 s after 5 failed attempts, then exponential
@@ -772,19 +749,11 @@ async function decryptProvider(p) {
   return out;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// AGENT SESSION — lets the local proxy decrypt this account's project
-// registry (id -> real folder path) for the duration of a login.
-//
-// Reuses the exact same primitives as everything else above (PBKDF2 +
-// AES-GCM) — just a SECOND, independent key, derived with its own salt
-// and context string, so a leak of this key never exposes config/
-// providers/chats and vice versa. The raw key bytes are handed to the
-// proxy once, right after login; the proxy keeps them in RAM only,
-// never on disk (see /agent/session/unlock in kiconnect-proxy.py) —
-// the project registry itself stays encrypted at rest in exactly the
-// same per-account storage slot as everything else (datas/<id>/agent_projects.json).
-// ══════════════════════════════════════════════════════════════════
+// ── AGENT SESSION ─────────────────────────────────────────────────
+// Second, independent PBKDF2+AES-256 key so the local proxy can decrypt this
+// account's project registry (id → folder path) during a login. Kept in proxy
+// RAM only, never on disk (see /agent/session/unlock in kiconnect-proxy.py);
+// a leak of one key never exposes the other (config/chats vs. projects).
 let _agentSessionToken = null;
 let _agentProjects = [];
 
@@ -912,15 +881,9 @@ let _activeAccountId = null;
 // Looks up an account by ID in the in-memory account list.
 function getAccount(id) { return _accounts.find(a => a.id === id) || null; }
 
-// ═══════════════════════════════════════════════════════════════
-// ======================================================================
-// PERSIST v5 - server storage (./datas/) + localStorage fallback
-// ======================================================================
-// All account data is primarily stored on the local proxy server
-// under ./datas/<accountId>/<key>.json.
-// This makes it browser-independent (Chrome, Firefox, Edge, ...).
-// Falls back to localStorage if the proxy is unreachable.
-// ======================================================================
+// ── PERSIST v5 — server storage (./datas/) + localStorage fallback ─
+// Account data lives in ./datas/<accountId>/<key>.json (browser-independent);
+// localStorage is the fallback when the proxy is unreachable.
 
 const _STORE_BASE = '/store';
 let _storeAvailable = true; // false if the server doesn't respond
@@ -1241,7 +1204,7 @@ function effectiveMaxTokens() {
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
-  'api.mistral.ai','generativelanguage.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai', 'api.moonshot.ai',
+  'api.mistral.ai','generativelanguage.googleapis.com','texttospeech.googleapis.com','api.x.ai','api.groq.com', 'api.deepseek.com', 'api.minimax.io', 'api.z.ai', 'api.moonshot.ai',
   'api.elevenlabs.io',
   'api.search.brave.com','html.duckduckgo.com','lite.duckduckgo.com',
   'api.qwant.com','search.yahoo.com','www.startpage.com',
@@ -1268,10 +1231,27 @@ function isSafeApiUrl(url) {
     });
   } catch { return false; }
 }
+// True if `url`'s host belongs to a saved openai-compat provider whose
+// address was explicitly double-confirmed in the Provider editor (see
+// confirmLanAddress()). The proxy's own SSRF protection blocks requests to
+// private/LAN addresses by default; this marker is the only thing that
+// unlocks a specific, user-approved one.
+function _isLanConfirmedUrl(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return providers.some(p => p.type === 'openai-compat' && p.netConfirmed && p.netConfirmedHost === h);
+  } catch { return false; }
+}
 // Routes a request URL through the local dev proxy (if active) after checking it against isSafeApiUrl(); throws if the domain isn't allowed.
 function proxyUrl(url) {
   if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
-  return USE_PROXY ? '/proxy/' + url : url;
+  if (!USE_PROXY) return url;
+  let out = '/proxy/' + url;
+  // Marker lives on the *outer* proxy request's query string, not on the
+  // upstream target URL - the proxy strips it again before forwarding
+  // (see _proxy_request() / kic_lan_confirm in kiconnect-proxy.py).
+  if (_isLanConfirmedUrl(url)) out += (url.includes('?') ? '&' : '?') + 'kic_lan_confirm=1';
+  return out;
 }
 // Routes a public (non-API-key) fetch such as page/search fetching through the local dev proxy; only checks the URL scheme, not a domain whitelist.
 function proxyPublicUrl(url) {
@@ -1465,6 +1445,21 @@ function selectProviderType(type) {
 // Returns the currently selected provider type chip's value.
 function getSelectedProviderType() { return document.querySelector('.type-chip.selected')?.dataset.type || 'openai-compat'; }
 
+// Shows two sequential confirmation dialogs before a non-localhost server
+// URL is allowed to be saved into a Provider. The backend proxy blocks
+// requests to private/LAN addresses by default (SSRF protection) - this is
+// what makes LM Studio/Ollama/vLLM running on *another* machine on the
+// network fail otherwise. Confirming here is what unlocks that one address.
+// Returns true only if the user accepted both prompts.
+function confirmLanAddress(hostname) {
+  const msg1 = tf('js.lanConfirm1', { host: hostname }) ||
+    `⚠️ "${hostname}" is not localhost - it looks like an address on your local network (or beyond).\n\nThis app will be allowed to send requests to that address. Only continue if you set this up yourself and trust it.\n\nContinue?`;
+  if (!confirm(msg1)) return false;
+  const msg2 = tf('js.lanConfirm2', { host: hostname }) ||
+    `Please confirm once more: allow network access to "${hostname}"?\n\nYou can revoke this later by editing or deleting the provider.`;
+  if (!confirm(msg2)) return false;
+  return true;
+}
 // Validates and saves the provider editor form, creating or updating a provider, then refreshes the model list.
 async function saveProviderEditor() {
   const name = document.getElementById('pvNameInput').value.trim();
@@ -1473,7 +1468,29 @@ async function saveProviderEditor() {
   const serverUrl = document.getElementById('pvServerUrl').value.trim().replace(/\/$/,'');
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
   const apiKey = document.getElementById('pvApiKey').value.trim();
-  const data = { name, type, serverUrl: type==='openai-compat'?serverUrl:'', apiKey };
+
+  // Non-localhost server URLs need an explicit, double-confirmed opt-in -
+  // the proxy won't forward requests to them otherwise. Re-confirming is
+  // skipped only if this exact host was already confirmed for this same
+  // provider (so re-saving unrelated fields doesn't re-prompt).
+  let netConfirmed = false, netConfirmedHost = '';
+  if (type === 'openai-compat' && serverUrl) {
+    let hostname = '';
+    try { hostname = new URL(serverUrl).hostname.toLowerCase(); }
+    catch { toast(t('js.invalidUrl') || 'Invalid server URL.'); return; }
+    const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+    if (!isLocal) {
+      const existing = editingProviderId ? providers.find(p => p.id === editingProviderId) : null;
+      const alreadyConfirmed = !!(existing && existing.netConfirmed && existing.netConfirmedHost === hostname);
+      if (!alreadyConfirmed && !confirmLanAddress(hostname)) {
+        toast(t('js.lanConfirmCancelled') || 'Cancelled - network address was not confirmed.');
+        return;
+      }
+      netConfirmed = true; netConfirmedHost = hostname;
+    }
+  }
+
+  const data = { name, type, serverUrl: type==='openai-compat'?serverUrl:'', apiKey, netConfirmed, netConfirmedHost };
   if (editingProviderId) {
     const idx = providers.findIndex(p => p.id === editingProviderId);
     if (idx !== -1) providers[idx] = {...providers[idx], ...data};
@@ -2442,9 +2459,7 @@ function setStatus(c) {
   d.style.animation = (c === 'yellow') ? 'pulse 1s infinite' : 'pulse 2s infinite';
 }
 
-// ══════════════════════════════════════════════════════════════════
-// FOLDERS — with drag & drop reordering
-// ══════════════════════════════════════════════════════════════════
+// ── FOLDERS — drag & drop reordering ──────────────────────────────
 function newFolder() {
   const id = Date.now().toString();
   folders.push({id, name: t('js.newFolder'), collapsed:false});
@@ -3359,7 +3374,8 @@ function _buildBubbleChrome(row, wrap, bubble, msg, idx) {
   if (!isUser) {
     const vc = document.createElement('div');
     vc.className = 'bubble-voice-controls';
-    vc.innerHTML = '<button class="bubble-voice-btn" type="button" title="Read aloud">🔊</button>';
+    vc.innerHTML = '<button class="bubble-voice-btn" type="button" title="Read aloud">🔊</button>'
+      + '<button class="bubble-voice-pause-btn" type="button" style="display:none"></button>';
     actDiv.appendChild(vc);
   }
   actDiv.appendChild(makeActBtn(t('js.delete'),     'danger', deleteBubble, 'delete'));
@@ -4434,7 +4450,11 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
           }
           if (chunk.usage) {
             const u = chunk.usage;
-            usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens || 0 };
+            // DeepSeek reports cache hits as prompt_cache_hit_tokens instead
+            // of the OpenAI-standard prompt_tokens_details.cached_tokens —
+            // fall back to it so DeepSeek's cache savings actually show up
+            // in the token badge instead of always reading 0.
+            usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
             _rememberStreamSnapshot(showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData);
           }
         } catch {}
@@ -4999,9 +5019,9 @@ function updateWebSearchKeyUI(engine) {
 }
 
 // TTS providers that require an API key (everything except the free browser voice).
-function ttsProviderNeedsKey(p) { return p === 'openai' || p === 'elevenlabs' || p === 'groq'; }
+function ttsProviderNeedsKey(p) { return p === 'openai' || p === 'elevenlabs' || p === 'groq' || p === 'gemini' || p === 'gcloud'; }
 // STT providers that require an API key (everything except the free browser STT).
-function sttProviderNeedsKey(p) { return p === 'groq'; }
+function sttProviderNeedsKey(p) { return p === 'groq' || p === 'gemini'; }
 
 // t() falls back to the raw key when a translation is missing, which isn't
 // presentable UI text. ta() falls back to a real string instead — used for
@@ -5013,6 +5033,16 @@ const AUDIO_PROVIDER_KEY_INFO = {
   openai:     { label: () => ta('audio.ttsKeyLabelOpenAI', 'OpenAI API key'),     hint: () => ta('audio.ttsHintOpenAI', 'tts-1 / tts-1-hd / gpt-4o-mini-tts. Usage-based pricing. Stored encrypted with your account data.'),     ph: 'sk-...' },
   elevenlabs: { label: () => ta('audio.ttsKeyLabelElevenLabs', 'ElevenLabs API key'), hint: () => ta('audio.ttsHintElevenLabs', 'Very natural voices, more expensive. Requires your own ElevenLabs account. Stored encrypted with your account data.'), ph: 'el_...' },
   groq:       { label: () => ta('audio.ttsKeyLabelGroq', 'Groq API key'),       hint: () => ta('audio.ttsHintGroq', 'Cheap, OpenAI-compatible. Stored encrypted with your account data.'),       ph: 'gsk_...' },
+  gemini:     { label: () => ta('audio.ttsKeyLabelGemini', 'Google Gemini API key'), hint: () => ta('audio.ttsHintGemini', 'Free tier via Google AI Studio (rate-limited). Same key type as a Gemini chat provider. Stored encrypted with your account data.'), ph: 'AIza...' },
+  gcloud:     { label: () => ta('audio.ttsKeyLabelGcloud', 'Google Cloud API key (Text-to-Speech)'), hint: () => ta('audio.ttsHintGcloud', 'Chirp 3: HD voices. Different from the Gemini key above — needs a Google Cloud project with the Text-to-Speech API enabled and a billing account attached (usage still free within the monthly quota). Stored encrypted with your account data.'), ph: 'AIza...' },
+};
+
+// STT-side equivalent of AUDIO_PROVIDER_KEY_INFO — kept separate because the
+// STT key field previously had Groq's label/hint hardcoded inline; this map
+// lets updateAudioProviderKeyUI() below treat STT providers generically too.
+const AUDIO_STT_PROVIDER_KEY_INFO = {
+  groq:   { label: () => ta('audio.sttKeyLabelGroq', 'Groq API key'),   hint: () => ta('audio.sttHintGroq', 'Cheap, good with dialects. No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.'),   ph: 'gsk_...' },
+  gemini: { label: () => ta('audio.sttKeyLabelGemini', 'Google Gemini API key'), hint: () => ta('audio.sttHintGemini', 'Free tier via Google AI Studio (rate-limited). No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.'), ph: 'AIza...' },
 };
 
 // Shows/hides + relabels the TTS and STT API-key fields in the Audio tuning-panel
@@ -5055,22 +5085,27 @@ function updateAudioProviderKeyUI() {
     const needsKey = sttProviderNeedsKey(sttProvider);
     sttGroup.style.display = needsKey ? 'block' : 'none';
     if (needsKey) {
-      if (sttLabel) sttLabel.textContent = ta('audio.sttKeyLabelGroq', 'Groq API key');
-      if (sttHint)  sttHint.textContent  = ta('audio.sttHintGroq', 'Cheap, good with dialects. No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.');
-      if (sttInput) sttInput.value = config.audioProviders.groq?.apiKey || '';
+      const info = AUDIO_STT_PROVIDER_KEY_INFO[sttProvider];
+      if (sttLabel) sttLabel.textContent = info.label();
+      if (sttHint)  sttHint.textContent  = info.hint();
+      if (sttInput) sttInput.placeholder = info.ph;
+      if (sttInput) sttInput.value = config.audioProviders[sttProvider]?.apiKey || '';
     }
   }
 }
 
 // ── Tuning panel: generic collapse/expand for every top-level section ──
-// Wraps each #tuningPanel section's content (from its .section-header up to
+// Wraps each panel section's content (from its .section-header up to
 // the next .section-header or <hr class="divider">, whichever comes first —
 // the divider itself is left outside the wrapper so it stays visible as a
 // permanent boundary even while the preceding section is collapsed) into a
 // .tuning-section div, adds a clickable arrow to the header, and persists the
-// open/closed state per section in localStorage. Idempotent — runs once.
-function initTuningSectionCollapse() {
-  const panel = document.getElementById('tuningPanel');
+// open/closed state per section in localStorage. Idempotent per panel — runs
+// once per panelId. Originally #tuningPanel-only; generalized so any panel
+// with the same "section-header + <hr class=divider>" structure (e.g.
+// #settingsPanel) can opt in by passing its id + a distinct storage prefix.
+function initPanelSectionCollapse(panelId, storagePrefix) {
+  const panel = document.getElementById(panelId);
   if (!panel || panel.dataset.collapseInit) return;
   panel.dataset.collapseInit = '1';
 
@@ -5097,7 +5132,7 @@ function initTuningSectionCollapse() {
     toMove.forEach(n => wrapper.appendChild(n));
     header.insertAdjacentElement('afterend', wrapper);
 
-    const storeKey = 'kic_tuning_collapsed_' + sectionId;
+    const storeKey = storagePrefix + sectionId;
     const collapsed = localStorage.getItem(storeKey) === '1';
     if (collapsed) { wrapper.classList.add('collapsed'); header.classList.add('collapsed'); }
 
@@ -5107,6 +5142,14 @@ function initTuningSectionCollapse() {
       try { localStorage.setItem(storeKey, nowCollapsed ? '1' : '0'); } catch {}
     });
   });
+}
+
+function initTuningSectionCollapse() {
+  initPanelSectionCollapse('tuningPanel', 'kic_tuning_collapsed_');
+}
+
+function initSettingsSectionCollapse() {
+  initPanelSectionCollapse('settingsPanel', 'kic_settings_collapsed_');
 }
 
 const SEARXNG_PUBLIC_INSTANCES = [
@@ -6209,6 +6252,20 @@ function copyFullChat() {
 }
 
 // ── Text Formatting ────────────────────────────────────────────────
+// Safe UTF-8 -> base64 encoder. Replaces the classic
+// btoa(unescape(encodeURIComponent(str))) trick, which throws
+// "URIError: malformed URI sequence" if str contains an unpaired
+// UTF-16 surrogate (e.g. a truncated emoji from streamed model output,
+// or an oddly-encoded custom font mapping from extracted PDF text).
+// TextEncoder never throws — it silently replaces invalid surrogates
+// with U+FFFD, so a stray bad character degrades gracefully instead of
+// crashing the whole render (formatText -> buildMsgEl -> renderMessages).
+function toBase64Utf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
 function escHtml(s) {
   if(s===null||s===undefined) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -6229,7 +6286,7 @@ function formatText(raw) {
   // 4+-Backtick-Fences
   s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => {
     const i = blocks.length;
-    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
     const ll = escHtml((lang || '').trim() || 'code');
     blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
@@ -6238,7 +6295,7 @@ function formatText(raw) {
   // 3-Backtick-Fences
   s = s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => {
     const i = blocks.length;
-    const b64 = btoa(unescape(encodeURIComponent(code)));
+    const b64 = toBase64Utf8(code);
     const ll = escHtml(lang || 'code');
     blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
@@ -6247,14 +6304,14 @@ function formatText(raw) {
   // Not-closed Fences (Fallback)
   s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => {
     const i = blocks.length;
-    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
     const ll = escHtml((lang || '').trim() || 'code');
     blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
   });
   s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => {
     const i = blocks.length;
-    const b64 = btoa(unescape(encodeURIComponent(code.replace(/\n$/, ''))));
+    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
     const ll = escHtml(lang || 'code');
     blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return PH(i);
@@ -6270,7 +6327,7 @@ function formatText(raw) {
   // LaTeX Display: \[ ... \]
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
     const i = blocks.length;
-    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    const latexB64 = toBase64Utf8(math);
     blocks.push(`<div class="math-block" data-latex="${latexB64}">\\[${escHtml(math)}\\]</div>`);
     return PH(i);
   });
@@ -6278,7 +6335,7 @@ function formatText(raw) {
   // LaTeX Display: $$ ... $$
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
     const i = blocks.length;
-    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    const latexB64 = toBase64Utf8(math);
     blocks.push(`<div class="math-block" data-latex="${latexB64}">$$${escHtml(math)}$$</div>`);
     return PH(i);
   });
@@ -6286,7 +6343,7 @@ function formatText(raw) {
   // LaTeX Inline: \( ... \)
   s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
     const i = blocks.length;
-    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    const latexB64 = toBase64Utf8(math);
     blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
     return PH(i);
   });
@@ -6294,7 +6351,7 @@ function formatText(raw) {
   // LaTeX Inline: $...$ (kein Leerzeichen am Rand, kein Zeilenumbruch)
   s = s.replace(/\$([^\s$\n][^$\n]*?[^\s$\n]|\S)\$/g, (_, math) => {
     const i = blocks.length;
-    const latexB64 = btoa(unescape(encodeURIComponent(math)));
+    const latexB64 = toBase64Utf8(math);
     blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
     return PH(i);
   });
@@ -6333,7 +6390,7 @@ function formatText(raw) {
       const text = (token && typeof token === 'object') ? (token.text || '') : String(token || '');
       const lang = (token && typeof token === 'object') ? (token.lang || 'code') : 'code';
       const i = blocks.length;
-      const b64 = btoa(unescape(encodeURIComponent(text)));
+      const b64 = toBase64Utf8(text);
       const ll = escHtml(lang || 'code');
       blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▾</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(text)}</code></pre></div></div>`);
       return PH(i);
@@ -6400,9 +6457,41 @@ function typesetMath(el) {
   const targets = Array.isArray(target) ? target : [target];
   if (!targets.length) return;
   if (window.MathJax && MathJax.typesetPromise) {
-    MathJax.typesetPromise(targets).catch(err => console.error('[MathJax typeset error]', err));
+    MathJax.typesetPromise(targets).then(() => stripMathFocusability(targets))
+      .catch(err => console.error('[MathJax typeset error]', err));
   }
 }
+
+// MathJax's enableAssistiveMml (kiconnect-mathjax-config.js) makes every
+// <mjx-container> focusable (tabindex="0") so a screen reader's virtual
+// cursor / Tab key can reach the hidden assistive MathML. Side effect: a
+// plain click on a rendered formula focuses that container — and moving
+// focus onto it has been observed to interrupt an in-progress
+// speechSynthesis utterance (kiconnect-voice.js), consistently across
+// Chrome/Edge/Firefox, since it's a DOM-focus effect, not a browser quirk.
+// Screen readers can still reach and read the assistive MathML via their
+// own browse-mode virtual cursor without needing Tab-key focusability, so
+// removing the attribute costs sequential (Tab-order) reachability of
+// formulas but not accessibility of their content.
+function stripMathFocusability(targets) {
+  targets.forEach(t => {
+    if (!t || !t.querySelectorAll) return;
+    if (t.matches && t.matches('mjx-container[tabindex]')) t.removeAttribute('tabindex');
+    t.querySelectorAll('mjx-container[tabindex]').forEach(mjx => mjx.removeAttribute('tabindex'));
+  });
+}
+
+// Belt-and-suspenders: even if some future/other code path creates an
+// <mjx-container> we didn't run stripMathFocusability() on, never let a
+// mouse click actually move focus onto it (see stripMathFocusability's
+// comment for why that matters). Capturing mousedown and calling
+// preventDefault() suppresses the browser's default focus-on-mousedown
+// behavior without blocking the click event itself, so copy/selection/
+// the app's own formula-copy handling all keep working normally.
+document.addEventListener('mousedown', e => {
+  if (e.target.closest && e.target.closest('mjx-container')) e.preventDefault();
+}, true);
+
 
 // Throttled variant: used during streaming so LaTeX renders progressively
 // instead of only once at the very end.
@@ -6450,9 +6539,7 @@ function arrayBufferToBase64(buf){const bytes=new Uint8Array(buf);let bin='';for
 // Returns whether a model ID supports receiving raw PDF bytes (as opposed to extracted text only).
 function modelSupportsPdfBase64(mid){return /claude|gemini|gpt-4o/i.test(mid||'');}
 
-// ════════════════════════════════════════════════════════════════
-// FILE / IMAGE HANDLING — including Ctrl+V paste
-// ════════════════════════════════════════════════════════════════
+// ── FILE / IMAGE HANDLING (incl. Ctrl+V paste) ──────────────────
 
 // Reads a dropped/selected file (image, PDF, or text) and adds it to the pending attachments.
 async function processFile(file) {
@@ -6574,7 +6661,7 @@ function closePanels(){
 // Shows a temporary toast notification with the given message.
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
 // Opens the Settings panel.
-function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');}
+function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');initSettingsSectionCollapse();}
 // Opens the Tuning panel.
 function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');initTuningSectionCollapse();}
 // Opens the Profiles panel.
@@ -6907,9 +6994,7 @@ function resetModelMax(modelId){
 // Clears all user max-output-token overrides.
 function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMaxList();updateModelMaxInfo();toast(t('js.allLimitsReset'));}
 
-// ═══════════════════════════════════════════════════════════════
-// LOGIN / MULTI-ACCOUNT / SESSION
-// ═══════════════════════════════════════════════════════════════
+// ── LOGIN / MULTI-ACCOUNT / SESSION ─────────────────────────────
 
 const ACCOUNT_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35','#00bcd4','#9c27b0'];
 let _selectedLoginAccountId = null; // account selected on grid before pw entry
@@ -6969,8 +7054,8 @@ function renderAccountGrid() {
     tile.addEventListener('click', () => selectAccountForLogin(acc.id));
 
     const avatar = document.createElement('div');
-    avatar.style.cssText = `width:64px;height:64px;border-radius:16px;background:${acc.color};display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:white;box-shadow:0 4px 16px ${acc.color}55;`;
-    avatar.textContent = (acc.name || '?').slice(0, 1).toUpperCase();
+    avatar.style.cssText = `width:64px;height:64px;border-radius:16px;background:${acc.color};display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 4px 16px ${acc.color}55;`;
+    avatar.textContent = '🪪';
 
     const name = document.createElement('div');
     name.style.cssText = 'font-size:13px;font-weight:600;color:var(--text);text-align:center;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
@@ -6991,7 +7076,7 @@ function selectAccountForLogin(accountId) {
   // Show avatar + name in login view
   const avatarEl = document.getElementById('loginAvatarDisplay');
   const nameEl   = document.getElementById('loginAccountName');
-  if (avatarEl) { avatarEl.style.background = acc.color; avatarEl.textContent = acc.name.slice(0,1).toUpperCase(); }
+  if (avatarEl) { avatarEl.style.background = acc.color; avatarEl.textContent = '🪪'; }
   if (nameEl)   nameEl.textContent = acc.name;
   document.getElementById('loginInput').value = '';
   document.getElementById('loginError').textContent = '';
@@ -7381,9 +7466,7 @@ function clearAllData() {
   setTimeout(() => logoutNow(), 1500);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// EVENT LISTENER SETUP
-// ═══════════════════════════════════════════════════════════════
+// ── EVENT LISTENER SETUP ────────────────────────────────────────
 function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
   document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
@@ -7495,9 +7578,10 @@ function setupEventListeners(){
     save();
   });
   document.getElementById('sttApiKey')?.addEventListener('input', e=>{
+    const provider = document.getElementById('sttProviderSelect')?.value || 'groq';
     config.audioProviders = config.audioProviders || {};
-    config.audioProviders.groq = config.audioProviders.groq || {};
-    config.audioProviders.groq.apiKey = e.target.value.trim();
+    config.audioProviders[provider] = config.audioProviders[provider] || {};
+    config.audioProviders[provider].apiKey = e.target.value.trim();
     scheduleTuningSave();
   });
 
@@ -7672,52 +7756,72 @@ function setupEventListeners(){
   observer.observe(messagesContainer,{childList:true,subtree:true});
 }
 
-// ═══════════════════════════════════════════════════════════════
-// PRINT — Full chat & single bubble
-// ═══════════════════════════════════════════════════════════════
+// ── PRINT — Full chat & single bubble ───────────────────────────
 
 // Opens the browser print dialog for the entire active chat.
 function printFullChat() {
   const chat = currentChat();
   if (!chat || !chat.messages.length) { toast(t('js.noChatToPrint')); return; }
-  // Set the title; it is visible only in print media.
   const titleEl = document.getElementById('printChatTitle');
   if (titleEl) {
     const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric' });
     titleEl.textContent = `${chat.title}  —  ${date}`;
   }
-  // Re-typeset MathJax if needed, then print
+  // Wait for typeset THEN fonts.ready (sequential, not parallel - typeset
+  // discovers font chunks it needs as it goes, so fonts.ready must wait
+  // until that's fully done, or a late chunk can print as a fallback glyph).
+  const doPrint = () => window.print();
   if (window.MathJax && MathJax.typesetPromise) {
-    MathJax.typesetPromise().then(() => { window.print(); }).catch(() => { window.print(); });
+    MathJax.typesetPromise()
+      .then(() => (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve())
+      .then(doPrint)
+      .catch(doPrint);
   } else {
-    window.print();
+    doPrint();
   }
 }
 
-// _printSingleIdx: index of the bubble currently being printed
-let _printSingleIdx = null;
+let _printSingleIdx = null; // index of the bubble currently being printed
 
-// Opens the single-message print preview overlay for one bubble.
+// Opens the single-message print preview overlay by cloning the message's
+// already-rendered .bubble (and its .note-print) live out of the chat,
+// instead of re-formatting msg.content from scratch. Keeps preview/print in
+// sync with current collapse/expand state, needs no MathJax re-typeset, and
+// keeps note styling consistent with the full-chat print.
 function openPrintSingleOverlay(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
   const msg = getActivePath(chat)[idx]; if (!msg) return;
-
-  let text = '';
-  if (typeof msg.content === 'string') text = msg.content;
-  else if (Array.isArray(msg.content))
-    text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
+  const row = getBubbleRow(idx); if (!row) return;
+  const liveBubble = row.querySelector('.bubble');
+  const liveNote = row.querySelector('.note-print');
+  if (!liveBubble) return;
 
   _printSingleIdx = idx;
+
+  // Meta line (role + date)
+  const role = msg.role === 'user' ? 'Du' : (splitModelId(msg._model || config.model).modelId || 'KI');
+  const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const metaEl = document.getElementById('printSingleMeta');
+  if (metaEl) metaEl.textContent = `${role} · ${date}`;
+
+  // Live clone so collapse/expand state carries over; re-wire buttons
+  // since cloneNode() doesn't copy event listeners.
   const contentEl = document.getElementById('printSingleContent');
-  // Show formatted preview (same as chat rendering)
   if (contentEl) {
-    contentEl.innerHTML = formatText(text);
-    // Trigger MathJax typesetting for the overlay content
-    if (window.MathJax && MathJax.typesetPromise) {
-      MathJax.typesetPromise([contentEl]).catch(() => {});
-    }
+    contentEl.innerHTML = '';
+    const clone = liveBubble.cloneNode(true);
+    clone.classList.remove('streaming');
+    while (clone.firstChild) contentEl.appendChild(clone.firstChild);
+    wireCodeCopyButtons(contentEl);
   }
+
+  const noteEl = document.getElementById('printSingleNote');
+  if (noteEl) {
+    noteEl.innerHTML = liveNote ? liveNote.innerHTML : '';
+    noteEl.dataset.label = (liveNote && liveNote.dataset.label) || t('js.noteLabel');
+  }
+
   document.getElementById('printSingleOverlay')?.classList.add('show');
 }
 
@@ -7728,103 +7832,30 @@ function closePrintSingleOverlay() {
 }
 
 // Opens the browser print dialog for a single message.
+// Prints the MAIN window (via body.printing-single-bubble - see
+// kiconnect.css @media print), not a popup with its own MathJax instance
+// like before - that had to re-typeset/re-fetch fonts from scratch, and if
+// a chunk wasn't ready in time, printed a wrong-but-plausible-looking
+// glyph instead of a tofu box (e.g. "ox" -> "ax", "2" -> "m"). Printing the
+// main window reuses fonts already loaded and typeset, same as
+// printFullChat() above.
 function printSingleBubble() {
   if (_printSingleIdx === null) return;
-  const chat = currentChat(); if (!chat) return;
-  const msg = getActivePath(chat)[_printSingleIdx]; if (!msg) return;
 
-  let text = '';
-  if (typeof msg.content === 'string') text = msg.content;
-  else if (Array.isArray(msg.content))
-    text = msg.content.filter(p => p.type === 'text' && !p.text?.startsWith('--- ')).map(p => p.text).join('\n');
-
-  // Formatted HTML via formatText (same rendering as in chat)
-  const formattedHtml = formatText(text);
-  const noteHtml = (msg._note && msg._note.trim()) ? formatText(msg._note) : '';
-  const role = msg.role === 'user' ? 'Du' : (splitModelId(msg._model || config.model).modelId || 'KI');
-  const date = new Date().toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
-  const win = window.open('', '_blank', 'width=820,height=700');
-  if (!win) { toast(t('js.popupBlocked')); return; }
-  win.document.write(`<!DOCTYPE html><html><head>
-    <meta charset="UTF-8">
-    <title>${tf('js.printMessageFrom', {role: escHtml(role)})}</title>
-    <script>
-      window.MathJax = {
-        tex: { inlineMath:[['$','$'],['\\\\(','\\\\)']], displayMath:[['$$','$$'],['\\\\[','\\\\]']], processEscapes:true },
-        options: { skipHtmlTags:['script','noscript','style','textarea','pre','code'] },
-        chtml: {
-          fontURL: '${new URL('_render/newcm-font/chtml/woff2', document.baseURI).href}',
-          dynamicPrefix: '${new URL('_render/newcm-font/chtml/dynamic', document.baseURI).href}'
-        },
-        startup: { typeset: true },
-      };
-    <\/script>
-    <script src="${new URL('_render/latex/tex-chtml.js', document.baseURI).href}"><\/script>
-    <style>
-      *, *::before, *::after { box-sizing: border-box; }
-      body { font-family: Georgia, 'Times New Roman', serif; max-width: 740px; margin: 40px auto; color: #111; font-size: 12pt; line-height: 1.65; }
-      .meta { font-size: 10pt; color: #555; margin-bottom: 16px; border-bottom: 1px solid #ccc; padding-bottom: 8px; }
-      p  { margin: 0 0 10px; }
-      p:last-child { margin-bottom: 0; }
-      strong { font-weight: 700; }
-      em     { font-style: italic; }
-      del    { text-decoration: line-through; }
-      h1 { font-size: 18pt; margin: 14px 0 6px; }
-      h2 { font-size: 15pt; margin: 12px 0 4px; }
-      h3 { font-size: 13pt; margin: 10px 0 4px; }
-      ul, ol { margin: 6px 0 6px 22px; }
-      li { margin-bottom: 3px; }
-      code { font-family: 'Courier New', monospace; font-size: 10pt; background: #f4f4f4; padding: 1px 4px; border-radius: 3px; }
-      pre  { font-family: 'Courier New', monospace; font-size: 9.5pt; background: #f4f4f4; border: 1px solid #ddd; padding: 10px 14px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; margin: 8px 0; }
-      pre code { background: none; padding: 0; }
-      .code-block { margin: 8px 0; }
-      .code-block-header { display: none; }
-      .math-block { display: block; margin: 10px 0; }
-      table { border-collapse: collapse; width: 100%; font-size: 11pt; margin: 8px 0; }
-      th, td { border: 1px solid #bbb; padding: 5px 10px; }
-      th { background: #eef; }
-      hr { border: none; border-top: 1px solid #ccc; margin: 10px 0; }
-      .note-block { margin-top: 18px; padding: 8px 12px; background: #fff9e0; border: 1px solid #d6b23f; border-left: 3px solid #cf9a1a; border-radius: 4px; font-size: 10.5pt; }
-      .note-block .note-block-label { display: block; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #a9821f; margin-bottom: 4px; }
-      @media print {
-        body { margin: 20px; }
-        .code-block-header { display: none !important; }
-      }
-    </style>
-  </head><body>
-    <div class="meta"><strong>${escHtml(role)}</strong> · ${escHtml(date)}</div>
-    <div class="content">${formattedHtml}</div>
-    ${noteHtml ? `<div class="note-block"><span class="note-block-label">🗒️ ${escHtml(t('js.noteLabel'))}</span>${noteHtml}</div>` : ''}
-    <script>
-      var _printed = false;
-      function doPrint() {
-        if (_printed) return;
-        _printed = true;
-        if (window.MathJax && MathJax.startup && MathJax.startup.promise) {
-          MathJax.startup.promise.then(() => {
-            MathJax.typesetPromise().then(() => { window.print(); }).catch(() => { window.print(); });
-          }).catch(() => { window.print(); });
-        } else {
-          window.print();
-        }
-      }
-      if (document.readyState === 'complete') {
-        setTimeout(doPrint, 300);
-      } else {
-        window.addEventListener('load', function() { setTimeout(doPrint, 300); });
-      }
-      // Hard fallback: in case MathJax isn't done after 4s
-      setTimeout(function() { if (!_printed) doPrint(); }, 4000);
-    <\/script>
-  </body></html>`);
-  win.document.close();
-  win.focus();
-  closePrintSingleOverlay();
+  document.body.classList.add('printing-single-bubble');
+  const doPrint = () => {
+    window.print();
+    document.body.classList.remove('printing-single-bubble');
+    closePrintSingleOverlay();
+  };
+  // Content is already-typeset (cloned live bubble), so no typesetPromise()
+  // needed - just wait for fonts.ready defensively before printing.
+  ((document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve())
+    .then(doPrint)
+    .catch(doPrint);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════════════════════
+// ── INIT ────────────────────────────────────────────────────────
 (async()=>{
   // Hide main UI immediately — show only after successful login
   document.querySelector('.main')?.style.setProperty('display','none');

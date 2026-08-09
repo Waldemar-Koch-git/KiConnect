@@ -784,10 +784,11 @@ header {
   text-transform: uppercase; letter-spacing: 1px;
   font-family: 'IBM Plex Mono', monospace;
 }
-/* Generic collapse/expand for #tuningPanel sections. Applied at runtime by
-   initTuningSectionCollapse() in kiconnect.js, which wraps each section's
-   content (from its .section-header up to the next .section-header or
-   <hr class="divider">) into a .tuning-section div. */
+/* Generic collapse/expand for panel sections (#tuningPanel, #settingsPanel).
+   Applied at runtime by initPanelSectionCollapse() in kiconnect.js (called
+   as initTuningSectionCollapse() / initSettingsSectionCollapse()), which
+   wraps each section's content (from its .section-header up to the next
+   .section-header or <hr class="divider">) into a .tuning-section div. */
 .section-header.tuning-collapsible {
   cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;
 }
@@ -1447,6 +1448,16 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 .bubble .MathJax { color: var(--text) !important; }
 .math-block      { display: block; overflow-x: auto; padding: 4px 0; }
+/* MathJax's enableAssistiveMml option (kiconnect-mathjax-config.js) adds a
+   hidden real <math>…</math> MathML copy on top of every formula, purely
+   for screen readers. Without this rule it still catches mouse clicks and
+   text selection, so a click/double-click on a rendered formula can land
+   on the invisible copy instead of the visible one — which can trigger
+   the OS/browser's own "read selection aloud" accessibility hooks and
+   steal the speechSynthesis channel our own TTS is using. Keep it purely
+   for assistive tech: pointer/selection always passes through to the
+   visible CHTML layer underneath. */
+mjx-assistive-mml { pointer-events: none; user-select: none; }
 
 
 /* ── Inline edit ─────────────────────────────────────────────────── */
@@ -1830,6 +1841,7 @@ textarea::placeholder { color: var(--muted); }
   box-shadow: 0 8px 40px rgba(0,0,0,0.5);
 }
 #printSingleBox h3 { margin: 0; font-size: 15px; }
+#printSingleMeta { font-size: 12px; color: var(--muted); }
 .print-single-bubble {
   flex: 1; overflow-y: auto;
   background: var(--ai-bg, #12151c);
@@ -1839,16 +1851,25 @@ textarea::placeholder { color: var(--muted); }
   font-size: 14px; line-height: 1.65;
   /* Inherit bubble markdown styles */
 }
-/* Markdown inside preview */
+/* Markdown inside preview - mirrors .bubble's rules 1:1 (live clone content) */
 .print-single-bubble p      { margin: 0 0 8px; }
 .print-single-bubble strong { font-weight: 700; }
 .print-single-bubble em     { font-style: italic; }
 .print-single-bubble del    { text-decoration: line-through; }
+.print-single-bubble u      { text-decoration: underline; }
 .print-single-bubble h1     { font-size: 20px; margin: 12px 0 4px; }
 .print-single-bubble h2     { font-size: 17px; margin: 10px 0 4px; }
 .print-single-bubble h3     { font-size: 15px; margin: 8px 0 4px; }
 .print-single-bubble ul,
 .print-single-bubble ol     { padding-left: 1.5em; margin: 6px 0; }
+.print-single-bubble img    { max-width: 320px; border-radius: 8px; margin-top: 8px; display: block; border: 1px solid var(--border); }
+.print-single-bubble blockquote { border-left: 3px solid var(--accent); margin: 8px 0; padding: 4px 12px; color: var(--muted); font-style: italic; }
+.print-single-bubble hr     { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.print-single-bubble a      { color: var(--accent); text-decoration: underline; word-break: break-all; }
+.print-single-bubble kbd    { font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+.print-single-bubble mark   { background: rgba(255, 220, 50, 0.25); color: inherit; border-radius: 2px; padding: 0 2px; }
+.print-single-bubble sup    { font-size: 0.75em; vertical-align: super; }
+.print-single-bubble sub    { font-size: 0.75em; vertical-align: sub; }
 .print-single-bubble code   { font-family: 'IBM Plex Mono', monospace; font-size: 13px; background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 3px; }
 .print-single-bubble pre    { background: rgba(255,255,255,0.04); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .print-single-bubble .code-block-header { display: none; }
@@ -1869,7 +1890,7 @@ textarea::placeholder { color: var(--muted); }
 .bubble-voice-controls {
   display: inline-flex;
   align-items: center;
-  position: relative;
+  gap: 4px;
 }
 
 .bubble-voice-btn {
@@ -1881,25 +1902,42 @@ textarea::placeholder { color: var(--muted); }
 .bubble-voice-btn:hover       { color: var(--text); border-color: var(--accent); }
 .bubble-voice-btn.playing     { color: var(--red); border-color: var(--red); animation: voice-pulse 1.2s ease-in-out infinite; }
 
-.voice-submenu {
-  display: none; position: absolute; top: calc(100% + 4px); left: 0;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 4px; z-index: 50;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-  flex-direction: row; gap: 3px; white-space: nowrap;
+/* Pause/Resume — only shown while this bubble is the one reading aloud,
+   same idea and icon set as the main input-row control (kiconnect-voice.js
+   sets its innerHTML to SVG_PAUSE / SVG_RESUME at runtime). */
+.bubble-voice-pause-btn {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--muted); padding: 3px 6px;
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
 }
-.voice-submenu.open { display: flex; }
-
-.voice-submenu-btn {
-  background: none; border: 1px solid var(--border); color: var(--muted);
-  font-size: 11px; padding: 3px 8px; border-radius: 5px; cursor: pointer;
-  font-family: 'IBM Plex Mono', monospace; transition: all 0.15s;
-}
-.voice-submenu-btn:hover { color: var(--text); border-color: var(--accent); }
+.bubble-voice-pause-btn:hover { color: var(--text); border-color: var(--accent); }
 
 
 /* ── Print ────────────────────────────────────────────────────────────────── */
 @media print {
+  /* Force actual page/paper white regardless of the active theme's dark
+     --bg. Previously this worked "by accident" because browsers drop
+     background-color by default when printing; the color-adjust:exact rule
+     below (needed so .note-print's background and MathJax's background-
+     image-drawn glyph parts still print) would otherwise also force this
+     dark body background to print as a solid black fill wherever no bubble
+     covers it — exactly the big black bars from painting an entire dark
+     page background onto paper. */
+  html, body { background: #fff !important; }
+
+  /* Force these specific elements' background colors/images to actually
+     print (Chrome/Edge drop all backgrounds by default unless the user
+     manually ticks "Print backgrounds"). Scoped narrowly — NOT `*` — so we
+     don't also force-print the dark theme's page/panel backgrounds.
+     Without this, .note-print's colored background disappears (looks pale)
+     and MathJax CHTML's background-image-drawn stretchy glyphs (radicals,
+     big brackets, sum/integral signs) go missing from formulas. */
+  .note-print, .bubble, .math-block, .math-inline, mjx-container, mjx-container * {
+    -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important;
+  }
+
   /* Reset layout constraints that clip content to one page */
   html, body            { height: auto !important; overflow: visible !important; }
   .main                 { display: block !important; overflow: visible !important; height: auto !important; }
@@ -1946,10 +1984,34 @@ textarea::placeholder { color: var(--muted); }
   .bubble ul, .bubble ol    { padding-left: 1.5em !important; margin: 4pt 0 !important; }
   .bubble h1, .bubble h2, .bubble h3 { color: #111 !important; margin: 8pt 0 4pt !important; }
   .bubble a  { color: #1a56cc !important; }
+  .bubble blockquote { color: #333 !important; border-left-color: var(--accent) !important; }
+
+  /* Agentic tool-call trace (injected by kiconnect-agent.js) - print-safe
+     colors instead of dark-theme vars; <details> handles open/closed. */
+  details.agent-trace {
+    border: 1pt solid #ccc !important; border-radius: 8pt !important;
+    padding: 5pt 9pt !important; margin: 5pt 0 !important;
+    background: #f7f7f7 !important; color: #111 !important; font-size: 10pt !important;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  details.agent-trace summary { font-family: 'IBM Plex Mono', monospace !important; font-size: 9.5pt !important; color: #111 !important; }
+  details.agent-trace[data-status="error"],
+  details.agent-trace[data-status="rejected"]  { border-color: #e74c3c !important; }
+  details.agent-trace[data-status="pending"]   { border-color: #f39c12 !important; }
+  details.agent-trace[data-status="simulated"] { border-color: #7c5cfc !important; }
+  details.agent-trace pre, details.agent-trace code { color: #111 !important; background: rgba(0,0,0,0.05) !important; }
 
   /* Code blocks */
   .bubble pre  { white-space: pre-wrap !important; word-break: break-word !important; font-size: 9pt !important; background: #f4f4f4 !important; border: 1pt solid #ddd !important; padding: 6pt !important; page-break-inside: avoid; break-inside: avoid; }
   .code-block-header { display: none !important; }
+
+  /* Formulas: avoid page-break splitting; drop themed .MathJax color so it
+     prints black instead of near-white (light-on-dark theme color). */
+  .math-block, .math-inline, mjx-container {
+    page-break-inside: avoid !important; break-inside: avoid !important;
+    overflow: visible !important;
+  }
+  .bubble .MathJax { color: #111 !important; }
 
   /* Tables */
   table { page-break-inside: avoid; break-inside: avoid; border-collapse: collapse; }
@@ -1975,6 +2037,43 @@ textarea::placeholder { color: var(--muted); }
   }
   .note-print:empty       { display: none !important; }
   .note-print:before      { content: "🗒️ " attr(data-label); display: block; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #a9821f !important; margin-bottom: 3pt; }
+
+  /* Single-bubble print (printSingleBubble() in kiconnect.js): show only
+     the preview overlay's already-rendered content. */
+  body.printing-single-bubble > *:not(#printSingleOverlay) { display: none !important; }
+  body.printing-single-bubble #printSingleOverlay {
+    display: block !important; position: static !important; background: #fff !important;
+  }
+  body.printing-single-bubble #printSingleBox {
+    width: auto !important; max-width: 740px !important; max-height: none !important;
+    margin: 20px auto !important; padding: 0 !important; border: none !important;
+    box-shadow: none !important; background: #fff !important; color: #111 !important;
+    font-family: Georgia, 'Times New Roman', serif; font-size: 12pt; line-height: 1.65;
+  }
+  body.printing-single-bubble #printSingleBox h3,
+  body.printing-single-bubble .print-single-actions { display: none !important; }
+  body.printing-single-bubble #printSingleMeta {
+    color: #555 !important; font-size: 10pt !important;
+    border-bottom: 1pt solid #ccc; padding-bottom: 8pt; margin-bottom: 16pt;
+  }
+  body.printing-single-bubble .print-single-bubble {
+    overflow: visible !important; background: none !important; border: none !important;
+    padding: 0 !important; color: #111 !important; font-size: 12pt !important;
+  }
+  /* Same overrides as .bubble above, kept in sync for identical output. */
+  body.printing-single-bubble .print-single-bubble blockquote { color: #333 !important; border-left-color: var(--accent) !important; }
+  body.printing-single-bubble .print-single-bubble a          { color: #1a56cc !important; }
+  body.printing-single-bubble .print-single-bubble table      { page-break-inside: avoid; break-inside: avoid; }
+  body.printing-single-bubble .print-single-bubble th,
+  body.printing-single-bubble .print-single-bubble td         { color: #111 !important; }
+  body.printing-single-bubble .print-single-bubble pre        { page-break-inside: avoid; break-inside: avoid; }
+  body.printing-single-bubble .print-single-bubble .MathJax   { color: #111 !important; }
+  body.printing-single-bubble .print-single-bubble .math-block,
+  body.printing-single-bubble .print-single-bubble .math-inline,
+  body.printing-single-bubble .print-single-bubble mjx-container {
+    page-break-inside: avoid !important; break-inside: avoid !important; overflow: visible !important;
+    -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important;
+  }
 }
 
 /* ── Panel Icon Toolbar ──────────────────────────────────────────── */

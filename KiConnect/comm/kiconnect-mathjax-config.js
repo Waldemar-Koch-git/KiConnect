@@ -4,8 +4,8 @@ window.MathJax = {
   // Expose MathML for accessible output and Word equation paste.
   options: {
     skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
-    enableAssistiveMml: true,
     menuOptions: { settings: { assistiveMml: true } },
+    enableMenu: true,
   },
   chtml: {
     fontURL: new URL('_render/newcm-font/chtml/woff2', document.baseURI).href,

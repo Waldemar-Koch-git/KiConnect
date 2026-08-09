@@ -1,31 +1,12 @@
 // ================================================================
 // kiconnect-agent.js – Coding-Agent module (v3.0)
-//
-// Self-contained, bolt-on module (same pattern as kiconnect-voice.js).
-// Design:
-//
-//   - A "project" is a REAL sidebar folder (the same `folders` array
-//     the app already renders) with an extra `agentProject` field
-//     pointing at its registered filesystem folder on the local proxy
-//     (see /agent/projects). Project folders appear wherever normal
-//     folders do, because they are folders.
-//   - A chat is "project-focused" simply when its `folderId` points at
-//     such a folder. A chip next to the mic/TTS controls, plus a
-//     toggle next to the header's model picker, let you focus/unfocus/
-//     create a project without leaving the normal chat flow — pick a
-//     project, type, send, same as any other message. No separate task
-//     box or log.
-//   - There is deliberately only ONE model picker app-wide — the
-//     header's — for both normal chat and agent turns, including its
-//     thinking/reasoning-effort settings; nothing agent-specific is
-//     duplicated. Per project, only the autonomy mode
-//     (auto / confirm / simulate) is remembered separately, since
-//     that's a policy choice, not a model choice.
-//   - Sending a message in a focused chat runs the agent's tool loop
-//     instead of a plain completion. The reply is a normal assistant
-//     bubble; each tool call renders as a collapsed <details> card
-//     (closed by default) to keep the chat readable — similar to how
-//     Claude Code / Codex show step traces.
+// Self-contained bolt-on module (same pattern as kiconnect-voice.js).
+// A "project" is a normal sidebar folder with an extra `agentProject`
+// field pointing at its filesystem folder on the local proxy. A chat is
+// "project-focused" when its folderId points at such a folder; sending a
+// message then runs the agent's tool loop and tool calls render as
+// collapsed <details> cards. One shared model picker app-wide — only the
+// autonomy mode (auto/confirm/simulate) is remembered per project.
 // ================================================================
 
 (function () {
@@ -44,9 +25,7 @@
     } catch (e) {}
     return fallback || key;
   }
-  // Local fallback templates for tf() below, used only if the host app's own
-  // tf() helper isn't available yet — kept in sync with the 'en' block in
-  // kiconnect-languages-i18n.js so the module still works stand-alone.
+  // Fallback templates for tf() when the host app's own helper isn't available.
   const TF_FALLBACKS = {
     'agent.sim.write': 'Simulation: would have written "{path}" with {len} characters. No file was changed.',
     'agent.sim.deleteFile': 'Simulation: would have deleted file "{path}". No file was changed.',
@@ -72,10 +51,7 @@
     'agent.compactedNote': 'Older tool result cleared to save tokens',
     'agent.compactedHint': 'Call the same tool again with the same arguments if you still need this content — the underlying file/data on disk is unchanged, only this copy was removed from the conversation.',
   };
-  // Like t(), but also substitutes {placeholder} variables in the translated
-  // string. Prefers the host app's own tf() (kiconnect.js) when present, so
-  // this module stays in sync with the exact same lookup/fallback behavior;
-  // otherwise falls back to a local copy of the same templates.
+  // Like t(), but substitutes {placeholder} vars; prefers the host app's tf().
   function tf(key, vars) {
     if (typeof window.tf === 'function' && window.tf !== tf) {
       return window.tf(key, vars);
@@ -116,35 +92,56 @@
   const MAX_ITERATIONS = 200;
 
   // ── Generic (provider-agnostic) tool-result compaction ────────────
-  // Anthropic gets prompt caching (cache_control breakpoints, see
-  // callModel below) AND, optionally, Anthropic's own native
-  // context-management. Every OTHER provider — gpt-oss-120b, mistral-small,
-  // or any other OpenAI-compatible endpoint — gets neither: every single
-  // iteration of the tool loop resends the ENTIRE growing history in full,
-  // at full price, with zero discount. In a long agent run this is what
-  // actually drives token usage into the millions — not model choice, not
-  // "local vs. cloud" — because the exact same already-read file content
-  // gets retransmitted, byte-for-byte unchanged, on every subsequent
-  // iteration (roughly O(iterations²) tokens instead of O(iterations)).
+  // Every OpenAI-compatible provider we talk to — OpenAI, Kimi/Moonshot,
+  // DeepSeek, Mistral, Google, xAI, Groq, MiniMax, Zhipu, and OpenRouter's
+  // upstream models — turns out to already have its OWN automatic (or,
+  // for Mistral/xAI/Zhipu, semi-automatic via a stable session id/header)
+  // prefix caching as of 2026: an unchanged prefix at the START of the
+  // request is billed at ~10% and doesn't need to be recomputed. Anthropic
+  // gets the same effect explicitly via cache_control (see callModel below).
   //
-  // compactOldToolResults() fixes this the same way for every provider,
-  // since it operates on the shared internal `history` array BEFORE either
-  // toAnthropicHistory() or toOpenAIHistory() converts it. It only ever
-  // touches TOOL RESULTS (file contents, search hits, directory listings,
-  // command output) that are older than KEEP_RECENT_TOOL_TURNS iterations
-  // — never the user's own messages, never the model's own text. Nothing
-  // is silently dropped: the original content is replaced by an explicit,
-  // clearly labeled placeholder naming the tool and its main argument, so
-  // any model (any vendor) can see exactly what happened and just call the
-  // same tool again if it turns out it still needs that data — the file
-  // itself is untouched on disk, only the copy sent to the model shrinks.
+  // compactOldToolResults() mutates OLD entries of the shared `history`
+  // array (replacing a big tool result with a short placeholder) to keep
+  // payload size down for providers that DON'T have such caching — but for
+  // every provider that DOES, that mutation is actively counterproductive:
+  // it changes bytes in the middle of the prefix every time a new entry
+  // crosses the KEEP_RECENT_TOOL_TURNS threshold (i.e. on almost every
+  // iteration of a long-running tool loop), which invalidates the cached
+  // prefix from that point on — so the expensive, large, most-recent tail
+  // of the history (the part that actually matters) ends up NOT being
+  // served from cache on any of those providers, defeating the very
+  // mechanism that would otherwise make a long agent run cheap.
   //
-  // Only applied to non-Anthropic providers: Anthropic's own prompt cache
-  // already keeps the resend of unchanged history cheap (~10% price), and
-  // mutating old blocks would needlessly bust that cache. For every other
-  // provider there is no such cache to protect, so compacting is a clear win.
+  // So this is now scoped to KNOWN_CACHING_PROVIDERS below: skipped for
+  // every provider with known caching (nothing to gain, real cache-hit
+  // rate to lose), and still applied for the one case where we genuinely
+  // don't know what's on the other end — a freely configured openai-compat
+  // endpoint (self-hosted model, unknown reseller, etc.), where we can't
+  // assume any caching exists and shrinking the payload is a clear win.
+  //
+  // It only ever touches TOOL RESULTS (file contents, search hits,
+  // directory listings, command output) that are older than
+  // KEEP_RECENT_TOOL_TURNS iterations — never the user's own messages,
+  // never the model's own text. Nothing is silently dropped: the original
+  // content is replaced by an explicit, clearly labeled placeholder naming
+  // the tool and its main argument, so any model (any vendor) can see
+  // exactly what happened and just call the same tool again if it turns
+  // out it still needs that data — the file itself is untouched on disk,
+  // only the copy sent to the model shrinks.
   const KEEP_RECENT_TOOL_TURNS = 6;   // tool-result turns kept 100% intact
   const COMPACT_MIN_SIZE = 400;       // don't bother compacting tiny results (chars)
+
+  // Providers with known automatic (or session-id-assisted) prompt/prefix
+  // caching, verified against each vendor's own docs (2026). Anthropic is
+  // handled separately (explicit cache_control, see callModel) and is
+  // never passed to compactOldToolResults in the first place — see the
+  // call site below. Everything NOT in this set — i.e. today only the
+  // freely configured 'openai-compat' endpoint — still gets compacted,
+  // since its backend/caching behavior is unknown.
+  const KNOWN_CACHING_PROVIDERS = new Set([
+    'anthropic', 'openai-direct', 'kimi', 'deepseek', 'mistral',
+    'google', 'xai', 'groq', 'minimax', 'zhipu', 'openrouter',
+  ]);
 
   function compactToolCallLabel(name, args) {
     if (!args) return name;
@@ -239,7 +236,7 @@
     const tools = [
       { type: 'function', function: { name: 'list_files', description: 'Recursively lists files in the project (optionally below a subfolder), including file size in bytes. Optionally filter by a glob pattern (e.g. "*.tmp", "**/*.md") so you don\'t have to scan the whole tree yourself when you only care about a subset of files — e.g. before a bulk operation like "delete all .tmp files".', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Subfolder relative to the project root. Leave empty for the whole project.' }, pattern: { type: 'string', description: 'Optional glob pattern to filter results, e.g. "*.log" or "src/**/*.ts". "*" matches within a path segment, "**" matches across folders.' } } } } },
       { type: 'function', function: { name: 'search_in_files', description: 'Searches all text files in the project (like grep) for a term or regular expression and returns matches with file, line number, and line content. Useful for finding functions, variables, or text across the whole codebase before reading files individually. To search or read ONE SPECIFIC FILE you already know the name of, use read_file instead — do not put a filename in this tool\'s `path` parameter (see below).', parameters: { type: 'object', properties: { query: { type: 'string', description: 'Search term or (if regex=true) regular expression.' }, path: { type: 'string', description: 'Optional: restrict the search to a SUBFOLDER, given as a path relative to the project root (e.g. "src/utils") — never an absolute path, "..", or the project\'s own folder name prefixed on top (paths from list_files/search_in_files results are already relative to the root; use them as-is). This must be a FOLDER, never a filename (e.g. "config.js" is invalid here) — if you already know which single file to look at, call read_file with that path instead of putting the filename here. Omit `path` entirely to search the whole project.' }, regex: { type: 'boolean', description: 'true = interpret query as a regular expression.' }, caseSensitive: { type: 'boolean', description: 'true = match case exactly.' } }, required: ['query'] } } },
-      { type: 'function', function: { name: 'read_file', description: 'Reads the text content of a file in the project. For large files, pass startLine/endLine to read just a range instead of the whole thing — much cheaper than pulling in a huge file when you only need one section.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Path relative to the project root, e.g. "src/main.py"' }, startLine: { type: 'integer', description: 'Optional 1-based first line to include.' }, endLine: { type: 'integer', description: 'Optional 1-based last line to include (inclusive).' } }, required: ['path'] } } },
+      { type: 'function', function: { name: 'read_file', description: 'Reads the text content of a file in the project — including PDFs, whose text is extracted automatically (no separate step needed; scanned/image-only PDFs with no text layer will come back as unreadable, same as any other binary file). For large files, pass startLine/endLine to read just a range instead of the whole thing — much cheaper than pulling in a huge file when you only need one section.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Path relative to the project root, e.g. "src/main.py"' }, startLine: { type: 'integer', description: 'Optional 1-based first line to include.' }, endLine: { type: 'integer', description: 'Optional 1-based last line to include (inclusive).' } }, required: ['path'] } } },
       { type: 'function', function: { name: 'read_files', description: 'Reads several files in one call instead of one read_file call per file — use this whenever a task requires looking at more than one file (e.g. comparing two files, or gathering context from several files before editing).', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' }, description: 'Paths relative to the project root.' } }, required: ['paths'] } } },
       { type: 'function', function: { name: 'create_file', description: 'Creates a new file with content. Fails if the file already exists (use write_file for that).', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
       { type: 'function', function: { name: 'write_file', description: 'Completely overwrites an existing file with new content, or creates it if it does not exist yet. For a small, targeted change to an otherwise-large file, prefer edit_file instead — it is much cheaper since you don\'t have to resend the whole file.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
@@ -371,11 +368,43 @@
     if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
     return data;
   }
+  // Base64 -> ArrayBuffer, for turning the backend's content_b64 (binary
+  // files, see agent_file() in kiconnect-proxy.py) into something pdf.js
+  // can parse. Mirrors kiconnect.js's arrayBufferToBase64 in reverse.
+  function _b64ToArrayBuffer(b64) {
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr.buffer;
+  }
   async function apiReadFile(project, path) {
     const res = await agentFetch(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`);
     if (res.status === 404) return { error: t('agent.err.fileNotFound', 'File not found.') };
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-    return res.json();
+    const data = await res.json();
+    // PDFs come back from the backend as binary (content: null, content_b64
+    // set) since they're not valid UTF-8 text — extractPdfText() is the
+    // same pdf.js-based extraction kiconnect.js already uses for PDF chat
+    // attachments (pdf.js/pdf.worker.js are loaded globally in
+    // kiconnect.html, see kiconnect-mathjax-config.js's neighbor script
+    // tags), so the agent can reuse it here instead of giving up on any
+    // PDF in the project. Falls through to the original binary response
+    // (unchanged agent behavior) if pdf.js isn't loaded or extraction fails
+    // for any reason — e.g. a scanned/image-only PDF with no text layer.
+    if (data && data.binary && data.content_b64 && /\.pdf$/i.test(path)) {
+      try {
+        const lib = window._pdfjsLib || window.pdfjsLib;
+        if (!lib) throw new Error('pdf.js not loaded');
+        const text = await extractPdfText(_b64ToArrayBuffer(data.content_b64));
+        return { path: data.path, content: text, binary: false, _pdfExtracted: true };
+      } catch (e) {
+        // Leave data.binary/content as-is — same "can't read this" result
+        // the model got before, just with the extraction attempt logged
+        // for whoever's debugging instead of silently swallowed.
+        console.warn('PDF text extraction failed for', path, e);
+      }
+    }
+    return data;
   }
   async function apiWriteFile(project, path, content, createOnly) {
     const res = await agentFetch(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`, {
@@ -889,7 +918,7 @@
     });
     return out;
   }
-  async function callModel(history, provider, folder) {
+  async function callModel(history, provider, folder, sessionId) {
     if (!provider) throw new Error(t('agent.noModelHdr', 'Please select an AI/model in the header (top left).'));
     if (!provider.apiKey) throw new Error(t('agent.err.noApiKey', 'The selected provider has no API key.'));
     if (provider.enabled === false) throw new Error(t('agent.err.providerDisabled', 'The selected provider is disabled.'));
@@ -1014,9 +1043,21 @@
       // reasoning_effort field on the request.
       delete reqBody.reasoning_effort;
     }
+    // Mistral's prompt caching is automatic but explicitly documented as
+    // more reliable when the same prompt_cache_key is reused across
+    // requests that share a prefix (e.g. every follow-up call in this same
+    // tool loop) — https://docs.mistral.ai/studio-api/conversations/advanced/prompt-caching.
+    // Set unconditionally (outside the thinking-config branches above)
+    // whenever we're talking to Mistral and have a stable id to key on.
+    if (provider.type === 'mistral' && sessionId) reqBody.prompt_cache_key = String(sessionId);
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
     if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
+    // Session/conversation hints that increase cache-hit rate on providers
+    // whose caching is automatic but benefits from a stable routing key —
+    // see KNOWN_CACHING_PROVIDERS comment above for the source docs.
+    if (provider.type === 'xai' && sessionId) extraHeaders['x-grok-conv-id'] = String(sessionId);
+    if (provider.type === 'zhipu' && sessionId) extraHeaders['X-Conversation-Id'] = String(sessionId);
     const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
@@ -1059,10 +1100,16 @@
     // Normalize OpenAI's field names (prompt_tokens/completion_tokens) to the
     // same shape buildTokenBadge()/the Anthropic path use — same conversion
     // the normal streaming chat path already applies.
+    // DeepSeek reports cache hits under different field names
+    // (prompt_cache_hit_tokens) instead of the OpenAI-standard
+    // usage.prompt_tokens_details.cached_tokens — without this fallback,
+    // DeepSeek's cache savings happen server-side but never show up in the
+    // token badge, so there's no way to see whether caching is working.
     const usage = data.usage ? {
       input_tokens: data.usage.prompt_tokens,
       output_tokens: data.usage.completion_tokens,
-      cache_read_input_tokens: data.usage.prompt_tokens_details?.cached_tokens || 0,
+      cache_read_input_tokens: data.usage.prompt_tokens_details?.cached_tokens
+        ?? data.usage.prompt_cache_hit_tokens ?? 0,
     } : null;
     return { text, toolCalls, usage };
   }
@@ -1408,15 +1455,15 @@
     try {
       while (iterations < MAX_ITERATIONS) {
         iterations++;
-        // See KEEP_RECENT_TOOL_TURNS above — this is what stops
-        // OpenAI-compatible providers (gpt-oss-120b, mistral-small, ...)
-        // from resending every previously-read file/search-result on every
-        // single iteration. Anthropic has its own cache-aware mechanisms
-        // (prompt caching + optional native context_management below), so
-        // it's skipped there to avoid needlessly busting the cache.
-        if (provider.type !== 'anthropic') compactOldToolResults(history);
+        // See KNOWN_CACHING_PROVIDERS / KEEP_RECENT_TOOL_TURNS above: only
+        // compact for providers we can't confirm have their own prefix
+        // caching (currently just a freely configured openai-compat
+        // endpoint). Every provider with known caching — including
+        // Anthropic (explicit cache_control below) — is skipped here so
+        // this never mutates a prefix that caching depends on staying stable.
+        if (!KNOWN_CACHING_PROVIDERS.has(provider.type)) compactOldToolResults(history);
         let result;
-        try { result = await callModel(history, provider, folder); }
+        try { result = await callModel(history, provider, folder, chat.id); }
         catch (err) {
           if (err.name === 'AbortError') { aborted = true; break; }
           steps.push({ kind: 'text', text: `❌ ${tf('agent.err.modelCallFailed', { error: esc(err.message) })}` });

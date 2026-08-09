@@ -124,7 +124,6 @@ def _atomic_write(target_path, data_bytes):
 def store_registry():
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    #  _check_local() removed - before_request already guards /store paths
     rpath = _registry_path()
 
     if request.method == 'GET':
@@ -153,7 +152,6 @@ def store_registry():
 def store_list(account_id):
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    # _check_local() removed - before_request already guards /store paths
     adir = _account_dir(account_id)
     if not adir:
         return Response('{"error":"Invalid account ID."}', 400, content_type='application/json')
@@ -170,7 +168,6 @@ def store_list(account_id):
 def store_key(account_id, key):
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    #  _check_local() removed - before_request already guards /store paths
     fpath = _key_path(account_id, key)
     if not fpath:
         return Response('{"error":"Invalid ID or key."}', 400, content_type='application/json')
@@ -878,7 +875,13 @@ def agent_file(pid, rel_path):
         try:
             return _agent_ok({'path': rel_path, 'content': raw.decode('utf-8'), 'binary': False})
         except UnicodeDecodeError:
-            return _agent_ok({'path': rel_path, 'content': None, 'binary': True})
+            # Not UTF-8 text (PDF, image, zip, ...). Still return the raw
+            # bytes as base64 — the frontend can then do format-specific
+            # extraction (e.g. pdf.js text extraction for .pdf) instead of
+            # just reporting "binary file, can't read it". `content` stays
+            # None for backward compatibility with anything that only
+            # checks `binary` and expects a plain-text `content` field.
+            return _agent_ok({'path': rel_path, 'content': None, 'binary': True, 'content_b64': base64.b64encode(raw).decode('ascii')})
 
     if request.method == 'PUT':
         try: body = request.get_json(force=True, silent=True) or {}
@@ -1054,18 +1057,36 @@ def check_origin():
                             403, content_type='application/json')
 
 # ── Private IP ranges (SSRF protection) ──────────────────────────
-PRIVATE_NETWORKS = [
-    ipaddress.ip_network('10.0.0.0/8'),    ipaddress.ip_network('172.16.0.0/12'),
-    ipaddress.ip_network('192.168.0.0/16'),ipaddress.ip_network('127.0.0.0/8'),
-    ipaddress.ip_network('169.254.0.0/16'),ipaddress.ip_network('100.64.0.0/10'),
+# Three tiers:
+#  - LOOPBACK_NETWORKS: same machine only. Always allowed (this is the mode
+#    that already worked - local LM Studio/Ollama/vLLM on 'localhost').
+#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy, confirmation or
+#    not. Cloud metadata endpoints, reserved/documentation/broadcast ranges -
+#    there's no legitimate "my own LAN device" use case for these, only an
+#    SSRF one.
+#  - LAN_NETWORKS: private/local-network ranges (RFC1918, link-local, IPv6
+#    ULA, CGNAT). Blocked *by default*, but can be unlocked per-provider via
+#    the "kic_lan_confirm" marker - which the frontend only ever sends after
+#    the user has explicitly double-confirmed that exact address in the
+#    Provider editor ("API panel"). This is what makes a LM Studio/Ollama
+#    instance running on another PC on the network reachable.
+LOOPBACK_NETWORKS = [
+    ipaddress.ip_network('127.0.0.0/8'), ipaddress.ip_network('::1/128'),
+]
+ALWAYS_BLOCKED_NETWORKS = [
+    ipaddress.ip_network('169.254.169.254/32'),  # cloud metadata (AWS/GCP/Azure/...)
     ipaddress.ip_network('0.0.0.0/8'),     ipaddress.ip_network('192.0.0.0/24'),
     ipaddress.ip_network('198.18.0.0/15'), ipaddress.ip_network('198.51.100.0/24'),
     ipaddress.ip_network('203.0.113.0/24'),ipaddress.ip_network('240.0.0.0/4'),
     ipaddress.ip_network('255.255.255.255/32'),
-    ipaddress.ip_network('::1/128'),       ipaddress.ip_network('fc00::/7'),
-    ipaddress.ip_network('fe80::/10'),     ipaddress.ip_network('::ffff:0:0/96'),
-    ipaddress.ip_network('2002::/16'),     ipaddress.ip_network('100::/64'),
-    ipaddress.ip_network('64:ff9b::/96'),  ipaddress.ip_network('::/128'),
+    ipaddress.ip_network('::/128'),        ipaddress.ip_network('2002::/16'),
+    ipaddress.ip_network('100::/64'),      ipaddress.ip_network('64:ff9b::/96'),
+]
+LAN_NETWORKS = [
+    ipaddress.ip_network('10.0.0.0/8'),    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),ipaddress.ip_network('169.254.0.0/16'),
+    ipaddress.ip_network('100.64.0.0/10'), ipaddress.ip_network('fc00::/7'),
+    ipaddress.ip_network('fe80::/10'),
 ]
 
 def _resolve_all_ips(hostname):
@@ -1075,31 +1096,62 @@ def _resolve_all_ips(hostname):
     except Exception: return []
     finally: socket.setdefaulttimeout(None)
 
-def is_private_ip(hostname):
-    ips = _resolve_all_ips(hostname)
-    if not ips: return True
-    for ip_str in ips:
-        try:
-            addr = ipaddress.ip_address(ip_str)
-            if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
-                addr = addr.ipv4_mapped
-            if any(addr in net for net in PRIVATE_NETWORKS): return True
-        except ValueError: return True
-    return False
+def _classify_ip(addr):
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if any(addr in net for net in LOOPBACK_NETWORKS): return 'loopback'
+    if any(addr in net for net in ALWAYS_BLOCKED_NETWORKS): return 'blocked'
+    if any(addr in net for net in LAN_NETWORKS): return 'lan'
+    return 'public'
 
-def is_allowed(target_url, method='GET'):
+def classify_host(host):
+    """Classify a hostname or literal IP as one of
+    'loopback' | 'blocked' | 'lan' | 'public' | 'unresolvable'.
+    For hostnames every resolved address is checked - the single most
+    restrictive class wins, so a name that resolves to both a public and a
+    blocked/LAN address is treated as that stricter class."""
+    try:
+        ipaddress.ip_address(host)
+        ips = [host]
+    except ValueError:
+        ips = _resolve_all_ips(host)
+    if not ips: return 'unresolvable'
+    classes = set()
+    for ip_str in ips:
+        try: classes.add(_classify_ip(ipaddress.ip_address(ip_str)))
+        except ValueError: return 'blocked'
+    if 'blocked' in classes: return 'blocked'
+    if 'lan' in classes: return 'lan'
+    if classes == {'loopback'}: return 'loopback'
+    if 'loopback' in classes: return 'lan'  # mixed loopback+public - treat as needing confirmation, be safe
+    return 'public'
+
+def is_allowed(target_url, method='GET', confirmed=False):
     # No domain allowlist here - users can point POST at any custom
-    # OpenAI-compatible endpoint. Real SSRF protection: http/https only,
-    # no literal IPs, no private/loopback/link-local ranges, for every method.
+    # OpenAI-compatible endpoint. SSRF protection: http/https only, and a
+    # tiered check on where the address actually points (see above).
     try: parsed = urlparse(target_url)
-    except Exception: return False, 'Invalid URL'
-    if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only'
+    except Exception: return False, 'Invalid URL', False
+    if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only', False
     host = parsed.hostname or ''
-    if not host: return False, 'No hostname'
-    try: ipaddress.ip_address(host); return False, 'Literal IPs are not allowed'
-    except ValueError: pass
-    if is_private_ip(host): return False, 'Private hosts are not allowed'
-    return True, ''
+    if not host: return False, 'No hostname', False
+    # Fast-path for the exact strings the app has always used for "this
+    # machine" - keeps behaving exactly as before even if DNS is weird.
+    if host in ('localhost', '127.0.0.1', '::1'):
+        return True, '', False
+
+    cls = classify_host(host)
+    if cls == 'unresolvable':
+        return False, 'Host could not be resolved', False
+    if cls == 'blocked':
+        return False, 'This address is not allowed (reserved/blocked range).', False
+    if cls == 'loopback':
+        return True, '', False
+    if cls == 'lan':
+        if not confirmed:
+            return False, 'Local-network address - confirm it in the API panel first.', True
+        return True, '', False
+    return True, '', False  # public
 
 # ── Rate-Limiting ─────────────────────────────────────────────────
 _rate_data = defaultdict(lambda: {'count': 0, 'reset': 0.0})
@@ -1149,13 +1201,14 @@ SECURITY_HEADERS = {
         # Actual enforced policy - the <meta> CSP in kiconnect.html is kept
         # in sync but this header wins if the two ever disagree. No
         # 'unsafe-inline' needed since former inline scripts now live in
-        # kiconnect-mathjax-config.js / kiconnect-pdf-init.js.
+        # kiconnect-mathjax-config.js / kiconnect.js.
         "default-src 'self'; "
         "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self' https://api.anthropic.com https://api.openai.com "
         "https://chat.kiconnect.nrw https://openrouter.ai "
         "https://api.mistral.ai https://generativelanguage.googleapis.com "
+        "https://texttospeech.googleapis.com "
         "https://api.x.ai https://api.groq.com "
         "https://api.deepseek.com https://api.minimax.io "
         "https://api.z.ai https://api.moonshot.ai "
@@ -1175,7 +1228,7 @@ SECURITY_HEADERS = {
         # default-src 'self' and playback is blocked.
         "media-src 'self' blob:; "
         "font-src 'self'; "
-        "worker-src blob:; "
+        "worker-src 'self' blob:; "
         "frame-src 'none'; object-src 'none'; base-uri 'self';"
     ),
     'Permissions-Policy': (
@@ -1225,10 +1278,20 @@ def _proxy_request(target_url):
     try: target_url = unquote(target_url)
     except Exception: pass
 
-    ok, reason = is_allowed(target_url, request.method)
+    # "kic_lan_confirm=1" is a marker the frontend appends to the proxy URL
+    # (never to the upstream one) only for a provider address the user has
+    # explicitly double-confirmed in the Provider editor - see
+    # confirmLanAddress() in kiconnect.js. Strip it before forwarding so it
+    # never reaches the upstream API as a stray query parameter.
+    fwd_params = request.args.copy()
+    lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'
+
+    ok, reason, needs_confirm = is_allowed(target_url, request.method, confirmed=lan_confirmed)
     if not ok:
         print(f'  blocked [{reason}]')
-        return Response('{"error":"Request blocked."}', 403, content_type='application/json')
+        status = 428 if needs_confirm else 403
+        body = json.dumps({'error': reason, 'code': 'lan_confirm_required' if needs_confirm else 'blocked'})
+        return Response(body, status, content_type='application/json')
 
     ALLOWED_REQ_HEADERS = {
         'authorization','content-type','x-api-key',
@@ -1264,7 +1327,7 @@ def _proxy_request(target_url):
     try:
         upstream = requests.request(
             method=request.method, url=target_url, headers=fwd_headers,
-            data=body, params=request.args, stream=True,
+            data=body, params=fwd_params, stream=True,
             timeout=(10, 180), verify=True, allow_redirects=False,
         )
         resp_headers = {k: v for k, v in upstream.headers.items()

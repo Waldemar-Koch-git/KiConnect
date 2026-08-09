@@ -6,35 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="
-    default-src 'self';
-    script-src  'self';
-    style-src   'self' 'unsafe-inline';
-    connect-src 'self' https://api.anthropic.com https://api.openai.com https://chat.kiconnect.nrw https://openrouter.ai https://api.mistral.ai https://generativelanguage.googleapis.com https://api.x.ai https://api.groq.com https://api.deepseek.com https://api.minimax.io https://api.z.ai https://api.elevenlabs.io https://api.search.brave.com https://html.duckduckgo.com https://lite.duckduckgo.com https://api.qwant.com https://search.yahoo.com https://www.startpage.com https://www.googleapis.com https://api.bing.microsoft.com https://api.mojeek.com https://yandex.com https://api.langsearch.com;
-    img-src     'self' data: blob:;
-    media-src   'self' blob:;
-    font-src    'self';
-    worker-src  blob:;
-    frame-src   'none';
-    object-src  'none';
-    base-uri    'self';
-    form-action 'self';
-    upgrade-insecure-requests;
-  ">
-  <!-- script-src no longer needs 'unsafe-inline': the former inline
-       MathJax-config <script> block now lives in kiconnect-mathjax-config.js
-       (must run before tex-chtml.js below, so it stays its own early-loading
-       file); the former inline PDF.js-worker <script> block was folded into
-       the top of kiconnect.js, loaded like any other same-origin script.
-       This closes the one remaining gap through which an injected <script>
-       tag could ever have executed, in the (unlikely, since DOMPurify
-       sanitizes all rendered content) case that sanitization was ever
-       bypassed. frame-src/object-src now match the stricter values the
-       server already sends in kiconnect-proxy.py's SECURITY_HEADERS —
-       previously the two disagreed
-       (meta said 'self', header said 'none'); the header always won in
-       practice, this just removes the confusing mismatch. -->
-  <title>AI✨ Chat/Agent (3.2.0)</title>
+  <title>AI✨ Chat/Agent (nightly 3.3.0)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -68,8 +40,7 @@
 
   <!-- Logo -->
   <div style="text-align:center;margin-bottom:4px;">
-    <div style="font-size:72px;margin-bottom:10px;">🪪🔐</div> 
-    <!-- <h1 style="font-size:26px;font-weight:800;color:var(--text);">🪪🔐</h1>-->
+    <div style="font-size:72px;margin-bottom:10px;">🔐</div>
   </div>
 
   <!-- ── Account selection (default view) ── -->
@@ -133,7 +104,7 @@
       <div id="pwdStrengthBar" style="height:100%;width:0%;transition:width 0.3s,background 0.3s;border-radius:2px;"></div>
     </div>
     <div style="color:var(--red);font-size:13px;min-height:18px;margin-bottom:8px;font-family:'IBM Plex Mono',monospace;" id="setupError"></div>
-    <button class="save-btn" style="width:100%;padding:12px;" id="setupBtn" data-i18n="account.createBtn">🔐 Create account</button>
+    <button class="save-btn" style="width:100%;padding:12px;" id="setupBtn" data-i18n="account.createBtn">🪪 Create account</button>
     <div style="text-align:center;margin-top:10px;">
       <button id="backFromNewAccountBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;text-decoration:underline;" data-i18n="account.back">← Back</button>
     </div>
@@ -153,80 +124,9 @@
 
   <!-- 1. Theme -->
   <div class="section-header" data-i18n="tuning.theme">🎨 Theme</div>
-  <div class="theme-switcher" id="themeSwitcher">
-    <div>
-      <div class="theme-swatch active" data-theme="dark" title="Dark">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Dark</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="white" title="White">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">White</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="nord" title="Nord">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Nord</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="dracula" title="Dracula">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Dracula</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="forest" title="Forest">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Forest</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="mocha" title="Mocha">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Mocha</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="rose" title="Rose">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Rose</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="solarized" title="Solarized">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Solar</div>
-    </div>
-  </div>
+  <!-- Theme swatches are generated by buildThemeSwatches() in kiconnect.js
+       from the THEME_SWATCHES/THEME_SWATCHES_OLED data arrays. -->
+  <div class="theme-switcher" id="themeSwitcher"></div>
 
   <!-- OLED section separator -->
   <div class="theme-oled-label">
@@ -239,44 +139,7 @@
   </div>
 
   <!-- OLED themes -->
-  <div class="theme-switcher" id="themeSwitcherOled">
-    <div>
-      <div class="theme-swatch" data-theme="dark_oled" title="Dark (OLED)">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Dark</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="gold_oled" title="Gold (OLED)">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Gold</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="emerald_oled" title="Emerald (OLED)">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Emerald</div>
-    </div>
-    <div>
-      <div class="theme-swatch" data-theme="red_oled" title="Red (OLED)">
-        <div class="theme-swatch-inner">
-          <div class="theme-swatch-top"></div>
-          <div class="theme-swatch-bottom"><span></span><span></span><span></span></div>
-        </div>
-      </div>
-      <div class="theme-swatch-label">Red</div>
-    </div>
-  </div>
+  <div class="theme-switcher" id="themeSwitcherOled"></div>
 
   <!-- 2. Search -->
   <hr class="divider" style="margin-top:16px;">
@@ -370,6 +233,8 @@
       <option value="openai" data-i18n="audio.ttsOpenAI">OpenAI TTS (key required)</option>
       <option value="elevenlabs" data-i18n="audio.ttsElevenLabs">ElevenLabs (key required)</option>
       <option value="groq" data-i18n="audio.ttsGroq">Groq TTS (key required)</option>
+      <option value="gemini" data-i18n="audio.ttsGemini">Google Gemini TTS (key required)</option>
+      <option value="gcloud" data-i18n="audio.ttsGcloud">Google Cloud TTS – Chirp 3: HD (key required)</option>
     </select>
   </div>
   <div class="setting-group" id="ttsApiKeyGroup" style="display:none;">
@@ -392,6 +257,7 @@
     <select class="setting-input" id="sttProviderSelect">
       <option value="browser" data-i18n="audio.sttBrowser">Browser/Web Speech API (free)</option>
       <option value="groq" data-i18n="audio.sttGroq">Groq Whisper (key required)</option>
+      <option value="gemini" data-i18n="audio.sttGemini">Google Gemini (key required)</option>
     </select>
   </div>
   <div class="setting-group" id="sttApiKeyGroup" style="display:none;">
@@ -878,7 +744,10 @@
 <div id="printSingleOverlay">
   <div id="printSingleBox">
     <h3>🖨️</h3>
+    <div id="printSingleMeta"></div>
     <div id="printSingleContent" class="print-single-bubble"></div>
+    <!-- .note-print: same class/CSS as full-chat print, hidden on screen -->
+    <div id="printSingleNote" class="note-print"></div>
     <div class="print-single-actions">
       <button class="bubble-act-btn" id="printSingleConfirm" data-i18n="js.printSingle">🖨️ Print</button>
       <button class="bubble-act-btn" id="printSingleClose" data-i18n="js.cancel">Cancel</button>
