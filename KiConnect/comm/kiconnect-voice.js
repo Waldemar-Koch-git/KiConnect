@@ -876,11 +876,40 @@
         var MAX_RECOVERY_ATTEMPTS = 5;
         var KICK_ERROR_WINDOW_MS = 1500; // error within this window of a kick is blamed on the kick
 
+        // The keep-alive kick below works around a Chrome bug where
+        // speechSynthesis silently stalls if left untouched for ~15s+.
+        // That bug is specific to *network* voices (Google's cloud voices
+        // used by Chrome); it does not affect *local* voices (e.g. Windows
+        // SAPI voices exposed via speechSynthesis on Windows, or macOS
+        // system voices). Worse, on local engines pause()+resume() is a
+        // real round-trip to the OS TTS engine with variable, sometimes
+        // multi-second latency — so kicking a local voice doesn't just do
+        // nothing, it introduces an audible, unpredictable-length gap
+        // every ~12s, which is exactly what this "kick" was meant to
+        // prevent. So: only arm the kick for non-local voices.
+        function isLocalVoice() {
+          try {
+            var voices = speechSynthesis.getVoices();
+            var match;
+            if (opts.voiceURI) {
+              match = voices.filter(function (v) { return v.voiceURI === opts.voiceURI; });
+            } else {
+              // No explicit voice chosen in settings — the engine falls back
+              // to its own default voice, so check *that* one. On Windows,
+              // if no cloud voice is installed/reachable, the default is
+              // typically a local SAPI voice.
+              match = voices.filter(function (v) { return v.default; });
+            }
+            return !!(match.length && match[0].localService);
+          } catch (e) { return false; }
+        }
+
         function clearKeepAlive() {
           if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
         }
         function startKeepAlive() {
           clearKeepAlive();
+          if (isLocalVoice()) return; // local engines don't need it and audibly stutter from it
           keepAliveTimer = setInterval(function () {
             if (!speechSynthesis.speaking) { clearKeepAlive(); return; }
             if (userPaused) return; // don't fight an intentional pause
