@@ -937,6 +937,34 @@ async function _storeDel(accountId, key) {
   localStorage.removeItem(`kic_${accountId}_${key}`);
 }
 
+// Lists the keys actually present on the server for an account (GET /store/<accountId>).
+// Used by deleteAccount() so it deletes everything that's really there instead of
+// relying on a hardcoded key list that's easy to forget to update (e.g. a new
+// section added to save() later) and would otherwise leave orphaned data behind.
+// Returns null (not []) on any failure, so callers can fall back to a hardcoded list.
+async function _storeListKeys(accountId) {
+  if (!_storeAvailable) return null;
+  try {
+    const res = await fetch(`${_STORE_BASE}/${accountId}`, { method: 'GET' });
+    if (!res.ok) return null;
+    const keys = await res.json();
+    return Array.isArray(keys) ? keys : null;
+  } catch {
+    return null;
+  }
+}
+
+// Deletes an account's entire server-side data directory (DELETE /store/<accountId>)
+// in one request, so no empty folder is left behind after "delete account" — the
+// per-key DELETE calls in deleteAccount() only ever remove individual .json files,
+// never the directory itself. Best-effort: deleteAccount() already deletes every
+// known key beforehand, so if this fails (offline, older proxy without this route)
+// the worst case is a harmless leftover empty directory rather than lost data.
+async function _storeDeleteAccountDir(accountId) {
+  if (!_storeAvailable) return;
+  try { await fetch(`${_STORE_BASE}/${accountId}`, { method: 'DELETE' }); } catch {}
+}
+
 // Reads the shared account registry (list of accounts) from the storage backend.
 async function _registryGet() {
   if (_storeAvailable) {
@@ -6762,6 +6790,13 @@ function closePanels(){
   ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel','introPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
   document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
+  // Don't leave the "delete account" password prompt open/filled in the background.
+  const delBox = document.getElementById('deleteAccountConfirm');
+  if (delBox && delBox.style.display !== 'none') {
+    delBox.style.display = 'none';
+    const pwInput = document.getElementById('deleteAccountPwdInput');
+    if (pwInput) pwInput.value = '';
+  }
 }
 // Shows a temporary toast notification with the given message.
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
@@ -7348,7 +7383,7 @@ async function doSetupPassword() {
 }
 
 // Explains (or triggers) the recovery flow for a forgotten account password.
-function forgotPassword() {
+async function forgotPassword() {
   if (!_selectedLoginAccountId) {
     // No account selected — just go back to account selection
     showView('accountSelectView');
@@ -7357,7 +7392,11 @@ function forgotPassword() {
   }
   const acc = getAccount(_selectedLoginAccountId);
   if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
-  deleteAccount(_selectedLoginAccountId);
+  // Must await: _showAccountViewAfterChange() below renders the account grid
+  // from the in-memory _accounts array, which deleteAccount() only updates
+  // partway through its own (async) run — without awaiting, the just-deleted
+  // account would still show up until the next reload.
+  await deleteAccount(_selectedLoginAccountId);
   _selectedLoginAccountId = null;
   _stopLockCountdown();
   _showAccountViewAfterChange();
@@ -7365,23 +7404,40 @@ function forgotPassword() {
 
 // Permanently deletes an account and its stored data after confirmation.
 async function deleteAccount(accountId) {
-  // Remove all data from server store and localStorage
+  // Remove all data from server store and localStorage.
+  // Ask the server which keys actually exist for this account rather than
+  // deleting a hardcoded list — a previous hardcoded list here was missing
+  // 'profileFolders' (added later as its own save() section), which meant
+  // "delete account" silently left that key's encrypted data behind on the
+  // server. Falls back to a hardcoded list only if the listing call fails.
   if (_storeAvailable) {
-    const keysToDelete = ['config','providers','profiles','folders','chats',
-      'current_chat','sidebar_w','sidebar_collapsed'];
+    const serverKeys = await _storeListKeys(accountId);
+    const keysToDelete = (serverKeys && serverKeys.length) ? serverKeys : [
+      'config','providers','profiles','profileFolders','folders','chats',
+      'current_chat','sidebar_w','sidebar_collapsed',
+    ];
     await Promise.allSettled(
       keysToDelete.map(k => _storeDel(accountId, k))
     );
+    // Individual key deletes above leave an empty directory behind — remove
+    // the account's whole data directory too (see _storeDeleteAccountDir).
+    await _storeDeleteAccountDir(accountId);
   }
   const prefix = `kic_${accountId}_`;
   const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
   keys.forEach(k => localStorage.removeItem(k));
   _accounts = _accounts.filter(a => a.id !== accountId);
-  saveAccountRegistry();
+  // Must AWAIT the registry write here (not the usual fire-and-forget
+  // saveAccountRegistry()) — the caller calls logoutNow() right after this
+  // returns, which re-fetches the account registry from the server for the
+  // login screen. Without awaiting, that re-fetch could race the pending
+  // PUT and still see the deleted account until the next reload/F5.
+  await _registryPut(_accounts);
   if (_activeAccountId === accountId) {
     _activeAccountId = null;
     _cryptoKey = null;
     _sessionPassphrase = null;
+    resetSaveCache(); // don't let a stale cache survive into the next account
     localStorage.removeItem('kic_active_account');
   }
   toast(t('account.deleted'));
@@ -7557,20 +7613,6 @@ async function checkLogin() {
   showLoginScreen();
 }
 
-// Deletes all locally stored app data after confirmation (used for a full reset).
-function clearAllData() {
-  if (!confirm(t('js.clearConfirm'))) return;
-  // Delete only this account's data
-  if (_activeAccountId) {
-    deleteAccount(_activeAccountId);
-  }
-  providers = []; profiles = []; profileFolders = []; folders = []; chats = [];
-  config = freshConfig();
-  closePanels(); renderSidebar(); renderMessages([]); updateProfileBadge();
-  toast(t('js.cleared'));
-  setTimeout(() => logoutNow(), 1500);
-}
-
 // ── EVENT LISTENER SETUP ────────────────────────────────────────
 function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
@@ -7600,17 +7642,47 @@ function setupEventListeners(){
   document.getElementById('changePwdBtn').addEventListener('click', changeLoginPassword);
   document.getElementById('changeAccountNameBtn')?.addEventListener('click', changeAccountName);
   document.getElementById('accountNameInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') changeAccountName(); });
-  document.getElementById('deleteAccountBtn')?.addEventListener('click', () => {
+  document.getElementById('deleteAccountBtn')?.addEventListener('click', async () => {
     const acc = getAccount(_activeAccountId);
     if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
-    deleteAccount(_activeAccountId);
+    const box = document.getElementById('deleteAccountConfirm');
+    const pwInput = document.getElementById('deleteAccountPwdInput');
+    if (!box || !pwInput) { await deleteAccount(_activeAccountId); logoutNow(); return; }
+    box.style.display = '';
+    pwInput.value = '';
+    pwInput.focus();
+  });
+  document.getElementById('deleteAccountCancelBtn')?.addEventListener('click', () => {
+    const box = document.getElementById('deleteAccountConfirm');
+    const pwInput = document.getElementById('deleteAccountPwdInput');
+    if (box) box.style.display = 'none';
+    if (pwInput) pwInput.value = '';
+  });
+  // Final, permanent step — requires the account's own password (unlike the
+  // plain confirm() above, which only guards against accidental clicks).
+  async function _confirmDeleteAccount() {
+    const acc = getAccount(_activeAccountId);
+    if (!acc) return;
+    const pwInput = document.getElementById('deleteAccountPwdInput');
+    const pw = pwInput?.value || '';
+    if (acc.pwHash) {
+      const ok = await verifyAccountPassword(_activeAccountId, pw);
+      if (!ok) { toast(t('js.pwdCurrentWrong')); return; }
+    }
+    const box = document.getElementById('deleteAccountConfirm');
+    if (box) box.style.display = 'none';
+    if (pwInput) pwInput.value = '';
+    await deleteAccount(_activeAccountId);
     logoutNow();
+  }
+  document.getElementById('deleteAccountConfirmBtn')?.addEventListener('click', _confirmDeleteAccount);
+  document.getElementById('deleteAccountPwdInput')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') _confirmDeleteAccount();
   });
   document.getElementById('applySessionBtn').addEventListener('click', applySessionDuration);
   document.getElementById('resetSessionBtn').addEventListener('click', resetSessionNow);
   document.getElementById('resetMathJaxBtn')?.addEventListener('click', resetMathJaxSettings);
   document.getElementById('logoutBtn').addEventListener('click', logoutNow);
-  document.getElementById('clearAllBtn').addEventListener('click', clearAllData);
 
   // auto-save every tuning field on change, no explicit Save button needed
   document.getElementById('temperature').addEventListener('input', e=>{

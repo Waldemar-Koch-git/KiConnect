@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="no-referrer">
-  <title>AI✨ Chat/Agent (3.3.1)</title>
+  <title>AI✨ Chat/Agent (3.3.2)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -362,8 +362,16 @@
 
   <hr class="divider">
   <button class="ghost-btn" style="margin-top:0;margin-bottom:6px;" id="logoutBtn" data-i18n="settings.logout">🔓 Log out now</button>
-  <button class="ghost-btn" style="border-color:var(--red);color:var(--red);margin-bottom:6px;" id="deleteAccountBtn" data-i18n="account.deleteBtn">🗑 Delete this account</button>
-  <button class="ghost-btn" style="border-color:var(--red);color:var(--red);" id="clearAllBtn" data-i18n="settings.clearAll">🗑 Delete all data &amp; keys</button>
+  <button class="ghost-btn" style="border-color:var(--red);color:var(--red);" id="deleteAccountBtn" data-i18n="account.deleteBtn">🗑 Delete this account</button>
+  <div id="deleteAccountConfirm" style="display:none;margin-top:6px;padding:8px;border:1px solid var(--red);border-radius:6px;">
+    <div class="setting-label" data-i18n="account.deleteConfirmPwdLabel">Enter your password to permanently delete this account</div>
+    <input class="setting-input" type="password" id="deleteAccountPwdInput"
+      placeholder="Password…" data-i18n="account.deleteConfirmPwdPlaceholder" data-i18n-attr="placeholder" autocomplete="off">
+    <div style="display:flex;gap:6px;margin-top:6px;">
+      <button class="ghost-btn" style="margin:0;flex:1;border-color:var(--red);color:var(--red);" id="deleteAccountConfirmBtn" data-i18n="account.deleteConfirmBtn">🗑 Permanently delete</button>
+      <button class="ghost-btn" style="margin:0;flex:1;" id="deleteAccountCancelBtn" data-i18n="account.deleteCancelBtn">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════

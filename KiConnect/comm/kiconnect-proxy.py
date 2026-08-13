@@ -135,14 +135,25 @@ def store_registry():
     
 
 
-# ── /store/<accountId> - Keys auflisten ──────────────────────────
-@app.route('/store/<account_id>', methods=['GET', 'OPTIONS'])
+# ── /store/<accountId> - Keys auflisten / ganzes Konto-Verzeichnis löschen ──
+@app.route('/store/<account_id>', methods=['GET', 'DELETE', 'OPTIONS'])
 def store_list(account_id):
     if request.method == 'OPTIONS':
         return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
     adir = _account_dir(account_id)
     if not adir:
         return Response('{"error":"Invalid account ID."}', 400, content_type='application/json')
+
+    if request.method == 'DELETE':
+        # Removes the account's entire directory (all its .json key files,
+        # including agent_projects.json etc.) in one go, so no empty leftover
+        # folder remains after an account is deleted. Individual /store/<id>/<key>
+        # DELETE calls only ever removed files, never the directory itself.
+        with _store_lock:
+            if os.path.isdir(adir):
+                shutil.rmtree(adir, ignore_errors=True)
+        return Response('{"ok":true}', 200, content_type='application/json')
+
     with _store_lock:
         if not os.path.isdir(adir):
             return Response('[]', 200, content_type='application/json')
