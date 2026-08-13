@@ -785,10 +785,8 @@ header {
   font-family: 'IBM Plex Mono', monospace;
 }
 /* Generic collapse/expand for panel sections (#tuningPanel, #settingsPanel).
-   Applied at runtime by initPanelSectionCollapse() in kiconnect.js (called
-   as initTuningSectionCollapse() / initSettingsSectionCollapse()), which
-   wraps each section's content (from its .section-header up to the next
-   .section-header or <hr class="divider">) into a .tuning-section div. */
+   Applied at runtime by initPanelSectionCollapse() in kiconnect.js, which
+   wraps each section's content into a .tuning-section div. */
 .section-header.tuning-collapsible {
   cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;
 }
@@ -1448,15 +1446,10 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 .bubble .MathJax { color: var(--text) !important; }
 .math-block      { display: block; overflow-x: auto; padding: 4px 0; }
-/* MathJax's enableAssistiveMml option (kiconnect-mathjax-config.js) adds a
-   hidden real <math>…</math> MathML copy on top of every formula, purely
-   for screen readers. Without this rule it still catches mouse clicks and
-   text selection, so a click/double-click on a rendered formula can land
-   on the invisible copy instead of the visible one — which can trigger
-   the OS/browser's own "read selection aloud" accessibility hooks and
-   steal the speechSynthesis channel our own TTS is using. Keep it purely
-   for assistive tech: pointer/selection always passes through to the
-   visible CHTML layer underneath. */
+/* MathJax's assistive MathML sits invisibly on top of every formula for
+   screen readers. Without this rule it catches clicks/selection instead of
+   the visible copy, which can steal the speechSynthesis channel our TTS
+   uses. Keep it pointer/selection-transparent. */
 mjx-assistive-mml { pointer-events: none; user-select: none; }
 
 
@@ -1740,10 +1733,8 @@ textarea::placeholder { color: var(--muted); }
   order: 6;
 }
 /* Composer group order: 1 Assets, 2 Web, 3 Voice settings, 4 Agentic
-   Coding/Project — explicit order values instead of one flat `order:1`
-   for everything, which left the actual left-to-right order to depend on
-   incidental DOM/script-load order (voice.js vs agent.js injecting
-   themselves) rather than a deliberate sequence. */
+   Coding/Project — explicit values so order doesn't depend on incidental
+   script-load order (voice.js vs agent.js injecting themselves). */
 .input-actions .asset-btn-group        { order: 1; }
 .input-actions .web-context-wrap       { order: 2; }
 .input-actions .voice-btn-group        { order: 3; }
@@ -1918,22 +1909,15 @@ textarea::placeholder { color: var(--muted); }
 /* ── Print ────────────────────────────────────────────────────────────────── */
 @media print {
   /* Force actual page/paper white regardless of the active theme's dark
-     --bg. Previously this worked "by accident" because browsers drop
-     background-color by default when printing; the color-adjust:exact rule
-     below (needed so .note-print's background and MathJax's background-
-     image-drawn glyph parts still print) would otherwise also force this
-     dark body background to print as a solid black fill wherever no bubble
-     covers it — exactly the big black bars from painting an entire dark
-     page background onto paper. */
+     --bg — otherwise the color-adjust:exact rule below (needed for
+     .note-print/MathJax backgrounds) also force-prints this dark body
+     background as solid black bars wherever no bubble covers it. */
   html, body { background: #fff !important; }
 
-  /* Force these specific elements' background colors/images to actually
-     print (Chrome/Edge drop all backgrounds by default unless the user
-     manually ticks "Print backgrounds"). Scoped narrowly — NOT `*` — so we
-     don't also force-print the dark theme's page/panel backgrounds.
-     Without this, .note-print's colored background disappears (looks pale)
-     and MathJax CHTML's background-image-drawn stretchy glyphs (radicals,
-     big brackets, sum/integral signs) go missing from formulas. */
+  /* Force these specific elements' backgrounds to actually print (Chrome/
+     Edge drop them by default). Scoped narrowly — not `*` — so we don't
+     also force-print the dark theme's page/panel backgrounds. Without
+     this, .note-print looks pale and MathJax's stretchy glyphs vanish. */
   .note-print, .bubble, .math-block, .math-inline, mjx-container, mjx-container * {
     -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important;
   }

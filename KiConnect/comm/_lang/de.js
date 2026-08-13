@@ -236,6 +236,10 @@ registerLanguage('de', { label: 'Deutsch', code: 'DE' }, {
     'account.switchTo': 'Zu „{name}" wechseln',
     'account.manage': '⚙ Konten verwalten',
     'account.deleteBtn': '🗑 Dieses Konto löschen',
+    'account.deleteConfirmPwdLabel': 'Gib dein Passwort ein, um dieses Konto endgültig zu löschen',
+    'account.deleteConfirmPwdPlaceholder': 'Passwort…',
+    'account.deleteConfirmBtn': '🗑 Endgültig löschen',
+    'account.deleteCancelBtn': 'Abbrechen',
     'account.back': '← Zurück',
     'account.saveUsername': '✏️ Benutzername speichern',
 

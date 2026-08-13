@@ -638,11 +638,8 @@ async function getCryptoKey() {
 }
 
 // == Session token: F5 reload without password storage ==============
-// The password is NOT stored in sessionStorage.
-// Instead: after a successful login, a token encrypted with the
-// CryptoKey is stored in sessionStorage.
-// On F5/reload: decrypt token -> if OK -> still logged in.
-// Without the in-RAM CryptoKey (= different tab, browser restart) no access.
+// Password is never stored; instead a token encrypted with the in-RAM
+// CryptoKey is kept in sessionStorage so a reload can restore the session.
 const _SESSION_TOKEN_KEY = 'kic_st';
 
 // Encrypts a short-lived session marker with the current CryptoKey and stores it in sessionStorage, so a page reload can restore the session without re-entering the password.
@@ -954,12 +951,9 @@ async function _storeListKeys(accountId) {
   }
 }
 
-// Deletes an account's entire server-side data directory (DELETE /store/<accountId>)
-// in one request, so no empty folder is left behind after "delete account" — the
-// per-key DELETE calls in deleteAccount() only ever remove individual .json files,
-// never the directory itself. Best-effort: deleteAccount() already deletes every
-// known key beforehand, so if this fails (offline, older proxy without this route)
-// the worst case is a harmless leftover empty directory rather than lost data.
+// Deletes an account's entire server-side data directory in one request, so no
+// empty folder is left after "delete account". Best-effort; a failure here just
+// leaves a harmless empty directory since deleteAccount() already deletes the keys.
 async function _storeDeleteAccountDir(accountId) {
   if (!_storeAvailable) return;
   try { await fetch(`${_STORE_BASE}/${accountId}`, { method: 'DELETE' }); } catch {}
@@ -1062,32 +1056,15 @@ function sanitizeMsgForStorage(msg) {
 }
 
 // ── save() dirty-tracking cache ─────────────────────────────────────
-// save() used to unconditionally re-serialize + AES-encrypt + PUT all six
-// top-level sections (config, providers, profiles, profileFolders, folders,
-// chats — up to 200 chats with every message) on EVERY call, including
-// trivial UI-only changes like collapsing a folder or resizing the sidebar.
-// With ~70 call sites across the app (most not debounced), that meant a
-// full re-encrypt of the entire chat history for actions that never touch
-// chats at all.
-//
-// Fix: cache the last-saved plaintext JSON per section and skip the
-// (expensive) encrypt+network PUT for any section whose content is
-// unchanged since the last successful save. JSON.stringify is cheap
-// compared to AES-GCM + a network round-trip, so this is a safe, purely
-// additive optimization — it never skips a write that's actually needed.
-//
-// IMPORTANT: this cache must be invalidated whenever the encryption key
-// changes (password change, login, account switch) — otherwise unchanged
-// plaintext would wrongly be skipped even though it needs to be
-// re-encrypted under the new key. See getCryptoKey()/load() for resets.
+// Caches last-saved plaintext per section and skips encrypt+PUT for
+// unchanged sections, avoiding a full re-encrypt on every trivial change.
+// Must be reset on key change (password change, login, account switch);
+// see getCryptoKey()/load().
 let _saveCache = null;
 function resetSaveCache() { _saveCache = null; }
 
-// Encrypts and persists the full app state (config, providers, profiles, folders, chats, UI prefs) for the active account.
-// Concurrent/rapid-fire calls (common: many call sites do `save(); renderX();`
-// back to back) are coalesced into a single in-flight run instead of firing
-// overlapping encrypt+PUT cycles — every caller still gets a promise that
-// resolves only once the data is actually persisted.
+// Encrypts and persists the full app state for the active account.
+// Concurrent calls are coalesced into one in-flight run.
 let _saveInFlight = null;
 let _savePending = false;
 async function save() {
@@ -1318,14 +1295,10 @@ const ALLOWED_API_DOMAINS = [
   'searx.be','searxng.world','search.bus-hit.me','searx.tiekoetter.com',
   'search.sapti.me','searx.prvcy.eu','searx.fmac.xyz','search.ononoki.org',
 ];
-// A request is "safe" if its host is either one of the well-known,
-// built-in provider domains, OR the host of a custom server URL the user
-// themselves entered in the Provider editor (type "openai-compat" /
-// "kiconnect-nrw"). The latter is what makes self-hosted / third-party
-// OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, a company's own
-// gateway, ...) actually reachable — without it, any serverUrl outside the
-// fixed list below was silently rejected by proxyUrl(), even though the
-// Provider editor happily lets you save one.
+// A request is "safe" if its host is a well-known built-in provider domain,
+// or a custom server URL the user entered in the Provider editor (type
+// "openai-compat" / "kiconnect-nrw"), making self-hosted endpoints
+// (Ollama, LM Studio, vLLM, ...) reachable.
 function isSafeApiUrl(url) {
   try {
     const h = new URL(url).hostname;
@@ -1336,11 +1309,9 @@ function isSafeApiUrl(url) {
     });
   } catch { return false; }
 }
-// True if `url`'s host belongs to a saved openai-compat provider whose
-// address was explicitly double-confirmed in the Provider editor (see
-// confirmLanAddress()). The proxy's own SSRF protection blocks requests to
-// private/LAN addresses by default; this marker is the only thing that
-// unlocks a specific, user-approved one.
+// True if `url`'s host was explicitly double-confirmed in the Provider
+// editor (see confirmLanAddress()), unlocking it past the proxy's SSRF
+// protection for private/LAN addresses.
 function _isLanConfirmedUrl(url) {
   try {
     const h = new URL(url).hostname.toLowerCase();
@@ -1550,12 +1521,9 @@ function selectProviderType(type) {
 // Returns the currently selected provider type chip's value.
 function getSelectedProviderType() { return document.querySelector('.type-chip.selected')?.dataset.type || 'openai-compat'; }
 
-// Shows two sequential confirmation dialogs before a non-localhost server
-// URL is allowed to be saved into a Provider. The backend proxy blocks
-// requests to private/LAN addresses by default (SSRF protection) - this is
-// what makes LM Studio/Ollama/vLLM running on *another* machine on the
-// network fail otherwise. Confirming here is what unlocks that one address.
-// Returns true only if the user accepted both prompts.
+// Shows two sequential confirmations before a non-localhost server URL can
+// be saved to a Provider, since the proxy blocks LAN/private addresses
+// (SSRF protection) unless explicitly unlocked here.
 function confirmLanAddress(hostname) {
   const msg1 = tf('js.lanConfirm1', { host: hostname }) ||
     `⚠️ "${hostname}" is not localhost - it looks like an address on your local network (or beyond).\n\nThis app will be allowed to send requests to that address. Only continue if you set this up yourself and trust it.\n\nContinue?`;
@@ -2318,12 +2286,9 @@ async function fetchModels() {
   applyModelGroupsToUI(allGroups);
 }
 
-// Rebuilds the model <select>/<optgroup> options (and the custom dropdown) from
-// a list of {providerId, providerName, models} groups, and — if the currently
-// selected model isn't among them anymore — falls back to the first available
-// one. Shared by fetchModels() (fresh network data) and
-// rebuildModelDropdownFromCache() (instant, no network) so both paths behave
-// identically.
+// Rebuilds the model dropdown from {providerId, providerName, models} groups,
+// falling back to the first available model if the current one is gone.
+// Shared by fetchModels() and rebuildModelDropdownFromCache().
 function applyModelGroupsToUI(allGroups) {
   const ph = `<option value="">${escHtml(t('js.selectModel'))}</option>`;
   if (!allGroups.length) {
@@ -2445,13 +2410,9 @@ function isMistralAdjustableThinkingModel(modelId) {
 function isMistralThinkingModel(modelId) {
   return isMistralNativeThinkingModel(modelId) || isMistralAdjustableThinkingModel(modelId);
 }
-// Mistral reasoning models (native Magistral, or adjustable models with
-// reasoning_effort:'high') return `content` — in both the final message and,
-// apparently, each stream delta — as a list of chunks instead of a plain
-// string: {type:'text', text} for the answer and {type:'thinking', thinking}
-// for the reasoning trace (thinking itself is a list of {type:'text', text}
-// sub-chunks). Plain-string content (the non-reasoning / reasoning_effort:
-// 'none' case) is also handled here so callers don't need two code paths.
+// Mistral reasoning models return `content` as a list of chunks instead of a
+// plain string: {type:'text', text} and {type:'thinking', thinking}. Plain
+// string content is handled too, so callers need only one code path.
 // See https://docs.mistral.ai/studio-api/conversations/reasoning/native
 function parseMistralContent(content) {
   if (typeof content === 'string') return { text: content, reasoning: '' };
@@ -4138,13 +4099,9 @@ function _splitStableTail(text) {
   }
   if (lastSafe === -1) return { stable: '', tail: text };
 
-  // Pull the boundary back to before any still-open multi-line block (GFM
-  // table or list) so we never commit a *partial* table/list to "stable".
-  // marked.js needs the whole block (e.g. the table header + separator
-  // row) in a single parse to render new rows/items correctly — splitting
-  // a growing table across several "stable" flushes turns later rows into
-  // orphaned plain text instead of appending them to the table, and
-  // splitting an ordered list resets the numbering. See _pullBackForOpenBlock.
+  // Pull the boundary back before any still-open GFM table/list so we never
+  // commit a partial one to "stable" — marked.js needs the whole block in a
+  // single parse. See _pullBackForOpenBlock.
   lastSafe = _pullBackForOpenBlock(text, lastSafe);
   if (lastSafe === -1) return { stable: '', tail: text };
 
@@ -4221,10 +4178,8 @@ function _hasOpenMathBlock(text) {
 // so we only touch .msg-stable when there's genuinely new finished content.
 const _streamStableCache = new WeakMap();
 
-// renderStreamingBubble: live-updates a message bubble during streaming
-// while preserving already-rendered (typeset) content. Splits into a frozen
-// "stable" container (rendered once per finished line, then left alone) and
-// a small "tail" container (the current in-progress line, re-rendered often).
+// Live-updates a message bubble during streaming. Splits into a frozen
+// "stable" container and a small "tail" for the in-progress line.
 function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   let stableEl = bubbleEl.querySelector('.msg-stable');
   let tailEl = bubbleEl.querySelector('.msg-tail');
@@ -4941,10 +4896,8 @@ const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
 // keeps a confused or looping model from stalling the chat indefinitely.
 const AGENTIC_TOOL_MAX_ITERS = 4;
 
-// Executes one agentic tool call and returns a plain object to feed back to
-// the model as the tool_result — reuses the exact same search/fetch
-// functions the manual/auto modes and the coding agent already use, so
-// results, caching, and engine/key handling are all identical.
+// Executes one agentic tool call and returns a tool_result object, reusing
+// the same search/fetch functions as manual/auto modes and the coding agent.
 async function runAgenticWebTool(name, args) {
   try {
     if (name === 'web_search') {
@@ -5081,11 +5034,8 @@ async function runAgenticWebToolLoop(initialMsgs, provider) {
         role: 'assistant', content: turn.text || null,
         tool_calls: turn.toolCalls.map(c => ({
           id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) },
-          // Gemini 2.5+/3.x reject the *next* turn with 400 "Function call
-          // is missing a thought_signature..." unless each function call
-          // carries back the exact signature it was issued with — even
-          // when this is web_search, not the coding agent. Same fix as
-          // kiconnect-agent.js's toOpenAIHistory().
+          // Gemini 2.5+/3.x needs the thought_signature echoed back or the
+          // next turn 400s. Same fix as kiconnect-agent.js's toOpenAIHistory().
           ...(c._thoughtSig ? { extra_content: { google: { thought_signature: c._thoughtSig } } } : {}),
         })),
       });
@@ -6369,11 +6319,8 @@ function copyFullChat() {
 // Safe UTF-8 -> base64 encoder. Replaces the classic
 // btoa(unescape(encodeURIComponent(str))) trick, which throws
 // "URIError: malformed URI sequence" if str contains an unpaired
-// UTF-16 surrogate (e.g. a truncated emoji from streamed model output,
-// or an oddly-encoded custom font mapping from extracted PDF text).
-// TextEncoder never throws — it silently replaces invalid surrogates
-// with U+FFFD, so a stray bad character degrades gracefully instead of
-// crashing the whole render (formatText -> buildMsgEl -> renderMessages).
+// TextEncoder replaces invalid surrogates with U+FFFD instead of throwing,
+// so a stray bad character (e.g. a truncated emoji) degrades gracefully.
 function toBase64Utf8(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = '';
@@ -6385,13 +6332,9 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// Security fix: DOMPurify's config below allows <a target="_blank"> through
-// (needed for normal markdown links opening in a new tab), but without
-// rel="noopener noreferrer" that lets the opened page reach back into this
-// tab via window.opener (reverse tabnabbing) - e.g. from a link embedded in
-// model output. Force it on every such link, once, for every future
-// formatText() call. Installed lazily on first use so it still works if
-// DOMPurify happens to finish loading after this script runs.
+// Security: force rel="noopener noreferrer" on target="_blank" links to
+// prevent reverse tabnabbing. Installed lazily so it still works if
+// DOMPurify loads after this script runs.
 let _dompurifyNoopenerHookInstalled = false;
 function ensureDompurifyNoopenerHook() {
   if (_dompurifyNoopenerHookInstalled || typeof DOMPurify === 'undefined') return;
@@ -6595,17 +6538,10 @@ function typesetMath(el) {
   }
 }
 
-// MathJax's enableAssistiveMml (kiconnect-mathjax-config.js) makes every
-// <mjx-container> focusable (tabindex="0") so a screen reader's virtual
-// cursor / Tab key can reach the hidden assistive MathML. Side effect: a
-// plain click on a rendered formula focuses that container — and moving
-// focus onto it has been observed to interrupt an in-progress
-// speechSynthesis utterance (kiconnect-voice.js), consistently across
-// Chrome/Edge/Firefox, since it's a DOM-focus effect, not a browser quirk.
-// Screen readers can still reach and read the assistive MathML via their
-// own browse-mode virtual cursor without needing Tab-key focusability, so
-// removing the attribute costs sequential (Tab-order) reachability of
-// formulas but not accessibility of their content.
+// MathJax's assistive MathML makes every <mjx-container> focusable
+// (tabindex="0"), and focusing one interrupts an in-progress speechSynthesis
+// utterance (kiconnect-voice.js). Screen readers can still reach the MathML
+// via browse-mode without Tab focusability, so it's safe to strip.
 function stripMathFocusability(targets) {
   targets.forEach(t => {
     if (!t || !t.querySelectorAll) return;
@@ -6614,27 +6550,17 @@ function stripMathFocusability(targets) {
   });
 }
 
-// Belt-and-suspenders: even if some future/other code path creates an
-// <mjx-container> we didn't run stripMathFocusability() on, never let a
-// mouse click actually move focus onto it (see stripMathFocusability's
-// comment for why that matters). Capturing mousedown and calling
-// preventDefault() suppresses the browser's default focus-on-mousedown
-// behavior without blocking the click event itself, so copy/selection/
-// the app's own formula-copy handling all keep working normally.
+// Belt-and-suspenders: prevent mouse-focus on any <mjx-container> we didn't
+// catch via stripMathFocusability(), without blocking the click itself.
 document.addEventListener('mousedown', e => {
   if (e.target.closest && e.target.closest('mjx-container')) e.preventDefault();
 }, true);
 
 
 // Throttled variant: used during streaming so LaTeX renders progressively
-// instead of only once at the very end.
-// Per-element throttle state (WeakMap keyed by the target element) rather
-// than one shared global timer/timestamp. A single global timer meant any
-// two elements sharing typesetMathThrottled would cancel/delay each
-// other's pending typeset — harmless today since only one bubble streams
-// at a time, but wrong in principle and would misbehave the moment
-// anything else (e.g. a second concurrent stream, or a tail + stable call
-// racing) starts using it. Each element now gets its own independent timer.
+// instead of only once at the very end. Per-element throttle state (not one
+// shared timer) so concurrent typesets on different elements don't delay
+// each other.
 const _mjThrottleState = new WeakMap();
 // Schedules a MathJax typeset pass for an element, throttled per-element so rapid successive calls collapse into one.
 function typesetMathThrottled(el, delay = 400) {

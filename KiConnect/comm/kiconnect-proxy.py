@@ -31,15 +31,13 @@ DATA_DIR   = os.path.join(STATIC_DIR, 'datas')
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Projects (coding-agent feature) point at real, user-chosen folders anywhere
-# on the local filesystem. Every call re-confines a project's tools to that
-# one registered folder (see _project_root_for_id / _safe_rel_path), and a
-# folder can never be registered if it equals or encloses STATIC_DIR/DATA_DIR.
+# on the local filesystem, re-confined to that folder on every call (see
+# _project_root_for_id / _safe_rel_path). A folder can never be registered
+# if it equals or encloses STATIC_DIR/DATA_DIR.
 #
-# The project-id -> path mapping lives per-account, ENCRYPTED AT REST, in
-# datas/<accountId>/agent_projects.json (see _key_path()). It's only
-# readable/writable during an unlocked agent session: the AES key is derived
-# client-side from the account password, handed to the server once at
-# unlock, held in RAM only, never written to disk.
+# The project-id -> path mapping lives per-account, encrypted at rest, in
+# datas/<accountId>/agent_projects.json. The AES key is derived client-side
+# from the account password and held in RAM only during an unlocked session.
 
 # ── Strict Origin / Host Check ────────────────────────────────────
 ALLOWED_ORIGINS = {
@@ -206,9 +204,7 @@ def store_key(account_id, key):
 # ════════════════════════════════════════════════════════════════
 #  Agent-API - file operations for the coding-agent feature.
 #  Every path is re-resolved and re-confined to its project's registered
-#  root on every call - never trust a previously-checked path or the
-#  registry blindly (a folder moved/deleted, or one that would now enclose
-#  the app's own files, is rejected again each time).
+#  root on every call - never trust a previously-checked path.
 # ════════════════════════════════════════════════════════════════
 MAX_AGENT_FILE_SIZE = 5 * 1024 * 1024          # 5 MB per file (read + write)
 MAX_AGENT_TREE_ENTRIES = 4000                  # safety cap for huge folders
@@ -223,11 +219,9 @@ AGENT_BLOCKED_NAMES = {'.env', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
 _SAFE_PROJECT_ID_RE = re.compile(r'^p_[A-Za-z0-9]{1,64}$')
 
 # ── Agent Session (per-account, in-RAM only) ──────────────────────
-# The AES-256 key for a given account's project registry is derived
-# CLIENT-SIDE from the account password (a second, independent key from the
-# one used elsewhere) and handed to the server once at unlock. Kept ONLY in
-# this in-memory dict, keyed by a random session token - never persisted or
-# logged, gone on process restart.
+# The AES-256 key for a project registry is derived client-side from the
+# account password and handed to the server once at unlock. Kept only in
+# this in-memory dict, keyed by a random session token - never persisted.
 _agent_sessions = {}          # token(str) -> {'accountId': str, 'key': bytes, 'ts': float}
 _AGENT_SESSION_TTL = 24 * 3600
 _agent_session_lock = threading.Lock()
@@ -538,13 +532,9 @@ def agent_set_shell(pid):
     return _agent_ok({'id': pid, 'shell': enabled})
 
 # ── /agent/projects/<id>/path - change a project's target folder ─────
-# Lets an already-registered project be re-pointed at a different real
-# folder without deleting/recreating it (which used to be the only way,
-# losing the project's id and forcing a fresh registration). Runs through
-# the exact same validation as creating a new project (existence, 'create'
-# opt-in, blocked-root check, no duplicate-path collision with another
-# project) - a path change is just as security-sensitive as an initial
-# registration and must not skip any of those checks.
+# Re-points an already-registered project without deleting/recreating it.
+# Runs through the same validation as creating a new project (existence,
+# 'create' opt-in, blocked-root check, no duplicate-path collision).
 @app.route('/agent/projects/<pid>/path', methods=['PUT', 'OPTIONS'])
 def agent_set_project_path(pid):
     if request.method == 'OPTIONS':
@@ -975,13 +965,9 @@ def agent_move(pid):
 
 
 # ── /agent/copy/<id> - copy a file or folder, leaving the original ────
-# Mirrors agent_move above, but copies instead of renaming on disk, so the
-# source at `from` is left untouched. shutil.copy2 preserves metadata for a
-# single file; shutil.copytree (with dirs_exist_ok, since the destination
-# was already cleared above when overwrite=true) recurses for folders.
-# Folder copies are size-capped the same way run_command's output is capped
-# elsewhere, so a single "copy" call can't be used to silently balloon disk
-# usage with an unbounded recursive copy.
+# Mirrors agent_move above, but copies instead of renaming, leaving the
+# source untouched. Folder copies are size-capped so a single "copy" call
+# can't balloon disk usage with an unbounded recursive copy.
 MAX_AGENT_COPY_DIR_BYTES = 200 * 1024 * 1024   # 200 MB cap for a folder copy
 
 def _dir_size(path):
@@ -1062,16 +1048,14 @@ def check_origin():
 # Three tiers:
 #  - LOOPBACK_NETWORKS: same machine only. Always allowed (this is the mode
 #    that already worked - local LM Studio/Ollama/vLLM on 'localhost').
-#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy, confirmation or
-#    not. Cloud metadata endpoints, reserved/documentation/broadcast ranges -
-#    there's no legitimate "my own LAN device" use case for these, only an
-#    SSRF one.
+#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy. Cloud metadata
+#    endpoints and reserved/documentation/broadcast ranges - no legitimate
+#    "my own LAN device" use case, only an SSRF one.
 #  - LAN_NETWORKS: private/local-network ranges (RFC1918, link-local, IPv6
-#    ULA, CGNAT). Blocked *by default*, but can be unlocked per-provider via
-#    the "kic_lan_confirm" marker - which the frontend only ever sends after
-#    the user has explicitly double-confirmed that exact address in the
-#    Provider editor ("API panel"). This is what makes a LM Studio/Ollama
-#    instance running on another PC on the network reachable.
+#    ULA, CGNAT). Blocked by default, unlockable per-provider via the
+#    "kic_lan_confirm" marker after the user double-confirms the address
+#    in the Provider editor - what makes an LM Studio/Ollama instance on
+#    another PC on the network reachable.
 LOOPBACK_NETWORKS = [
     ipaddress.ip_network('127.0.0.0/8'), ipaddress.ip_network('::1/128'),
 ]
@@ -1107,15 +1091,10 @@ def _classify_ip(addr):
     return 'public'
 
 def classify_host(host):
-    """Classify a hostname or literal IP as one of
-    'loopback' | 'blocked' | 'lan' | 'public' | 'unresolvable', and return
-    the *specific* resolved IP that decision is based on alongside it (as
-    (class, ip) - ip is None for 'unresolvable'/'blocked' or when no single
-    IP is meaningful).
-    For hostnames every resolved address is checked - the single most
-    restrictive class wins, so a name that resolves to both a public and a
-    blocked/LAN address is treated as that stricter class, pinned to one of
-    the addresses that actually earned that class."""
+    """Classify a hostname or IP as 'loopback' | 'blocked' | 'lan' | 'public'
+    | 'unresolvable', returning (class, ip) - the specific resolved IP the
+    decision is based on. For hostnames, every resolved address is checked
+    and the most restrictive class wins."""
     try:
         ipaddress.ip_address(host)
         ips = [host]
@@ -1174,23 +1153,17 @@ def is_allowed(target_url, method='GET', confirmed=False):
     return True, '', False, pin  # public
 
 # ── DNS pinning (closes the SSRF check's DNS-rebinding gap) ──────
-# is_allowed()/classify_host() resolve the target hostname and vet the
-# resulting IP. Without this, the actual connection - made separately by
-# `requests`/urllib3 a few lines later - would resolve the hostname AGAIN,
-# and a malicious/low-TTL DNS answer could point that second lookup
-# somewhere the check never saw (classic DNS-rebinding SSRF bypass). This
-# pins socket.getaddrinfo() to return exactly the address that was already
-# vetted, for that one hostname, for the duration of the request.
+# is_allowed()/classify_host() resolve and vet the hostname's IP, but the
+# actual connection resolves it again - a low-TTL DNS answer could then
+# point somewhere the check never saw. This pins socket.getaddrinfo() to
+# the already-vetted address for that one hostname, for the request's
+# duration.
 #
-# Implemented via thread-local state rather than a global save/restore swap:
-# waitress serves requests on multiple worker threads, and two concurrent
-# requests each doing "swap in patched fn, ..., swap back saved original"
-# on the *same* global `socket.getaddrinfo` would race - whichever request
-# finishes first restores a reference that may have already been replaced
-# by the other thread, silently un-pinning it. A single patched function
-# that only special-cases the current thread's pin, installed once, has no
-# such race: unrelated hostnames and unrelated threads always fall through
-# to the real resolver untouched.
+# Uses thread-local state rather than a global save/restore swap: waitress
+# serves multiple worker threads, and two concurrent "swap in, ..., swap
+# back" calls on the same global `socket.getaddrinfo` would race. A single
+# patched function that only special-cases the current thread's pin avoids
+# that - unrelated hostnames/threads fall through to the real resolver.
 _dns_pin = threading.local()
 _real_getaddrinfo = socket.getaddrinfo
 

@@ -236,6 +236,10 @@ registerLanguage('fa', { label: 'فارسی', code: 'FA' }, {
     'account.switchTo': 'تغییر به «{name}»',
     'account.manage': '⚙ مدیریت حساب‌ها',
     'account.deleteBtn': '🗑 حذف این حساب',
+    'account.deleteConfirmPwdLabel': 'برای حذف دائمی این حساب، رمز عبور خود را وارد کنید',
+    'account.deleteConfirmPwdPlaceholder': 'رمز عبور…',
+    'account.deleteConfirmBtn': '🗑 حذف دائمی',
+    'account.deleteCancelBtn': 'انصراف',
     'account.back': '← بازگشت',
     'account.saveUsername': '✏️ ذخیره نام کاربری',
 

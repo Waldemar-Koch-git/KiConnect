@@ -236,6 +236,10 @@ registerLanguage('en', { label: 'English', code: 'EN' }, {
     'account.switchTo': 'Switch to "{name}"',
     'account.manage': '⚙ Manage accounts',
     'account.deleteBtn': '🗑 Delete this account',
+    'account.deleteConfirmPwdLabel': 'Enter your password to permanently delete this account',
+    'account.deleteConfirmPwdPlaceholder': 'Password…',
+    'account.deleteConfirmBtn': '🗑 Permanently delete',
+    'account.deleteCancelBtn': 'Cancel',
     'account.back': '← Back',
     'account.saveUsername': '✏️ Save username',
 
