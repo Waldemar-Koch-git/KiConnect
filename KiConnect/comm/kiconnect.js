@@ -630,6 +630,10 @@ async function getCryptoKey() {
   const saltBytes = Uint8Array.from(atob(encSalt), c => c.charCodeAt(0));
   const passphrase = 'kic-enc-v5|' + (_sessionPassphrase || '');
   _cryptoKey = await deriveKeyPBKDF2(passphrase, saltBytes);
+  // A (re)derived key invalidates save()'s dirty-tracking cache: unchanged
+  // plaintext must still be re-encrypted under the new key (e.g. after a
+  // password change / rekey), otherwise it would wrongly be skipped.
+  resetSaveCache();
   return _cryptoKey;
 }
 
@@ -1029,34 +1033,104 @@ function sanitizeMsgForStorage(msg) {
   return result;
 }
 
+// ── save() dirty-tracking cache ─────────────────────────────────────
+// save() used to unconditionally re-serialize + AES-encrypt + PUT all six
+// top-level sections (config, providers, profiles, profileFolders, folders,
+// chats — up to 200 chats with every message) on EVERY call, including
+// trivial UI-only changes like collapsing a folder or resizing the sidebar.
+// With ~70 call sites across the app (most not debounced), that meant a
+// full re-encrypt of the entire chat history for actions that never touch
+// chats at all.
+//
+// Fix: cache the last-saved plaintext JSON per section and skip the
+// (expensive) encrypt+network PUT for any section whose content is
+// unchanged since the last successful save. JSON.stringify is cheap
+// compared to AES-GCM + a network round-trip, so this is a safe, purely
+// additive optimization — it never skips a write that's actually needed.
+//
+// IMPORTANT: this cache must be invalidated whenever the encryption key
+// changes (password change, login, account switch) — otherwise unchanged
+// plaintext would wrongly be skipped even though it needs to be
+// re-encrypted under the new key. See getCryptoKey()/load() for resets.
+let _saveCache = null;
+function resetSaveCache() { _saveCache = null; }
+
 // Encrypts and persists the full app state (config, providers, profiles, folders, chats, UI prefs) for the active account.
+// Concurrent/rapid-fire calls (common: many call sites do `save(); renderX();`
+// back to back) are coalesced into a single in-flight run instead of firing
+// overlapping encrypt+PUT cycles — every caller still gets a promise that
+// resolves only once the data is actually persisted.
+let _saveInFlight = null;
+let _savePending = false;
 async function save() {
-  if (!_activeAccountId) return;
+  if (_saveInFlight) {
+    _savePending = true;
+    return _saveInFlight;
+  }
+  _saveInFlight = _performSave();
   try {
-    const encProviders = await Promise.all(providers.map(encryptProvider));
+    return await _saveInFlight;
+  } finally {
+    _saveInFlight = null;
+    if (_savePending) {
+      _savePending = false;
+      save(); // fire-and-forget: capture whatever changed while we were saving
+    }
+  }
+}
+
+async function _performSave() {
+  if (!_activeAccountId) return;
+  if (!_saveCache) _saveCache = {};
+  const cache = _saveCache;
+  try {
+    // Compute plaintext JSON for each section up front (cheap) so we can
+    // diff against the last-saved version and skip untouched sections.
     const chatsToStore = chats.slice(0, 200).map(c => ({
       ...c,
       messages: c.messages.map(sanitizeMsgForStorage),
     }));
-    const [encConfig, encProvidersStr, encProfiles, encProfileFolders, encFolders, encChats] = await Promise.all([
-      encryptObj(config),
-      encryptObj(encProviders),
-      encryptObj(profiles),
-      encryptObj(profileFolders),
-      encryptObj(folders),
-      encryptObj(chatsToStore),
-    ]);
-    await Promise.all([
-      _storePut(_activeAccountId, 'config',    encConfig),
-      _storePut(_activeAccountId, 'providers', encProvidersStr),
-      _storePut(_activeAccountId, 'profiles',  encProfiles),
-      _storePut(_activeAccountId, 'profileFolders', encProfileFolders),
-      _storePut(_activeAccountId, 'folders',   encFolders),
-      _storePut(_activeAccountId, 'chats',     encChats),
-    ]);
-    if (currentChatId) await _storePut(_activeAccountId, 'current_chat', currentChatId);
-    await _storePut(_activeAccountId, 'sidebar_w', document.getElementById('sidebar')?.style.width || '');
-    await _storePut(_activeAccountId, 'sidebar_collapsed', sidebarCollapsed ? '1' : '');
+    const sections = {
+      config: JSON.stringify(config),
+      providers: JSON.stringify(providers),
+      profiles: JSON.stringify(profiles),
+      profileFolders: JSON.stringify(profileFolders),
+      folders: JSON.stringify(folders),
+      chats: JSON.stringify(chatsToStore),
+    };
+
+    const dirtyKeys = Object.keys(sections).filter(k => cache[k] !== sections[k]);
+
+    if (dirtyKeys.length) {
+      const encryptedEntries = await Promise.all(dirtyKeys.map(async key => {
+        if (key === 'providers') {
+          const encProviders = await Promise.all(providers.map(encryptProvider));
+          return [key, await encryptObj(encProviders)];
+        }
+        const plainByKey = { config, profiles, profileFolders, folders, chats: chatsToStore };
+        return [key, await encryptObj(plainByKey[key])];
+      }));
+      await Promise.all(encryptedEntries.map(([key, encVal]) => _storePut(_activeAccountId, key, encVal)));
+      // Only update the cache after a successful write for each section.
+      dirtyKeys.forEach(k => { cache[k] = sections[k]; });
+    }
+
+    // These are cheap already (no encryption, tiny payloads) but still cost
+    // a network round-trip each — skip the PUT when unchanged too.
+    if (currentChatId && cache._currentChatId !== currentChatId) {
+      await _storePut(_activeAccountId, 'current_chat', currentChatId);
+      cache._currentChatId = currentChatId;
+    }
+    const sidebarW = document.getElementById('sidebar')?.style.width || '';
+    if (cache._sidebarW !== sidebarW) {
+      await _storePut(_activeAccountId, 'sidebar_w', sidebarW);
+      cache._sidebarW = sidebarW;
+    }
+    const sidebarCollapsedVal = sidebarCollapsed ? '1' : '';
+    if (cache._sidebarCollapsed !== sidebarCollapsedVal) {
+      await _storePut(_activeAccountId, 'sidebar_collapsed', sidebarCollapsedVal);
+      cache._sidebarCollapsed = sidebarCollapsedVal;
+    }
   } catch (e) {
     console.error('[save] error:', e);
     // Only show storageFull toast for genuine quota errors — not for network/server errors.
@@ -1072,6 +1146,9 @@ async function save() {
 // Loads and decrypts the full app state for the active account, migrating from legacy localStorage entries where needed.
 async function load() {
   if (!_activeAccountId) return;
+  // Fresh account/session -> save()'s dirty-tracking cache must not carry
+  // over stale plaintext snapshots from a previously loaded account.
+  resetSaveCache();
   async function loadKey(key, fallback) {
     let raw = await _storeGet(_activeAccountId, key);
     if (raw === null || raw === undefined) {
@@ -2934,6 +3011,13 @@ function renderSidebar() {
     }
   }
 
+  // Build every folder/chat node off-DOM in a fragment and attach it once
+  // at the end, instead of appendChild-ing each folder directly onto the
+  // live (attached) container. With many folders/chats, appending one at a
+  // time onto a connected node can force a layout/reflow per append; a
+  // single fragment append triggers just one.
+  const frag = document.createDocumentFragment();
+
   const unfiled = chats.filter(c=>!c.folderId||!folders.find(f=>f.id===c.folderId));
   const targetFolderId = getSidebarTargetFolderId();
   const newChatBtn = document.getElementById('newChatBtn');
@@ -3036,7 +3120,7 @@ function renderSidebar() {
     chatsDiv.addEventListener('drop', e => { if(draggedChatId) onDropFolder(e, f.id); });
     fc.forEach(c => chatsDiv.appendChild(buildChatItem(c)));
     folderDiv.appendChild(header); folderDiv.appendChild(chatsDiv);
-    container.appendChild(folderDiv);
+    frag.appendChild(folderDiv);
   });
 
   if (unfiled.length > 0) {
@@ -3059,8 +3143,10 @@ function renderSidebar() {
     chatsDiv.addEventListener('drop', e=>{if(draggedChatId)onDropFolder(e,null);});
     unfiled.forEach(c=>chatsDiv.appendChild(buildChatItem(c)));
     folderDiv.appendChild(header); folderDiv.appendChild(chatsDiv);
-    container.appendChild(folderDiv);
+    frag.appendChild(folderDiv);
   }
+
+  container.appendChild(frag);
 }
 
 // Builds the DOM element for a single chat entry in the sidebar (title, menu, drag handlers, selection checkbox).
