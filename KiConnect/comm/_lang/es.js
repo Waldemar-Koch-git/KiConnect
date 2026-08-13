@@ -48,7 +48,6 @@ registerLanguage('es', { label: 'Español', code: 'ES' }, {
     'settings.sessionApply': '⏱ Aplicar',
     'settings.sessionReset': '🔄 Restablecer ahora',
     'settings.sessionTimeLeft': 'Tiempo restante',
-    'settings.clearAll': '🗑 Eliminar todos los datos y claves',
 
     'login.subtitle': 'Introduce tu contraseña para continuar',
     'login.placeholder': 'Contraseña…',
@@ -173,7 +172,6 @@ registerLanguage('es', { label: 'Español', code: 'ES' }, {
     'js.noText': '(extracción de texto no disponible)',
     'js.pwdSet': '🔑 Contraseña establecida – claves re-cifradas ✓',
     'js.pwdRemoved': '🔓 Contraseña eliminada',
-    'js.clearConfirm': '¿Eliminar TODOS los datos?\nEsta acción no se puede deshacer.',
     'js.cleared': '🗑 Todos los datos eliminados',
     'js.noModelsInPanel': 'Sin modelos cargados.',
     'js.resetTo': '↺ {id}: restablecido a {n}',

@@ -48,7 +48,6 @@ registerLanguage('hi', { label: 'हिन्दी', code: 'HI' }, {
     'settings.sessionApply': '⏱ लागू करें',
     'settings.sessionReset': '🔄 अभी रीसेट करें',
     'settings.sessionTimeLeft': 'शेष समय',
-    'settings.clearAll': '🗑 सभी डेटा और कुंजियाँ हटाएँ',
 
     'login.subtitle': 'जारी रखने के लिए पासवर्ड दर्ज करें',
     'login.placeholder': 'पासवर्ड…',
@@ -173,7 +172,6 @@ registerLanguage('hi', { label: 'हिन्दी', code: 'HI' }, {
     'js.noText': '(पाठ निकालना उपलब्ध नहीं)',
     'js.pwdSet': '🔑 पासवर्ड सेट — कुंजियाँ पुनः एन्क्रिप्ट हुईं ✓',
     'js.pwdRemoved': '🔓 पासवर्ड हटाया गया',
-    'js.clearConfirm': 'सभी डेटा हटाएँ?\nयह पूर्ववत नहीं हो सकता।',
     'js.cleared': '🗑 सभी डेटा हटा दिया गया',
     'js.noModelsInPanel': 'कोई मॉडल लोड नहीं हुआ।',
     'js.resetTo': '↺ {id}: {n} पर रीसेट किया',

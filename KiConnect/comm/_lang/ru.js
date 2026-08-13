@@ -48,7 +48,6 @@ registerLanguage('ru', { label: 'Русский', code: 'RU' }, {
     'settings.sessionApply': '⏱ Применить',
     'settings.sessionReset': '🔄 Сбросить сейчас',
     'settings.sessionTimeLeft': 'Оставшееся время',
-    'settings.clearAll': '🗑 Удалить все данные и ключи',
 
     'login.subtitle': 'Введите пароль для продолжения',
     'login.placeholder': 'Пароль…',
@@ -173,7 +172,6 @@ registerLanguage('ru', { label: 'Русский', code: 'RU' }, {
     'js.noText': '(извлечение текста недоступно)',
     'js.pwdSet': '🔑 Пароль задан – ключи перешифрованы ✓',
     'js.pwdRemoved': '🔓 Пароль удалён',
-    'js.clearConfirm': 'Удалить ВСЕ данные?\nЭто действие необратимо.',
     'js.cleared': '🗑 Все данные удалены',
     'js.noModelsInPanel': 'Модели не загружены.',
     'js.resetTo': '↺ {id}: сброшено до {n}',

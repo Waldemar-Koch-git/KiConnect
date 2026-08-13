@@ -51,7 +51,6 @@ registerLanguage('el', { label: 'Ελληνικά', code: 'EL' }, {
     'settings.sessionReset': '🔄 Επαναφορά τώρα',
     'settings.sessionTimeLeft': 'Χρόνος που απομένει',
     'settings.logout': '🔓 Αποσύνδεση τώρα',
-    'settings.clearAll': '🗑 Διαγραφή όλων των δεδομένων & κλειδιών',
 
     'login.subtitle': 'Εισάγετε τον κωδικό σας για να συνεχίσετε',
     'login.placeholder': 'Κωδικός…',
@@ -187,7 +186,6 @@ registerLanguage('el', { label: 'Ελληνικά', code: 'EL' }, {
     'js.noText': '(εξαγωγή κειμένου μη διαθέσιμη)',
     'js.pwdSet': '🔑 Κωδικός ορίστηκε – κλειδιά επανακρυπτογραφήθηκαν ✓',
     'js.pwdRemoved': '🔓 Κωδικός αφαιρέθηκε',
-    'js.clearConfirm': 'Διαγραφή ΟΛΩΝ των δεδομένων;\nΑυτό περιλαμβάνει συνομιλίες, API keys, προφίλ και ρυθμίσεις.\nΑυτή η ενέργεια δεν μπορεί να αναιρεθεί.',
     'js.cleared': '🗑 Όλα τα δεδομένα διαγράφηκαν',
     'js.noModelsInPanel': 'Δεν φορτώθηκαν μοντέλα. Ρυθμίστε πρώτα έναν πάροχο.',
     'js.resetTo': '↺ {id}: επαναφορά σε {n}',

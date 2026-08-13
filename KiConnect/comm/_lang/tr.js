@@ -48,7 +48,6 @@ registerLanguage('tr', { label: 'Türkçe', code: 'TR' }, {
     'settings.sessionApply': '⏱ Uygula',
     'settings.sessionReset': '🔄 Şimdi sıfırla',
     'settings.sessionTimeLeft': 'Kalan süre',
-    'settings.clearAll': '🗑 Tüm verileri ve anahtarları sil',
 
     'login.subtitle': 'Devam etmek için şifrenizi girin',
     'login.placeholder': 'Şifre…',
@@ -173,7 +172,6 @@ registerLanguage('tr', { label: 'Türkçe', code: 'TR' }, {
     'js.noText': '(metin çıkarma mevcut değil)',
     'js.pwdSet': '🔑 Şifre ayarlandı – anahtarlar yeniden şifrelendi ✓',
     'js.pwdRemoved': '🔓 Şifre kaldırıldı',
-    'js.clearConfirm': 'TÜM veriler silinsin mi?\nBu işlem geri alınamaz.',
     'js.cleared': '🗑 Tüm veriler silindi',
     'js.noModelsInPanel': 'Model yüklenmedi.',
     'js.resetTo': '↺ {id}: {n} değerine sıfırlandı',

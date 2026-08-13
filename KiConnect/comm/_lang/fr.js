@@ -48,7 +48,6 @@ registerLanguage('fr', { label: 'Français', code: 'FR' }, {
     'settings.sessionApply': '⏱ Appliquer',
     'settings.sessionReset': '🔄 Réinitialiser maintenant',
     'settings.sessionTimeLeft': 'Temps restant',
-    'settings.clearAll': '🗑 Supprimer toutes les données & clés',
 
     'login.subtitle': 'Entrez votre mot de passe pour continuer',
     'login.placeholder': 'Mot de passe…',
@@ -173,7 +172,6 @@ registerLanguage('fr', { label: 'Français', code: 'FR' }, {
     'js.noText': '(extraction de texte non disponible)',
     'js.pwdSet': '🔑 Mot de passe défini – clés re-chiffrées ✓',
     'js.pwdRemoved': '🔓 Mot de passe supprimé',
-    'js.clearConfirm': 'Vraiment supprimer TOUTES les données ?\nCette action est irréversible.',
     'js.cleared': '🗑 Toutes les données supprimées',
     'js.noModelsInPanel': 'Aucun modèle chargé.',
     'js.resetTo': '↺ {id} : remis à {n}',

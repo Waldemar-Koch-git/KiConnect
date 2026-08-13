@@ -48,7 +48,6 @@ registerLanguage('zh', { label: '简体中文', code: 'ZH' }, {
     'settings.sessionApply': '⏱ 应用',
     'settings.sessionReset': '🔄 立即重置',
     'settings.sessionTimeLeft': '剩余时间',
-    'settings.clearAll': '🗑 删除所有数据和密钥',
 
     'login.subtitle': '输入密码以继续',
     'login.placeholder': '密码…',
@@ -173,7 +172,6 @@ registerLanguage('zh', { label: '简体中文', code: 'ZH' }, {
     'js.noText': '（文本提取不可用）',
     'js.pwdSet': '🔑 密码已设置 – 密钥已重新加密 ✓',
     'js.pwdRemoved': '🔓 密码已移除',
-    'js.clearConfirm': '确定删除所有数据？\n此操作无法撤销。',
     'js.cleared': '🗑 所有数据已删除',
     'js.noModelsInPanel': '未加载模型。',
     'js.resetTo': '↺ {id}：已重置为 {n}',

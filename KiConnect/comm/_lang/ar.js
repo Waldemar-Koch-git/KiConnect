@@ -48,7 +48,6 @@ registerLanguage('ar', { label: 'العربية', code: 'AR' }, {
     'settings.sessionApply': '⏱ تطبيق',
     'settings.sessionReset': '🔄 إعادة تعيين الآن',
     'settings.sessionTimeLeft': 'الوقت المتبقي',
-    'settings.clearAll': '🗑 حذف جميع البيانات والمفاتيح',
 
     'login.subtitle': 'أدخل كلمة المرور للمتابعة',
     'login.placeholder': 'كلمة المرور…',
@@ -173,7 +172,6 @@ registerLanguage('ar', { label: 'العربية', code: 'AR' }, {
     'js.noText': '(استخراج النص غير متاح)',
     'js.pwdSet': '🔑 تم تعيين كلمة المرور – تم إعادة تشفير المفاتيح ✓',
     'js.pwdRemoved': '🔓 تمت إزالة كلمة المرور',
-    'js.clearConfirm': 'حذف جميع البيانات؟\nلا يمكن التراجع عن هذا الإجراء.',
     'js.cleared': '🗑 تم حذف جميع البيانات',
     'js.noModelsInPanel': 'لم يتم تحميل نماذج.',
     'js.resetTo': '↺ {id}: إعادة تعيين إلى {n}',

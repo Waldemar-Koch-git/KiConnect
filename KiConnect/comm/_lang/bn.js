@@ -48,7 +48,6 @@ registerLanguage('bn', { label: 'বাংলা', code: 'BN' }, {
     'settings.sessionApply': '⏱ প্রয়োগ করুন',
     'settings.sessionReset': '🔄 এখনই রিসেট করুন',
     'settings.sessionTimeLeft': 'অবশিষ্ট সময়',
-    'settings.clearAll': '🗑 সমস্ত ডেটা ও কী মুছুন',
 
     'login.subtitle': 'চালিয়ে যেতে পাসওয়ার্ড লিখুন',
     'login.placeholder': 'পাসওয়ার্ড…',
@@ -173,7 +172,6 @@ registerLanguage('bn', { label: 'বাংলা', code: 'BN' }, {
     'js.noText': '(পাঠ্য বের করা যাচ্ছে না)',
     'js.pwdSet': '🔑 পাসওয়ার্ড সেট — কী পুনরায় এনক্রিপ্টেড ✓',
     'js.pwdRemoved': '🔓 পাসওয়ার্ড সরানো হয়েছে',
-    'js.clearConfirm': 'সমস্ত ডেটা মুছবেন?\nএটি পূর্বাবস্থায় ফেরানো যাবে না।',
     'js.cleared': '🗑 সমস্ত ডেটা মুছে গেছে',
     'js.noModelsInPanel': 'কোনো মডেল লোড হয়নি।',
     'js.resetTo': '↺ {id}: {n} এ রিসেট হয়েছে',

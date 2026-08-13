@@ -48,7 +48,6 @@ registerLanguage('fa', { label: 'فارسی', code: 'FA' }, {
     'settings.sessionApply': '⏱ اعمال',
     'settings.sessionReset': '🔄 بازنشانی اکنون',
     'settings.sessionTimeLeft': 'زمان باقی‌مانده',
-    'settings.clearAll': '🗑 حذف تمام داده‌ها و کلیدها',
 
     'login.subtitle': 'برای ادامه، رمز عبور خود را وارد کنید',
     'login.placeholder': 'رمز عبور…',
@@ -189,7 +188,6 @@ registerLanguage('fa', { label: 'فارسی', code: 'FA' }, {
     'js.noText': '(استخراج متن در دسترس نیست)',
     'js.pwdSet': '🔑 رمز عبور تنظیم شد – کلیدها دوباره رمزگذاری شدند ✓',
     'js.pwdRemoved': '🔓 رمز عبور حذف شد',
-    'js.clearConfirm': 'واقعاً تمام داده‌ها حذف شود؟\nاین شامل تمام گفتگوها، کلیدهای API، پروفایل‌ها و تنظیمات می‌شود.\nاین عمل قابل بازگشت نیست.',
     'js.cleared': '🗑 تمام داده‌ها حذف شد',
     'js.noModelsInPanel': 'هیچ مدلی بارگذاری نشده است. ابتدا یک ارائه‌دهنده پیکربندی کنید.',
     'js.noModelFound': 'مدلی یافت نشد',

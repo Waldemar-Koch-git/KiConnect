@@ -48,7 +48,6 @@ registerLanguage('ur', { label: 'اردو', code: 'UR' }, {
     'settings.sessionApply': '⏱ لاگو کریں',
     'settings.sessionReset': '🔄 ابھی ری سیٹ کریں',
     'settings.sessionTimeLeft': 'باقی وقت',
-    'settings.clearAll': '🗑 تمام ڈیٹا اور کیز حذف کریں',
 
     'login.subtitle': 'جاری رکھنے کے لیے پاسورڈ درج کریں',
     'login.placeholder': 'پاسورڈ…',
@@ -173,7 +172,6 @@ registerLanguage('ur', { label: 'اردو', code: 'UR' }, {
     'js.noText': '(متن نکالنا دستیاب نہیں)',
     'js.pwdSet': '🔑 پاسورڈ سیٹ — کیز دوبارہ انکرپٹ ✓',
     'js.pwdRemoved': '🔓 پاسورڈ ہٹا دیا گیا',
-    'js.clearConfirm': 'تمام ڈیٹا حذف کریں؟\nیہ واپس نہیں ہو سکتا۔',
     'js.cleared': '🗑 تمام ڈیٹا حذف ہو گیا',
     'js.noModelsInPanel': 'کوئی ماڈل لوڈ نہیں ہوا۔',
     'js.resetTo': '↺ {id}: {n} پر ری سیٹ کیا',

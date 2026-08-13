@@ -48,7 +48,6 @@ registerLanguage('ta', { label: 'தமிழ்', code: 'TA' }, {
     'settings.sessionApply': '⏱ பயன்படுத்து',
     'settings.sessionReset': '🔄 இப்போதே மீட்டமை',
     'settings.sessionTimeLeft': 'மீதமுள்ள நேரம்',
-    'settings.clearAll': '🗑 அனைத்து தரவும் விசைகளும் நீக்கு',
 
     'login.subtitle': 'தொடர கடவுச்சொல் உள்ளிடவும்',
     'login.placeholder': 'கடவுச்சொல்…',
@@ -173,7 +172,6 @@ registerLanguage('ta', { label: 'தமிழ்', code: 'TA' }, {
     'js.noText': '(உரை பிரிப்பு கிடைக்கவில்லை)',
     'js.pwdSet': '🔑 கடவுச்சொல் அமைக்கப்பட்டது — விசைகள் மறுகுறியாக்கம் ✓',
     'js.pwdRemoved': '🔓 கடவுச்சொல் நீக்கப்பட்டது',
-    'js.clearConfirm': 'அனைத்து தரவும் நீக்கவா?\nஇதை செயல்தவிர்க்க முடியாது.',
     'js.cleared': '🗑 அனைத்து தரவும் நீக்கப்பட்டது',
     'js.noModelsInPanel': 'மாதிரிகள் ஏற்றப்படவில்லை.',
     'js.resetTo': '↺ {id}: {n} க்கு மீட்டமைக்கப்பட்டது',

@@ -48,7 +48,6 @@ registerLanguage('en', { label: 'English', code: 'EN' }, {
     'settings.sessionApply': '⏱ Apply',
     'settings.sessionReset': '🔄 Reset now',
     'settings.sessionTimeLeft': 'Time remaining',
-    'settings.clearAll': '🗑 Delete all data & keys',
 
     'login.subtitle': 'Enter your password to continue',
     'login.placeholder': 'Password…',
@@ -189,7 +188,6 @@ registerLanguage('en', { label: 'English', code: 'EN' }, {
     'js.noText': '(text extraction not available)',
     'js.pwdSet': '🔑 Password set – keys re-encrypted ✓',
     'js.pwdRemoved': '🔓 Password removed',
-    'js.clearConfirm': 'Really delete ALL data?\nThis includes all chats, API keys, profiles and settings.\nThis action cannot be undone.',
     'js.cleared': '🗑 All data deleted',
     'js.noModelsInPanel': 'No models loaded. Configure a provider first.',
     'js.noModelFound': 'No model found',

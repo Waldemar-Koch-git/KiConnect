@@ -48,7 +48,6 @@ registerLanguage('it', { label: 'Italiano', code: 'IT' }, {
     'settings.sessionApply': '⏱ Applica',
     'settings.sessionReset': '🔄 Reimposta ora',
     'settings.sessionTimeLeft': 'Tempo rimanente',
-    'settings.clearAll': '🗑 Elimina tutti i dati e le chiavi',
 
     'login.subtitle': 'Inserisci la password per continuare',
     'login.placeholder': 'Password…',
@@ -173,7 +172,6 @@ registerLanguage('it', { label: 'Italiano', code: 'IT' }, {
     'js.noText': '(estrazione testo non disponibile)',
     'js.pwdSet': '🔑 Password impostata – chiavi ri-cifrate ✓',
     'js.pwdRemoved': '🔓 Password rimossa',
-    'js.clearConfirm': 'Eliminare TUTTI i dati?\nQuesta azione è irreversibile.',
     'js.cleared': '🗑 Tutti i dati eliminati',
     'js.noModelsInPanel': 'Nessun modello caricato.',
     'js.resetTo': '↺ {id}: ripristinato a {n}',

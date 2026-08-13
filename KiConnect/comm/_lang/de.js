@@ -48,7 +48,6 @@ registerLanguage('de', { label: 'Deutsch', code: 'DE' }, {
     'settings.sessionApply': '⏱ Anwenden',
     'settings.sessionReset': '🔄 Jetzt zurücksetzen',
     'settings.sessionTimeLeft': 'Verbleibende Zeit',
-    'settings.clearAll': '🗑 Alle Daten & Keys löschen',
 
     'login.subtitle': 'Passwort eingeben, um fortzufahren',
     'login.placeholder': 'Passwort…',
@@ -189,7 +188,6 @@ registerLanguage('de', { label: 'Deutsch', code: 'DE' }, {
     'js.noText': '(Textextraktion nicht verfügbar)',
     'js.pwdSet': '🔑 Passwort gesetzt – Keys neu verschlüsselt ✓',
     'js.pwdRemoved': '🔓 Passwort entfernt',
-    'js.clearConfirm': 'Wirklich ALLE Daten löschen?\nDas umfasst alle Chats, API-Keys, Profile und Einstellungen.\nDiese Aktion kann nicht rückgängig gemacht werden.',
     'js.cleared': '🗑 Alle Daten gelöscht',
     'js.noModelsInPanel': 'Keine Modelle geladen. Zuerst Anbieter konfigurieren.',
     'js.noModelFound': 'Kein Modell gefunden',

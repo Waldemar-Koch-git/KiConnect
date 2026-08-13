@@ -48,7 +48,6 @@ registerLanguage('pa', { label: 'ਪੰਜਾਬੀ', code: 'PA' }, {
     'settings.sessionApply': '⏱ ਲਾਗੂ ਕਰੋ',
     'settings.sessionReset': '🔄 ਹੁਣੇ ਰੀਸੈੱਟ ਕਰੋ',
     'settings.sessionTimeLeft': 'ਬਾਕੀ ਸਮਾਂ',
-    'settings.clearAll': '🗑 ਸਾਰਾ ਡੇਟਾ ਅਤੇ ਕੁੰਜੀਆਂ ਮਿਟਾਓ',
 
     'login.subtitle': 'ਜਾਰੀ ਰੱਖਣ ਲਈ ਪਾਸਵਰਡ ਦਰਜ ਕਰੋ',
     'login.placeholder': 'ਪਾਸਵਰਡ…',
@@ -173,7 +172,6 @@ registerLanguage('pa', { label: 'ਪੰਜਾਬੀ', code: 'PA' }, {
     'js.noText': '(ਪਾਠ ਕੱਢਣਾ ਉਪਲਬਧ ਨਹੀਂ)',
     'js.pwdSet': '🔑 ਪਾਸਵਰਡ ਸੈੱਟ — ਕੁੰਜੀਆਂ ਦੁਬਾਰਾ ਏਨਕ੍ਰਿਪਟ ✓',
     'js.pwdRemoved': '🔓 ਪਾਸਵਰਡ ਹਟਾਇਆ ਗਿਆ',
-    'js.clearConfirm': 'ਸਾਰਾ ਡੇਟਾ ਮਿਟਾਉਣਾ ਹੈ?\nਇਹ ਵਾਪਸ ਨਹੀਂ ਹੋ ਸਕਦਾ।',
     'js.cleared': '🗑 ਸਾਰਾ ਡੇਟਾ ਮਿਟਾਇਆ ਗਿਆ',
     'js.noModelsInPanel': 'ਕੋਈ ਮਾਡਲ ਲੋਡ ਨਹੀਂ ਹੋਇਆ।',
     'js.resetTo': '↺ {id}: {n} ਤੇ ਰੀਸੈੱਟ ਕੀਤਾ',
