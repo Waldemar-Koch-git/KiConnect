@@ -6271,6 +6271,24 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// Security fix: DOMPurify's config below allows <a target="_blank"> through
+// (needed for normal markdown links opening in a new tab), but without
+// rel="noopener noreferrer" that lets the opened page reach back into this
+// tab via window.opener (reverse tabnabbing) - e.g. from a link embedded in
+// model output. Force it on every such link, once, for every future
+// formatText() call. Installed lazily on first use so it still works if
+// DOMPurify happens to finish loading after this script runs.
+let _dompurifyNoopenerHookInstalled = false;
+function ensureDompurifyNoopenerHook() {
+  if (_dompurifyNoopenerHookInstalled || typeof DOMPurify === 'undefined') return;
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && node.hasAttribute('target')) {
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+  _dompurifyNoopenerHookInstalled = true;
+}
+
 
 // Converts raw model/markdown text into sanitized, syntax-highlighted, math-aware HTML for display.
 function formatText(raw) {
@@ -6417,6 +6435,7 @@ function formatText(raw) {
 
   // ── Step 4: DOMPurify ─────────────────────────────────────────
   if (typeof DOMPurify !== 'undefined') {
+    ensureDompurifyNoopenerHook();
     s = DOMPurify.sanitize(s, {
       ALLOWED_TAGS: ['p','br','strong','em','del','h1','h2','h3','h4','h5','h6',
                      'ul','ol','li','code','pre','hr','table','thead','tbody','tr','th','td',

@@ -8,6 +8,7 @@ import json
 import time
 import sys
 import threading
+import contextlib
 import webbrowser
 import shutil
 import signal
@@ -81,19 +82,6 @@ def _key_path(account_id, key):
 
 def _registry_path():
     return os.path.join(DATA_DIR, '_registry.json')
-
-# ── Origin-Pruefung ───────────────────────────────────────────────
-def _check_local():
-    """Return a 403 Response if request origin/host is not localhost, else None."""
-    origin = request.headers.get('Origin', '')
-    host   = request.headers.get('Host', '')
-    if origin and origin not in ALLOWED_ORIGINS:
-        return Response('{"error":"Origin not allowed."}', 403,
-                        content_type='application/json')
-    if host and not (host.startswith('localhost:') or host.startswith('127.0.0.1:')):
-        return Response('{"error":"Host not allowed."}', 403,
-                        content_type='application/json')
-    return None
 
 # ── Atomarer Schreibvorgang ───────────────────────────────────────
 def _atomic_write(target_path, data_bytes):
@@ -289,14 +277,17 @@ def _save_agent_registry(sess, data):
         _atomic_write(fpath, json.dumps(blob).encode('utf-8'))
 
 def _is_blocked_root(target):
-    """Refuse drive/filesystem roots and anything that equals or encloses
-    STATIC_DIR/DATA_DIR."""
+    """Refuse drive/filesystem roots and anything that equals, encloses, OR
+    is nested inside STATIC_DIR/DATA_DIR (e.g. registering DATA_DIR itself,
+    a parent of it, or one of its per-account subfolders as an agent
+    project would otherwise expose/allow tampering with every account's
+    encrypted storage via the agent file-browser/exec endpoints)."""
     drive_root = os.path.realpath(os.path.splitdrive(target)[0] + os.sep) if os.name == 'nt' else '/'
     if target == os.path.realpath(drive_root):
         return True
     for guarded in (STATIC_DIR, DATA_DIR):
         g = os.path.realpath(guarded)
-        if target == g or g.startswith(target + os.sep):
+        if target == g or g.startswith(target + os.sep) or target.startswith(g + os.sep):
             return True
     return False
 
@@ -1106,52 +1097,115 @@ def _classify_ip(addr):
 
 def classify_host(host):
     """Classify a hostname or literal IP as one of
-    'loopback' | 'blocked' | 'lan' | 'public' | 'unresolvable'.
+    'loopback' | 'blocked' | 'lan' | 'public' | 'unresolvable', and return
+    the *specific* resolved IP that decision is based on alongside it (as
+    (class, ip) - ip is None for 'unresolvable'/'blocked' or when no single
+    IP is meaningful).
     For hostnames every resolved address is checked - the single most
     restrictive class wins, so a name that resolves to both a public and a
-    blocked/LAN address is treated as that stricter class."""
+    blocked/LAN address is treated as that stricter class, pinned to one of
+    the addresses that actually earned that class."""
     try:
         ipaddress.ip_address(host)
         ips = [host]
     except ValueError:
         ips = _resolve_all_ips(host)
-    if not ips: return 'unresolvable'
-    classes = set()
+    if not ips: return 'unresolvable', None
+    classified = []
     for ip_str in ips:
-        try: classes.add(_classify_ip(ipaddress.ip_address(ip_str)))
-        except ValueError: return 'blocked'
-    if 'blocked' in classes: return 'blocked'
-    if 'lan' in classes: return 'lan'
-    if classes == {'loopback'}: return 'loopback'
-    if 'loopback' in classes: return 'lan'  # mixed loopback+public - treat as needing confirmation, be safe
-    return 'public'
+        try: classified.append((ip_str, _classify_ip(ipaddress.ip_address(ip_str))))
+        except ValueError: return 'blocked', None
+    classes = {c for _, c in classified}
+    if 'blocked' in classes: return 'blocked', None
+    if 'lan' in classes:
+        pin = next(ip for ip, c in classified if c == 'lan')
+        return 'lan', pin
+    if classes == {'loopback'}:
+        return 'loopback', classified[0][0]
+    if 'loopback' in classes:  # mixed loopback+public - treat as needing confirmation, be safe
+        pin = next(ip for ip, c in classified if c == 'loopback')
+        return 'lan', pin
+    pin = next(ip for ip, c in classified if c == 'public')
+    return 'public', pin
 
 def is_allowed(target_url, method='GET', confirmed=False):
     # No domain allowlist here - users can point POST at any custom
     # OpenAI-compatible endpoint. SSRF protection: http/https only, and a
     # tiered check on where the address actually points (see above).
+    # Returns (ok, reason, needs_confirm, pinned_ip). pinned_ip is the exact
+    # address this decision was based on - the caller MUST connect to that
+    # same address (see _pin_dns below) rather than letting requests/urllib3
+    # re-resolve the hostname a second time, or a DNS answer that changes
+    # between this check and the real connect (DNS rebinding) could steer
+    # the actual request at a target this check never saw/approved.
     try: parsed = urlparse(target_url)
-    except Exception: return False, 'Invalid URL', False
-    if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only', False
+    except Exception: return False, 'Invalid URL', False, None
+    if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only', False, None
     host = parsed.hostname or ''
-    if not host: return False, 'No hostname', False
+    if not host: return False, 'No hostname', False, None
     # Fast-path for the exact strings the app has always used for "this
     # machine" - keeps behaving exactly as before even if DNS is weird.
+    # No pinning needed: these always resolve locally, nothing to rebind to.
     if host in ('localhost', '127.0.0.1', '::1'):
-        return True, '', False
+        return True, '', False, None
 
-    cls = classify_host(host)
+    cls, pin = classify_host(host)
     if cls == 'unresolvable':
-        return False, 'Host could not be resolved', False
+        return False, 'Host could not be resolved', False, None
     if cls == 'blocked':
-        return False, 'This address is not allowed (reserved/blocked range).', False
+        return False, 'This address is not allowed (reserved/blocked range).', False, None
     if cls == 'loopback':
-        return True, '', False
+        return True, '', False, pin
     if cls == 'lan':
         if not confirmed:
-            return False, 'Local-network address - confirm it in the API panel first.', True
-        return True, '', False
-    return True, '', False  # public
+            return False, 'Local-network address - confirm it in the API panel first.', True, None
+        return True, '', False, pin
+    return True, '', False, pin  # public
+
+# ── DNS pinning (closes the SSRF check's DNS-rebinding gap) ──────
+# is_allowed()/classify_host() resolve the target hostname and vet the
+# resulting IP. Without this, the actual connection - made separately by
+# `requests`/urllib3 a few lines later - would resolve the hostname AGAIN,
+# and a malicious/low-TTL DNS answer could point that second lookup
+# somewhere the check never saw (classic DNS-rebinding SSRF bypass). This
+# pins socket.getaddrinfo() to return exactly the address that was already
+# vetted, for that one hostname, for the duration of the request.
+#
+# Implemented via thread-local state rather than a global save/restore swap:
+# waitress serves requests on multiple worker threads, and two concurrent
+# requests each doing "swap in patched fn, ..., swap back saved original"
+# on the *same* global `socket.getaddrinfo` would race - whichever request
+# finishes first restores a reference that may have already been replaced
+# by the other thread, silently un-pinning it. A single patched function
+# that only special-cases the current thread's pin, installed once, has no
+# such race: unrelated hostnames and unrelated threads always fall through
+# to the real resolver untouched.
+_dns_pin = threading.local()
+_real_getaddrinfo = socket.getaddrinfo
+
+def _pinned_getaddrinfo(host, port, *args, **kwargs):
+    if host == getattr(_dns_pin, 'host', None):
+        ip = _dns_pin.ip
+        family = socket.AF_INET6 if ':' in ip else socket.AF_INET
+        return [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (ip, port))]
+    return _real_getaddrinfo(host, port, *args, **kwargs)
+
+socket.getaddrinfo = _pinned_getaddrinfo
+
+@contextlib.contextmanager
+def _pin_dns(host, ip):
+    """Pin `host` to `ip` for the current thread for the duration of the
+    'with' block. No-op if ip is None (nothing to pin - e.g. the
+    localhost/127.0.0.1/::1 fast path, which needs no rebinding protection)."""
+    if not ip:
+        yield
+        return
+    prev_host, prev_ip = getattr(_dns_pin, 'host', None), getattr(_dns_pin, 'ip', None)
+    _dns_pin.host, _dns_pin.ip = host, ip
+    try:
+        yield
+    finally:
+        _dns_pin.host, _dns_pin.ip = prev_host, prev_ip
 
 # ── Rate-Limiting ─────────────────────────────────────────────────
 _rate_data = defaultdict(lambda: {'count': 0, 'reset': 0.0})
@@ -1286,7 +1340,7 @@ def _proxy_request(target_url):
     fwd_params = request.args.copy()
     lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'
 
-    ok, reason, needs_confirm = is_allowed(target_url, request.method, confirmed=lan_confirmed)
+    ok, reason, needs_confirm, pinned_ip = is_allowed(target_url, request.method, confirmed=lan_confirmed)
     if not ok:
         print(f'  blocked [{reason}]')
         status = 428 if needs_confirm else 403
@@ -1324,12 +1378,16 @@ def _proxy_request(target_url):
         return Response('{"error":"Request body too large."}', 413, content_type='application/json')
 
     print(f'  -> {request.method:6s} {target_url[:90]}')
+    target_host = urlparse(target_url).hostname or ''
     try:
-        upstream = requests.request(
-            method=request.method, url=target_url, headers=fwd_headers,
-            data=body, params=fwd_params, stream=True,
-            timeout=(10, 180), verify=True, allow_redirects=False,
-        )
+        # Pinned to the exact IP is_allowed() already vetted above - see
+        # _pin_dns()/_pinned_getaddrinfo() for why this matters.
+        with _pin_dns(target_host, pinned_ip):
+            upstream = requests.request(
+                method=request.method, url=target_url, headers=fwd_headers,
+                data=body, params=fwd_params, stream=True,
+                timeout=(10, 180), verify=True, allow_redirects=False,
+            )
         resp_headers = {k: v for k, v in upstream.headers.items()
                         if k.lower() not in EXCLUDED_RESP_HEADERS}
         resp_headers.update(CORS_HEADERS); resp_headers.update(SECURITY_HEADERS)
