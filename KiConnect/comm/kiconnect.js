@@ -132,6 +132,7 @@ function setLang(code) {
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   if (typeof window._kicVoiceRetranslate === 'function') window._kicVoiceRetranslate();
   if (typeof window._kicAgentRetranslate === 'function') window._kicAgentRetranslate();
+  if (typeof window._kicDbRetranslate === 'function') window._kicDbRetranslate();
   if (typeof renderSidebar === 'function') renderSidebar();
   renderLangDropdown();
   // During the tour language step: re-render the tour card in the new language,
@@ -1255,10 +1256,18 @@ function providerForModel(fullModelId) {
   const { providerId } = splitModelId(fullModelId);
   return providers.find(p => p.id === providerId) || null;
 }
+// Converts a copied OpenAI-compatible endpoint back to the API base URL.
+// The provider field is a *base* URL; all callers append /models,
+// /chat/completions, or /embeddings themselves.  Being tolerant here avoids
+// paths such as /v1/embeddings/models when users paste the endpoint from API
+// documentation or a curl example.
+function normalizeOpenAIBaseUrl(url) {
+  return (url || '').trim().replace(/\/+$/, '').replace(/\/(?:models|embeddings|chat\/completions)$/i, '');
+}
 // Returns the base API URL for a provider, either its configured custom server URL (openai-compat) or the well-known endpoint for its type.
 function getProviderEndpoint(provider) {
   if (!provider) return null;
-  if (provider.type === 'openai-compat') return (provider.serverUrl || '').replace(/\/+$/, '');
+  if (provider.type === 'openai-compat') return normalizeOpenAIBaseUrl(provider.serverUrl);
   if (provider.type === 'kiconnect-nrw') return 'https://chat.kiconnect.nrw/api/v1';
   if (provider.type === 'anthropic')     return 'https://api.anthropic.com';
   if (provider.type === 'openai-direct') return 'https://api.openai.com/v1';
@@ -1272,6 +1281,15 @@ function getProviderEndpoint(provider) {
   if (provider.type === 'zhipu')         return 'https://api.z.ai/api/paas/v4';
   if (provider.type === 'kimi')          return 'https://api.moonshot.ai/v1';
   return null;
+}
+// Returns every enabled provider that has an embedding model configured
+// (Settings ▸ APIs ▸ "Embedding model") - lets the knowledge-base UI
+// (kiconnect-db.js) offer these as one-click embedding sources instead of
+// requiring a manually re-entered server URL + model + key every time.
+function listEmbeddingProviders() {
+  return providers
+    .filter(p => p.enabled !== false && (p.embeddingModel || '').trim())
+    .map(p => ({ id: p.id, name: p.name, embeddingModel: p.embeddingModel.trim() }));
 }
 // Returns the max-output-tokens to send with a request: the active profile's override if set, capped at the model's max.
 function effectiveMaxTokens() {
@@ -1319,15 +1337,35 @@ function _isLanConfirmedUrl(url) {
   } catch { return false; }
 }
 // Routes a request URL through the local dev proxy (if active) after checking it against isSafeApiUrl(); throws if the domain isn't allowed.
-function proxyUrl(url) {
-  if (!isSafeApiUrl(url)) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
+function proxyUrl(url, allowProviderEditorUrl = false, lanConfirmed = false) {
+  // While a provider is being created it is not in `providers` yet, so the
+  // normal allow-list cannot know its host.  The local proxy still performs
+  // the actual URL/IP/SSRF validation; this exception merely lets the two
+  // "discover/test embedding" controls validate a server *before* saving it.
+  const validEditorUrl = allowProviderEditorUrl && (() => {
+    try { return /^https?:$/i.test(new URL(url).protocol); } catch { return false; }
+  })();
+  if (!isSafeApiUrl(url) && !validEditorUrl) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
   if (!USE_PROXY) return url;
   let out = '/proxy/' + url;
   // Marker lives on the *outer* proxy request's query string, not on the
   // upstream target URL - the proxy strips it again before forwarding
   // (see _proxy_request() / kic_lan_confirm in kiconnect-proxy.py).
-  if (_isLanConfirmedUrl(url)) out += (url.includes('?') ? '&' : '?') + 'kic_lan_confirm=1';
+  if (_isLanConfirmedUrl(url) || lanConfirmed) out += (url.includes('?') ? '&' : '?') + 'kic_lan_confirm=1';
   return out;
+}
+// A newly entered custom provider has not been saved yet, so it cannot have
+// the normal stored LAN confirmation.  Ask for the same explicit consent as
+// saving the provider, then pass the one-request confirmation marker to the
+// local proxy.  This makes discovery/testing useful before the first save
+// without weakening the proxy's DNS/IP checks.
+function providerEditorProxyUrl(url, type) {
+  if (type !== 'openai-compat' || _isLanConfirmedUrl(url)) return proxyUrl(url, true);
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return proxyUrl(url, true);
+    return confirmLanAddress(host) ? proxyUrl(url, true, true) : null;
+  } catch { throw new Error(t('js.invalidUrl') || 'Invalid server URL.'); }
 }
 // Routes a public (non-API-key) fetch such as page/search fetching through the local dev proxy; only checks the URL scheme, not a domain whitelist.
 function proxyPublicUrl(url) {
@@ -1377,8 +1415,26 @@ function openProviderPanel() {
   document.querySelector('[data-panel="providerPanel"]')?.classList.add('active');
 }
 // (Re)builds the list of configured providers in the Provider panel, with enable/disable, edit and delete controls.
+// Parks the (single, shared) editor form right after a given element - used
+// so editing happens next to the row you clicked instead of always at the
+// bottom of the panel. `null` means "home position" (right after the
+// add-new-provider button, its original static spot in the HTML).
+function _placeProviderEditor(afterEl) {
+  const editor = document.getElementById('providerEditor');
+  const anchor = afterEl || document.getElementById('addProviderBtn');
+  if (editor && anchor) anchor.insertAdjacentElement('afterend', editor);
+}
+
 function renderProviderList() {
   const list = document.getElementById('providerList');
+  const editor = document.getElementById('providerEditor');
+  // The editor can currently be parked inside this list (next to whichever
+  // provider is being edited - see editProvider()). Detach it before
+  // wiping the list with innerHTML='', or a re-render triggered by an
+  // unrelated action (toggling another provider, a background model
+  // fetch...) while editing would delete the open editor from the DOM.
+  const wasInList = editor && list.contains(editor);
+  if (wasInList) editor.remove();
   list.innerHTML = '';
   if (!providers.length) {
     const msg = document.createElement('div');
@@ -1450,7 +1506,9 @@ function renderProviderList() {
     nameEl.textContent = p.name;
     const descEl = document.createElement('div');
     descEl.className = 'provider-item-desc';
-    descEl.textContent = (ptype.label || p.type) + (p.serverUrl ? ' · ' + p.serverUrl.replace(/^https?:\/\//, '').slice(0, 30) : '');
+    descEl.textContent = (ptype.label || p.type)
+      + (p.serverUrl ? ' · ' + p.serverUrl.replace(/^https?:\/\//, '').slice(0, 30) : '')
+      + ((p.embeddingModel || '').trim() ? ' · 🧬 ' + p.embeddingModel.trim() : '');
     info.appendChild(nameEl); info.appendChild(descEl);
     const badge = document.createElement('span');
     badge.className = 'provider-badge ' + badgeCls;
@@ -1474,6 +1532,13 @@ function renderProviderList() {
     item.appendChild(dragHandle); item.appendChild(reorderCol); item.appendChild(info); item.appendChild(badge); item.appendChild(toggle); item.appendChild(actions);
     list.appendChild(item);
   });
+  if (wasInList) {
+    const row = editingProviderId && list.querySelector(`.provider-item[data-id="${CSS.escape(editingProviderId)}"]`);
+    // Row still exists (normal re-render while editing) -> put the editor
+    // right back next to it. Row is gone (e.g. it got deleted elsewhere) ->
+    // fall back to the editor's home position instead of leaving it orphaned.
+    _placeProviderEditor(row || null);
+  }
 }
 let _draggedProviderId = null;
 
@@ -1491,20 +1556,216 @@ function startNewProvider() {
   document.getElementById('pvNameInput').value  = '';
   document.getElementById('pvServerUrl').value  = '';
   document.getElementById('pvApiKey').value     = '';
+  document.getElementById('pvEmbedModel').value = '';
+  resetEmbedModelPicker();
   selectProviderType('openai-compat');
   document.getElementById('providerEditorTitle').textContent = t('provider.new');
-  document.getElementById('providerEditor').style.display = 'block';
+  _placeProviderEditor(null);
+  const editor = document.getElementById('providerEditor');
+  editor.style.display = 'block';
+  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
-// Opens the provider editor pre-filled with an existing provider's data.
+// Opens the provider editor pre-filled with an existing provider's data,
+// right below the row that was clicked (see _placeProviderEditor()) instead
+// of always at the bottom of the panel.
 function editProvider(id) {
   const p = providers.find(x => x.id === id); if (!p) return;
   editingProviderId = id;
   document.getElementById('pvNameInput').value  = p.name || '';
   document.getElementById('pvServerUrl').value  = p.serverUrl || '';
   document.getElementById('pvApiKey').value     = p.apiKey || '';
+  document.getElementById('pvEmbedModel').value = p.embeddingModel || '';
+  resetEmbedModelPicker();
   selectProviderType(p.type || 'openai-compat');
   document.getElementById('providerEditorTitle').textContent = t('provider.edit');
-  document.getElementById('providerEditor').style.display = 'block';
+  const row = document.querySelector(`#providerList .provider-item[data-id="${CSS.escape(id)}"]`);
+  _placeProviderEditor(row);
+  const editor = document.getElementById('providerEditor');
+  editor.style.display = 'block';
+  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+// Back to the plain text field (hides the fetched-models <select>, if shown) -
+// called whenever the editor opens fresh, since a previous fetch's option
+// list belongs to whatever provider/server was entered at the time.
+function resetEmbedModelPicker() {
+  const select = document.getElementById('pvEmbedModelSelect');
+  const input = document.getElementById('pvEmbedModel');
+  if (select) { select.innerHTML = ''; select.style.display = 'none'; }
+  if (input) input.style.display = '';
+}
+// Fetches this server's /models list the same way fetchModels() does for the
+// chat-model dropdown, but keeps only entries that look like embedding
+// models (fetchModels() does the mirror-image filter to keep them OUT of
+// the chat list) - so picking an embedding model works exactly like picking
+// a chat model, instead of requiring the exact name typed from memory.
+async function loadEmbeddingModelCandidates() {
+  const type = getSelectedProviderType();
+  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider') || 'Anthropic has no embedding models.'); return; }
+  const apiKey = document.getElementById('pvApiKey').value.trim();
+  const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
+  if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
+  const endpoint = getProviderEndpoint({ type, serverUrl });
+  if (!endpoint) { toast(t('js.urlRequired')); return; }
+
+  const btn = document.getElementById('pvEmbedModelLoadBtn');
+  const prevLabel = btn.textContent; btn.textContent = '…'; btn.disabled = true;
+  try {
+    const extraHeaders = {};
+    if (type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+    if (type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
+    const headers = { ...extraHeaders };
+    // Local OpenAI-compatible servers commonly have no authentication.  Do
+    // not send an empty Bearer header: several servers reject it outright.
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const requestUrl = providerEditorProxyUrl(`${endpoint}/models`, type);
+    if (!requestUrl) return;
+    const res = await fetch(requestUrl, {
+      headers
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* retain the HTTP status below */ }
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+    if (!data) throw new Error(t('js.embedModelLoadInvalidResponse'));
+    const rawModels = Array.isArray(data?.data) ? data.data
+      : Array.isArray(data?.models) ? data.models : (Array.isArray(data) ? data : []);
+    // APIs do not have a reliable capability flag.  Put likely embedding
+    // models first, but retain every advertised model so unfamiliar names
+    // (or provider-specific names) can be selected and tested without
+    // needing to know or type the exact identifier in advance.
+    const EMBED_MATCH = /embed(?:ding)?|e5[-_]|bge[-_]|gte[-_]|nomic|mxbai|jina|voyage|arctic|instructor|multilingual|qwen.*embed|granite.*embed|snowflake/i;
+    const seen = new Set(); const candidates = [];
+    rawModels.forEach(m => {
+      const id = (typeof m === 'string' ? m : (m?.id || m?.name || '')).replace(/^models\//, '');
+      if (!id || seen.has(id)) return;
+      seen.add(id); candidates.push({ id, likelyEmbedding: EMBED_MATCH.test(id) });
+    });
+    candidates.sort((a, b) => Number(b.likelyEmbedding) - Number(a.likelyEmbedding) || a.id.localeCompare(b.id));
+    if (!candidates.length) {
+      toast(t('js.noEmbeddingModelsFound') || 'No embedding models found on this server — enter one manually.');
+      return;
+    }
+    const select = document.getElementById('pvEmbedModelSelect');
+    const input = document.getElementById('pvEmbedModel');
+    const likely = candidates.filter(c => c.likelyEmbedding);
+    const other = candidates.filter(c => !c.likelyEmbedding);
+    const current = input.value.trim();
+    // Only the unverified list is ever this noisy (regular /models responses
+    // mix in every chat/vision/audio model the server hosts) - if we have at
+    // least one recognized embedding model, keep the picker to just those by
+    // default and let "Show other models" reveal the rest on demand instead
+    // of dumping the whole catalog in every time.
+    const showAllByDefault = likely.length === 0 || other.some(c => c.id === current);
+    const renderOptions = includeOther => {
+      select.innerHTML = '';
+      const ph = document.createElement('option'); ph.value = ''; ph.textContent = t('js.selectModel') || '– select –';
+      select.appendChild(ph);
+      likely.forEach(({ id }) => {
+        const o = document.createElement('option'); o.value = id; o.textContent = id;
+        select.appendChild(o);
+      });
+      if (includeOther) {
+        other.forEach(({ id }) => {
+          const o = document.createElement('option'); o.value = id;
+          o.textContent = `${id} (${t('js.embeddingModelUnverified')})`;
+          select.appendChild(o);
+        });
+      } else if (other.length) {
+        const showMore = document.createElement('option'); showMore.value = '__show_other__';
+        showMore.textContent = tf('js.showOtherModels', { n: other.length }) || `Show ${other.length} other models (unverified)…`;
+        select.appendChild(showMore);
+      }
+      const customOpt = document.createElement('option'); customOpt.value = '__custom__';
+      customOpt.textContent = t('js.enterManually') || '✎ Enter manually…';
+      select.appendChild(customOpt);
+      select.value = candidates.some(x => x.id === current) ? current : '';
+    };
+    select.onchange = () => {
+      if (select.value === '__show_other__') { renderOptions(true); return; }
+      onEmbedModelSelectChange();
+    };
+    renderOptions(showAllByDefault);
+    select.style.display = ''; input.style.display = 'none';
+  } catch (e) {
+    toast(tf('js.embedModelLoadFailed', { e: e.message || e }) || `Could not load model list: ${e.message || e}`);
+  } finally {
+    btn.textContent = prevLabel; btn.disabled = false;
+  }
+}
+// Complements loadEmbeddingModelCandidates() above: that one trusts /models
+// to *list* embedding models, which many self-hosted / gateway-style
+// OpenAI-compatible servers (LiteLLM, some vLLM/LM Studio setups, etc.)
+// simply don't do for embedding models, even though /embeddings itself
+// works fine with them. This sends one real, minimal request straight to
+// .../embeddings with whatever model name is currently typed into
+// pvEmbedModel and reports back the actual vector size or the server's
+// actual error - so it works regardless of what (or whether) /models
+// advertises.
+async function testEmbeddingModel() {
+  const type = getSelectedProviderType();
+  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider') || 'Anthropic has no embedding models.'); return; }
+  const apiKey = document.getElementById('pvApiKey').value.trim();
+  const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
+  if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
+  const endpoint = getProviderEndpoint({ type, serverUrl });
+  if (!endpoint) { toast(t('js.urlRequired')); return; }
+  const model = document.getElementById('pvEmbedModel').value.trim();
+  if (!model) { toast(t('js.embedModelNameRequired')); return; }
+
+  const btn = document.getElementById('pvEmbedModelTestBtn');
+  // Captured as innerHTML (not textContent) so the label's data-i18n <span>
+  // survives the round trip - a plain textContent save/restore here would
+  // silently strip that span the first time this button is used, leaving
+  // the label unable to pick up future language switches.
+  const prevLabel = btn.innerHTML; btn.textContent = '…'; btn.disabled = true;
+  try {
+    const extraHeaders = { 'Content-Type': 'application/json' };
+    if (type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+    if (type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
+    if (apiKey) extraHeaders.Authorization = `Bearer ${apiKey}`;
+    const requestUrl = providerEditorProxyUrl(`${endpoint}/embeddings`, type);
+    if (!requestUrl) return;
+    const res = await fetch(requestUrl, {
+      method: 'POST',
+      headers: extraHeaders,
+      body: JSON.stringify({ model, input: 'test' })
+    });
+    // Error bodies aren't guaranteed to be JSON (some gateways return an
+    // HTML error page or plain text for a 404/502) - don't let a failed
+    // .json() parse mask the real HTTP status in the toast below.
+    let data = null;
+    try { data = await res.json(); } catch { /* non-JSON body, ignore */ }
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || data?.message || `HTTP ${res.status}`;
+      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+    // Standard OpenAI shape is {data:[{embedding:[...]}]}; some self-hosted
+    // servers return the flatter {embedding:[...]} instead - accept both.
+    const vec = data?.data?.[0]?.embedding || data?.embedding || data?.data?.[0]?.embeddings;
+    if (!Array.isArray(vec) || !vec.length) {
+      throw new Error(t('js.embedTestNoVector'));
+    }
+    toast(tf('js.embedTestOk', { model, dims: vec.length }));
+  } catch (e) {
+    toast(tf('js.embedTestFailed', { e: e.message || e }));
+  } finally {
+    btn.innerHTML = prevLabel; btn.disabled = false;
+  }
+}
+// pvEmbedModel (the plain text input) stays the single source of truth that
+// saveProviderEditor() reads - the <select> just writes into it, so nothing
+// downstream needs to know the picker exists. "Enter manually…" swaps back
+// to the text field instead of trying to represent free text as a <select>.
+function onEmbedModelSelectChange() {
+  const select = document.getElementById('pvEmbedModelSelect');
+  const input = document.getElementById('pvEmbedModel');
+  if (select.value === '__custom__') {
+    select.style.display = 'none'; input.style.display = ''; input.value = ''; input.focus();
+  } else if (select.value) {
+    input.value = select.value;
+  }
 }
 // Marks a provider-type chip as selected and shows/hides the server-URL field and hint text accordingly.
 function selectProviderType(type) {
@@ -1538,7 +1799,7 @@ async function saveProviderEditor() {
   const name = document.getElementById('pvNameInput').value.trim();
   if (!name) { toast(t('js.nameRequired')); return; }
   const type = getSelectedProviderType();
-  const serverUrl = document.getElementById('pvServerUrl').value.trim().replace(/\/$/,'');
+  const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
   const apiKey = document.getElementById('pvApiKey').value.trim();
 
@@ -1563,7 +1824,8 @@ async function saveProviderEditor() {
     }
   }
 
-  const data = { name, type, serverUrl: type==='openai-compat'?serverUrl:'', apiKey, netConfirmed, netConfirmedHost };
+  const embeddingModel = document.getElementById('pvEmbedModel').value.trim();
+  const data = { name, type, serverUrl: type==='openai-compat'?serverUrl:'', apiKey, embeddingModel, netConfirmed, netConfirmedHost };
   if (editingProviderId) {
     const idx = providers.findIndex(p => p.id === editingProviderId);
     if (idx !== -1) providers[idx] = {...providers[idx], ...data};
@@ -3323,7 +3585,7 @@ function buildMsgEl(msg, idx) {
     contentHtml = formatText(msg.content);
   } else if (Array.isArray(msg.content)) {
     msg.content.forEach(part => {
-      if (part._webSearch) return;
+      if (part._webSearch || part._kbAugment) return;
       if (part.type === 'text') {
         // Skip file-content blocks (they start with the file marker)
         const isFContent = part.text && part.text.startsWith('--- ');
@@ -3361,6 +3623,14 @@ function buildMsgEl(msg, idx) {
 
   if (msg._webSources && msg._webSources.length) {
     bubble.appendChild(buildWebSourcesRow(msg._webSources));
+  }
+
+  // Knowledge-base sources ("Wissensbasis") — populated by kiconnect-db.js's
+  // sendMessageCore hook (see installKbHooks() there). Same rendering idea
+  // as _webSources above, kept as its own list/renderer since KB citations
+  // carry a source file + page instead of a URL.
+  if (msg._kbSources && msg._kbSources.length && typeof buildKbSourcesRow === 'function') {
+    bubble.appendChild(buildKbSourcesRow(msg._kbSources));
   }
 
   if (!contentHtml && bubble.children.length === 0)
@@ -5935,6 +6205,26 @@ async function sendMessageCore(text, att) {
     }
   }
 
+  // Knowledge-base retrieval ("Wissensbasis" / RAG) — kiconnect-db.js
+  // exposes window.kbRetrieveForQuery() only when at least one knowledge
+  // base is toggled on in the composer; everything else here is a no-op
+  // for chats that don't use it, same defer-to-optional-global pattern as
+  // the agent module. See kiconnect-rag-spec.md section 5.4.
+  let kbResult = null;
+  let kbWasRequested = false;
+  if (text && typeof window.kbRetrieveForQuery === 'function') {
+    kbWasRequested = true;
+    try {
+      kbResult = await window.kbRetrieveForQuery(text);
+      if (kbResult?.sources?.length) {
+        userContent = window.buildKbAugmentedContent(userContent, kbResult);
+      }
+    } catch (err) {
+      toast(tf('js.kbSearchFailed', { e: err.message || err }) || `⚠️ Wissensbasis-Suche fehlgeschlagen: ${err.message || err}`);
+      kbResult = null;
+    }
+  }
+
   const maxBytes=getMaxImageStorageBytes();
   // preserve pdf_base64 blocks and store text-mode PDFs
   // as {type:'pdf_text'} with name+text, so rerun/edit can restore them language-independently.
@@ -5960,6 +6250,8 @@ async function sendMessageCore(text, att) {
     : userContent;
   userMsgForStorage._files = fileNames.length?fileNames:undefined;
   userMsgForStorage._webSources = webSourceChips.length?webSourceChips:undefined;
+  const kbSourceChips = kbResult?.sources || [];
+  userMsgForStorage._kbSources = kbSourceChips.length?kbSourceChips:undefined;
   const chat=currentChat();
 
   // Only the web-source chip row is new visual info the preview couldn't have
@@ -5970,6 +6262,13 @@ async function sendMessageCore(text, att) {
     const bubbleEl = previewMsgEl.querySelector('.bubble');
     if (bubbleEl && !bubbleEl.querySelector('.web-sources')) {
       bubbleEl.appendChild(buildWebSourcesRow(webSourceChips));
+    }
+  }
+  // Same idea for knowledge-base sources (see kiconnect-db.js: buildKbSourcesRow).
+  if (kbSourceChips.length && typeof buildKbSourcesRow === 'function') {
+    const bubbleEl = previewMsgEl.querySelector('.bubble');
+    if (bubbleEl && !bubbleEl.querySelector('.kb-sources')) {
+      bubbleEl.appendChild(buildKbSourcesRow(kbSourceChips));
     }
   }
   selectedLinkUrls.clear();
@@ -5996,6 +6295,11 @@ async function sendMessageCore(text, att) {
     const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
       .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
     messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
+  }
+  // The retrieved context is now part of this outgoing message. Clear the
+  // selected KBs so they are not used again for the next prompt.
+  if (kbWasRequested && typeof window.kbClearActiveSelection === 'function') {
+    window.kbClearActiveSelection();
   }
   if (isAgenticWebMode()) {
     // Let the model decide for itself (via web_search/fetch_url tools)
@@ -6732,6 +7036,11 @@ function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic
 function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');initTuningSectionCollapse();}
 // Opens the Profiles panel.
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
+// Opens the Quick-intro/help panel (provider-status preview + the 5-step
+// guide text). This must run before the interactive guided tour so the
+// panel content is actually visible - startGuidedIntro() only drives the
+// step-by-step spotlight overlay, it doesn't open this panel itself.
+function openIntroPanel(){renderIntroPanel();document.getElementById('introPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="introPanel"]')?.classList.add('active');}
 // Updates the intro/welcome panel's provider-status summary text.
 function renderIntroPanel() {
   const status = document.getElementById('introProviderStatus');
@@ -7544,7 +7853,7 @@ function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
   document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
   document.getElementById('openSettingsBtn').addEventListener('click', ()=>{closePanels();openSettings();});
-  document.getElementById('openIntroBtn').addEventListener('click', ()=>startGuidedIntro());
+  document.getElementById('openIntroBtn').addEventListener('click', ()=>startGuidedIntro(0));
   document.getElementById('openTuningBtn').addEventListener('click', ()=>{closePanels();openTuningPanel();});
   document.getElementById('openProfileHeaderBtn').addEventListener('click', ()=>{closePanels();openProfilePanel();});
   document.getElementById('openModelMaxHeaderBtn').addEventListener('click', ()=>{closePanels();openModelMaxPanel();});
@@ -7707,6 +8016,10 @@ function setupEventListeners(){
   document.getElementById('addProviderBtn').addEventListener('click', startNewProvider);
   document.getElementById('saveProviderBtn').addEventListener('click', saveProviderEditor);
   document.getElementById('cancelProviderBtn').addEventListener('click', cancelProviderEditor);
+  // CSP deliberately disallows inline event handlers; bind embedding editor
+  // controls here together with the rest of the provider panel controls.
+  document.getElementById('pvEmbedModelLoadBtn').addEventListener('click', loadEmbeddingModelCandidates);
+  document.getElementById('pvEmbedModelTestBtn').addEventListener('click', testEmbeddingModel);
   document.querySelectorAll('.type-chip').forEach(chip=>{chip.addEventListener('click',()=>selectProviderType(chip.dataset.type));});
 
   // Profile Panel

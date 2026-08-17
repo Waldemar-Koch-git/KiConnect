@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="no-referrer">
-  <title>AI✨ Chat/Agent (3.3.3)</title>
+  <title>AI✨ Chat/Agent (3.4.0)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -419,6 +419,23 @@
       <div class="setting-label" data-i18n="provider.apiKey">API Key</div>
       <input class="setting-input" type="password" id="pvApiKey" placeholder="sk-...">
     </div>
+    <div style="margin-top:10px;">
+      <div class="setting-label" data-i18n="provider.embedModelLabel">Embedding model (optional)</div>
+      <div style="display:flex;gap:6px;">
+        <select class="setting-input" id="pvEmbedModelSelect" style="flex:1;display:none;" onchange="onEmbedModelSelectChange()"></select>
+        <input class="setting-input" type="text" id="pvEmbedModel" placeholder="text-embedding-3-small" style="flex:1;">
+        <button type="button" class="edit-cancel-btn" id="pvEmbedModelLoadBtn" style="white-space:nowrap;padding:0 12px;" title="Fetch the list of embedding models this server offers" data-i18n="provider.embedModelLoadBtnTitle" data-i18n-attr="title">🔄</button>
+        <button type="button" class="edit-cancel-btn" id="pvEmbedModelTestBtn" style="white-space:nowrap;padding:0 12px;" title="Send a real one-word request to this model at .../embeddings and report back the vector size or the error - works even if the server doesn't list embedding models under /models" data-i18n="provider.embedModelTestBtnTitle" data-i18n-attr="title"><span data-i18n="provider.embedModelTestBtnLabel">✓ Test</span></button>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;line-height:1.5;" data-i18n="provider.embedModelHint">
+        Leave empty if this API isn't used for embeddings. Click 🔄 to choose from the models this server advertises;
+        recognized embedding models are shown by default, with a "Show other models" option to reveal the rest of the
+        catalog (chat/vision/etc.) if what you need isn't recognized. Many self-hosted/gateway servers don't list their
+        embedding models under /models at all - if 🔄 finds nothing, type a model name manually and click "✓ Test" to
+        send it directly against .../embeddings and see the real result. Set this to make it selectable as an embedding
+        source when creating or editing a knowledge base, instead of entering a server manually each time.
+      </div>
+    </div>
     <div style="display:flex;gap:8px;margin-top:14px;">
       <button class="save-btn" style="margin:0;flex:1;" id="saveProviderBtn" data-i18n="provider.save">💾 Save</button>
       <button class="edit-cancel-btn" id="cancelProviderBtn" data-i18n="provider.cancel">Cancel</button>
@@ -767,5 +784,6 @@
 <script src="kiconnect.js"></script>
 <script src="kiconnect-voice.js"></script>
 <script src="kiconnect-agent.js"></script>
+<script src="kiconnect-db.js"></script>
 </body>
 </html>

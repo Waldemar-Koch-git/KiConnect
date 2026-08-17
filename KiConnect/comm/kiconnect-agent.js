@@ -319,9 +319,13 @@
   /* global agentSessionHeader, logoutNow, toast */
   async function agentFetch(url, opts) {
     opts = opts || {};
-    const headers = { ...(opts.headers || {}), ...(typeof agentSessionHeader === 'function' ? agentSessionHeader() : {}) };
+    const sessionHeaders = typeof agentSessionHeader === 'function' ? agentSessionHeader() : {};
+    const headers = { ...(opts.headers || {}), ...sessionHeaders };
     const res = await fetch(url, { ...opts, headers });
-    if (res.status === 401) {
+    // Same reasoning as kiconnect-db.js's kbFetch(): a 401 when we never had
+    // a token to send just means "not logged in yet", not an expired
+    // session - don't force a logout over that.
+    if (res.status === 401 && Object.keys(sessionHeaders).length) {
       if (typeof toast === 'function') toast(t('agent.err.sessionExpired', '🔒 Session expired — please log in again.'));
       if (typeof logoutNow === 'function') logoutNow();
     }
@@ -347,10 +351,11 @@
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
-  async function apiDeleteProject(name) {
-    const res = await agentFetch(`/agent/projects/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json().catch(() => ({}));
+  async function apiDeleteProject(projectId) {
+    const res = await agentFetch(`/agent/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
   }
   async function apiTree(project) {
     const res = await agentFetch(`/agent/tree/${encodeURIComponent(project)}`);
@@ -1546,7 +1551,14 @@
   async function createProject(name, path, create) {
     name = (name || '').trim();
     if (!name || !path) return null;
-    const reg = await apiCreateProject(name, path, create);
+    // A previous UI version could remove a project locally even when the
+    // proxy deletion failed, leaving an otherwise invisible registration.
+    // Reuse that matching server-side project instead of rejecting its folder.
+    const normalizedPath = String(path).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const localMatch = folders.find(f => f.agentProject && String(f.agentProjectPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
+    if (localMatch) throw new Error(t('agent.projectAlreadyAdded', 'This folder is already added as a project.'));
+    const remoteMatch = (await apiListProjects()).find(p => String(p.path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
+    const reg = remoteMatch || await apiCreateProject(name, path, create);
     const folder = {
       id: 'proj_' + Date.now(), name, collapsed: false, agentProject: reg.id, agentProjectPath: reg.path,
       agentAutonomy: settings.autonomy || 'confirm',
@@ -1565,7 +1577,15 @@
     if (!folder || !folder.agentProject) return;
     const inside = chats.filter(c => c.folderId === folder.id);
     if (!confirm(tf('agent.confirmDeleteProject', { name: folder.name, n: inside.length }))) return;
-    try { await apiDeleteProject(folder.agentProject); } catch (e) { showToast(`❌ ${e.message}`); }
+    try {
+      await apiDeleteProject(folder.agentProject);
+    } catch (e) {
+      // Do not remove the local folder/chats when the proxy could not remove
+      // its registry entry. Otherwise the UI claims deletion succeeded while
+      // the folder remains registered and cannot be chosen again.
+      showToast(`❌ ${e.message}`);
+      return;
+    }
     // Deleting a project deletes its chats too (previously this only
     // unlinked them via c.folderId=null, leaving them behind as regular
     // chats — surprising given the confirm dialog said they'd be gone).
