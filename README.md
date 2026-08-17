@@ -47,7 +47,7 @@ Double-click **`START_portable.bat`**. This variant brings its own self-containe
 ```bash
 git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect
-pip install flask requests waitress cryptography
+pip install flask requests waitress cryptography pypdf python-docx python-pptx openpyxl numpy
 python kiconnect-proxy.py
 ```
 

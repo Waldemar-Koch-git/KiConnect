@@ -77,7 +77,7 @@ Ki-Connect no longer loads its JS libraries from a CDN. All required libraries a
 
 An internet connection is still required once, to download `_render.zip` on first launch (or when the `_render` folder is empty). After that, the application can run fully offline with respect to these libraries.
 
-On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (for server-side AES-GCM encryption/decryption of the agent project registry under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config). `START.bat`/`START_portable.bat` install all four automatically; manual installs must include `cryptography` explicitly.
+On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (for server-side AES-GCM encryption/decryption of the agent project registry under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config). It additionally uses `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, and `numpy` for the knowledge base (RAG) feature - these degrade gracefully (that part of the feature is simply unavailable) if missing, rather than preventing the proxy from starting. `START.bat`/`START_portable.bat` install all nine automatically; manual installs must include them explicitly.
 
 ---
 
@@ -108,7 +108,7 @@ The old standalone PDF.js worker-init script has been folded directly into `kico
 ## Start scripts in detail
 
 ### START.bat
-Checks whether Python is available on the system, calls `update.bat` to refresh the program files, installs/updates the required Python packages (`flask`, `requests`, `waitress`), and then starts the proxy via Waitress (WSGI). The proxy itself automatically opens the default browser at `http://localhost:5000` about 1.2 seconds after starting.
+Checks whether Python is available on the system, calls `update.bat` to refresh the program files, installs/updates the required Python packages (`flask`, `requests`, `waitress`, `cryptography`, `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, `numpy`), and then starts the proxy via Waitress (WSGI). The proxy itself automatically opens the default browser at `http://localhost:5000` about 1.2 seconds after starting.
 
 ### START_portable.bat
 Intended for users without an installed Python. Expects a self-contained, embedded Python environment at `python\python.exe`. If needed, it sets up `pip` inside that environment (uncommenting `#import site` in the `._pth` file and fetching `get-pip.py`), checks and installs the required packages, and then starts the proxy. It also calls `update.bat`.
@@ -151,7 +151,7 @@ git clone https://github.com/Waldemar-Koch-git/KiConnect.git
 cd kiconnect
 
 # 2. Install dependencies
-pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0
+pip install flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0 pypdf>=4.0.0 python-docx>=1.1.0 python-pptx>=0.6.23 openpyxl>=3.1.0 numpy>=1.26.0
 
 # 3. Start the proxy
 python kiconnect-proxy.py
