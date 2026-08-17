@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 set "PYTHON=%~dp0python\python.exe"
 set "PIP=%~dp0python\python.exe -m pip"
-set MIN_VERSIONS=flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0
+set MIN_VERSIONS=flask>=3.0.0 requests>=2.31.0 waitress>=3.0.0 cryptography>=42.0.0 pypdf>=4.0.0 python-docx>=1.1.0 python-pptx>=0.6.23 openpyxl>=3.1.0 numpy>=1.26.0
 
 echo.
 echo  ==========================================
