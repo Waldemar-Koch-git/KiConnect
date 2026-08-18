@@ -1,27 +1,10 @@
-// ================================================================
-// KI Connect – Internationalization (i18n) loader
-// ================================================================
-// The actual translated strings used to live in this one file and grew
-// far too large (8000+ lines). They now live one file per language under
-// _lang/<code>.js. This file only:
-//   1. sets up the LANGUAGES/TRANSLATIONS registry that kiconnect.js reads,
-//   2. lists which _lang/*.js files to load (LANG_MANIFEST below), and
-//   3. loads them, in order, via document.write.
+// KI Connect i18n loader. Strings live per-language in _lang/<code>.js
+// (each calls registerLanguage()); this file just builds the registry
+// and loads them in order. Load before kiconnect.html's main <script>.
 //
-// To add a new language:
-//   1. Copy _lang/en.js to _lang/<code>.js and translate every value.
-//      Keep every key identical to _lang/en.js - kiconnect.js falls back
-//      to English for any key that's missing.
-//   2. Add one line to LANG_MANIFEST below (language code + its own
-//      display meta lives in the _lang/<code>.js file itself, so nothing
-//      else needs to change).
-//   3. If the language is written right-to-left, add its code to
-//      RTL_LANGS below too.
-// That's it - kiconnect.js, the language dropdown, RTL handling etc. all
-// pick the new language up automatically.
-//
-// Load this file BEFORE kiconnect.html's main <script> block (unchanged).
-// ================================================================
+// New language: copy _lang/en.js, translate values (keep keys - missing
+// ones fall back to English), add its code to LANG_MANIFEST, and to
+// RTL_LANGS if right-to-left. Everything else picks it up automatically.
 
 // Populated by each _lang/*.js file calling registerLanguage() below.
 const LANGUAGES = {};
@@ -45,12 +28,9 @@ const LANG_MANIFEST = [
   'ar', 'hi', 'ta', 'bn', 'pa', 'ur', 'fa',
 ];
 
-// document.write here (while this very <script> tag is still being
-// parsed) keeps every _lang/<code>.js load fully synchronous and in
-// manifest order - exactly like a normal parser-blocking <script src>
-// tag. That matters because kiconnect.js (the next <script> tag in
-// kiconnect.html) reads LANGUAGES/TRANSLATIONS as soon as it starts
-// running, so they must already be fully populated by then.
+// document.write keeps loads synchronous and in order, like a normal
+// blocking <script src> - required since kiconnect.js reads
+// LANGUAGES/TRANSLATIONS as soon as it starts running.
 LANG_MANIFEST.forEach(function(code) {
   document.write('<script src="_lang/' + code + '.js"><\/script>');
 });

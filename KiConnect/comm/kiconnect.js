@@ -795,13 +795,19 @@ async function unlockAgentSession() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accountId: _activeAccountId, key: keyB64 }),
     });
-    if (!res.ok) { _agentSessionToken = null; _agentProjects = []; return; }
-    const data = await res.json();
-    _agentSessionToken = data.token || null;
-    _agentProjects = Array.isArray(data.projects) ? data.projects : [];
+    await _applyAgentSessionResponse(res);
   } catch {
     _agentSessionToken = null; _agentProjects = [];
   }
+}
+
+// Shared by unlockAgentSession/rekeyAgentSession: applies the /agent/session/*
+// response to the module-level session state, or clears it on any failure.
+async function _applyAgentSessionResponse(res) {
+  if (!res.ok) { _agentSessionToken = null; _agentProjects = []; return; }
+  const data = await res.json();
+  _agentSessionToken = data.token || null;
+  _agentProjects = Array.isArray(data.projects) ? data.projects : [];
 }
 
 // Re-encrypts the agent registry under a new key after a password change.
@@ -823,10 +829,7 @@ async function rekeyAgentSession() {
       headers: { 'Content-Type': 'application/json', ...agentSessionHeader() },
       body: JSON.stringify({ newKey: newKeyB64 }),
     });
-    if (!res.ok) { _agentSessionToken = null; _agentProjects = []; return; }
-    const data = await res.json();
-    _agentSessionToken = data.token || null;
-    _agentProjects = Array.isArray(data.projects) ? data.projects : [];
+    await _applyAgentSessionResponse(res);
   } catch {
     _agentSessionToken = null; _agentProjects = [];
   }
@@ -1561,6 +1564,11 @@ function startNewProvider() {
   selectProviderType('openai-compat');
   document.getElementById('providerEditorTitle').textContent = t('provider.new');
   _placeProviderEditor(null);
+  _showProviderEditor();
+}
+// Reveals the (already positioned/filled) provider editor and scrolls it
+// into view - shared tail of addProvider()/editProvider().
+function _showProviderEditor() {
   const editor = document.getElementById('providerEditor');
   editor.style.display = 'block';
   editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1580,9 +1588,7 @@ function editProvider(id) {
   document.getElementById('providerEditorTitle').textContent = t('provider.edit');
   const row = document.querySelector(`#providerList .provider-item[data-id="${CSS.escape(id)}"]`);
   _placeProviderEditor(row);
-  const editor = document.getElementById('providerEditor');
-  editor.style.display = 'block';
-  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  _showProviderEditor();
 }
 // Back to the plain text field (hides the fetched-models <select>, if shown) -
 // called whenever the editor opens fresh, since a previous fetch's option
@@ -1694,15 +1700,11 @@ async function loadEmbeddingModelCandidates() {
     btn.textContent = prevLabel; btn.disabled = false;
   }
 }
-// Complements loadEmbeddingModelCandidates() above: that one trusts /models
-// to *list* embedding models, which many self-hosted / gateway-style
-// OpenAI-compatible servers (LiteLLM, some vLLM/LM Studio setups, etc.)
-// simply don't do for embedding models, even though /embeddings itself
-// works fine with them. This sends one real, minimal request straight to
-// .../embeddings with whatever model name is currently typed into
-// pvEmbedModel and reports back the actual vector size or the server's
-// actual error - so it works regardless of what (or whether) /models
-// advertises.
+// Complements loadEmbeddingModelCandidates(): many self-hosted/gateway
+// OpenAI-compatible servers don't list embedding models under /models
+// even though /embeddings works fine. This sends one minimal request
+// straight to /embeddings with the typed model name and reports back
+// the real vector size or error - works regardless of what /models says.
 async function testEmbeddingModel() {
   const type = getSelectedProviderType();
   if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider') || 'Anthropic has no embedding models.'); return; }
@@ -2799,7 +2801,6 @@ function newFolder() {
 function deleteFolder(id) {
   const f = folders.find(x=>x.id===id);
   const inside = chats.filter(c=>c.folderId===id);
-  //if (inside.length && !confirm(tf('js.deleteFolderConfirm', {name: f?.name || '', n: inside.length}) )) return;
   if (inside.length && !confirm('\n🗂️ + 📝 → 🗑️ ❓') ) return;
   chats = chats.filter(c=>c.folderId!==id);
   folders = folders.filter(f=>f.id!==id);
@@ -3016,16 +3017,18 @@ function showChatCtxMenu(e, chatId) {
 function hideCtx() { document.getElementById('ctxMenu').style.display='none'; }
 document.addEventListener('click', hideCtx);
 
-// Opens the right-click context menu for a folder sidebar entry (Rename / Move / Delete).
-function showFolderCtxMenu(e, folderId) {
+// Shared builder behind showFolderCtxMenu/showProfileFolderCtxMenu (chat
+// folders and profile folders use an identical Rename/Move/Delete menu,
+// just against different arrays and callbacks).
+function _buildFolderCtxMenu(e, folderId, list, { rename, moveUp, moveDown, del }) {
   e.preventDefault(); e.stopPropagation();
   const menu = document.getElementById('ctxMenu');
   menu.innerHTML = '';
-  const idx = folders.findIndex(f => f.id === folderId);
+  const idx = list.findIndex(f => f.id === folderId);
 
   const renameItem = document.createElement('div');
   renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
-  renameItem.addEventListener('click', () => { startRenamingFolder(folderId); hideCtx(); });
+  renameItem.addEventListener('click', () => { rename(folderId); hideCtx(); });
   menu.appendChild(renameItem);
 
   // Move (purely symbolic, no dedicated translation needed) — submenu with ↑ / ↓
@@ -3037,12 +3040,12 @@ function showFolderCtxMenu(e, folderId) {
   const upOpt = document.createElement('div');
   upOpt.className = 'ctx-item'; upOpt.textContent = '↑';
   if (idx <= 0) { upOpt.style.opacity = '0.5'; upOpt.style.pointerEvents = 'none'; }
-  upOpt.addEventListener('click', () => { moveFolder(folderId, -1); hideCtx(); });
+  upOpt.addEventListener('click', () => { moveUp(folderId); hideCtx(); });
   submenu.appendChild(upOpt);
   const downOpt = document.createElement('div');
   downOpt.className = 'ctx-item'; downOpt.textContent = '↓';
-  if (idx === -1 || idx >= folders.length - 1) { downOpt.style.opacity = '0.5'; downOpt.style.pointerEvents = 'none'; }
-  downOpt.addEventListener('click', () => { moveFolder(folderId, 1); hideCtx(); });
+  if (idx === -1 || idx >= list.length - 1) { downOpt.style.opacity = '0.5'; downOpt.style.pointerEvents = 'none'; }
+  downOpt.addEventListener('click', () => { moveDown(folderId); hideCtx(); });
   submenu.appendChild(downOpt);
   moveItem.appendChild(submenu);
   moveItem.addEventListener('mouseenter', () => submenu.classList.add('open'));
@@ -3051,7 +3054,7 @@ function showFolderCtxMenu(e, folderId) {
 
   const delItem = document.createElement('div');
   delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
-  delItem.addEventListener('click', () => { deleteFolder(folderId); hideCtx(); });
+  delItem.addEventListener('click', () => { del(folderId); hideCtx(); });
   menu.appendChild(delItem);
 
   menu.style.display = 'block';
@@ -3059,6 +3062,12 @@ function showFolderCtxMenu(e, folderId) {
   const y = Math.min(e.clientY, window.innerHeight-120);
   menu.style.left = x+'px';
   menu.style.top  = y+'px';
+}
+// Opens the right-click context menu for a folder sidebar entry (Rename / Move / Delete).
+function showFolderCtxMenu(e, folderId) {
+  _buildFolderCtxMenu(e, folderId, folders, {
+    rename: startRenamingFolder, moveUp: id => moveFolder(id, -1), moveDown: id => moveFolder(id, 1), del: deleteFolder,
+  });
 }
 // Moves a folder within the array up (-1) or down (+1) by one position.
 function moveFolder(id, dir) {
@@ -3074,47 +3083,9 @@ function moveFolder(id, dir) {
 // Opens the right-click context menu for a profile-folder entry (Rename / Move / Delete),
 // mirroring showFolderCtxMenu for the chat sidebar.
 function showProfileFolderCtxMenu(e, folderId) {
-  e.preventDefault(); e.stopPropagation();
-  const menu = document.getElementById('ctxMenu');
-  menu.innerHTML = '';
-  const idx = profileFolders.findIndex(f => f.id === folderId);
-
-  const renameItem = document.createElement('div');
-  renameItem.className = 'ctx-item'; renameItem.textContent = t('js.rename');
-  renameItem.addEventListener('click', () => { startRenamingProfileFolder(folderId); hideCtx(); });
-  menu.appendChild(renameItem);
-
-  // Move (purely symbolic, no dedicated translation needed) — submenu with ↑ / ↓
-  const moveItem = document.createElement('div');
-  moveItem.className = 'ctx-item ctx-item-submenu';
-  moveItem.textContent = '↕️ ▶';
-  const submenu = document.createElement('div');
-  submenu.className = 'ctx-submenu';
-  const upOpt = document.createElement('div');
-  upOpt.className = 'ctx-item'; upOpt.textContent = '↑';
-  if (idx <= 0) { upOpt.style.opacity = '0.5'; upOpt.style.pointerEvents = 'none'; }
-  upOpt.addEventListener('click', () => { moveProfileFolder(folderId, -1); hideCtx(); });
-  submenu.appendChild(upOpt);
-  const downOpt = document.createElement('div');
-  downOpt.className = 'ctx-item'; downOpt.textContent = '↓';
-  if (idx === -1 || idx >= profileFolders.length - 1) { downOpt.style.opacity = '0.5'; downOpt.style.pointerEvents = 'none'; }
-  downOpt.addEventListener('click', () => { moveProfileFolder(folderId, 1); hideCtx(); });
-  submenu.appendChild(downOpt);
-  moveItem.appendChild(submenu);
-  moveItem.addEventListener('mouseenter', () => submenu.classList.add('open'));
-  moveItem.addEventListener('mouseleave', () => submenu.classList.remove('open'));
-  menu.appendChild(moveItem);
-
-  const delItem = document.createElement('div');
-  delItem.className = 'ctx-item danger'; delItem.textContent = t('js.delete');
-  delItem.addEventListener('click', () => { deleteProfileFolder(folderId); hideCtx(); });
-  menu.appendChild(delItem);
-
-  menu.style.display = 'block';
-  const x = Math.min(e.clientX, window.innerWidth-180);
-  const y = Math.min(e.clientY, window.innerHeight-120);
-  menu.style.left = x+'px';
-  menu.style.top  = y+'px';
+  _buildFolderCtxMenu(e, folderId, profileFolders, {
+    rename: startRenamingProfileFolder, moveUp: id => moveProfileFolder(id, -1), moveDown: id => moveProfileFolder(id, 1), del: deleteProfileFolder,
+  });
 }
 // Moves a profile folder within the array up (-1) or down (+1) by one position.
 function moveProfileFolder(id, dir) {
@@ -4393,25 +4364,47 @@ function _pullBackForOpenBlock(text, safeEnd) {
   if (!lines.length) return safeEnd;
 
   const isBlank = (l) => l.trim() === '';
+  // Only lines that actually start/end with a pipe count as table rows.
+  // (Previously: "2+ pipe characters anywhere in the line" — which
+  // false-positived on ordinary prose containing pipes, e.g. bra-ket
+  // notation like "|0⟩ und |1⟩", misclassifying a list item as a table row
+  // and cutting the walk-back short at the wrong place.)
   const isTableLine = (l) => {
-    if (!l.includes('|')) return false;
     const t = l.trim();
-    return t.startsWith('|') || t.endsWith('|') || (l.match(/\|/g) || []).length >= 2;
+    if (!t.includes('|')) return false;
+    return t.startsWith('|') || t.endsWith('|');
   };
   const isListLine = (l) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(l);
   const isListContinuation = (l) => isListLine(l) || (!isBlank(l) && /^[ \t]+\S/.test(l));
 
-  const lastLine = lines[lines.length - 1];
-  let blockType = null;
-  if (isTableLine(lastLine)) blockType = 'table';
-  else if (isListLine(lastLine)) blockType = 'list';
-  else return safeEnd; // plain prose line, or block already closed by a blank line
+  // Blank lines alone never close a list or table in CommonMark — a "loose"
+  // list (items separated by blank lines, which models commonly produce)
+  // still parses as one single list. So skip past any trailing blank lines
+  // and look at the last actual content line to decide whether we're still
+  // inside an open block. (Previously a single blank line after a finished
+  // item was treated as "block closed", so each item of a loose list got
+  // committed to "stable" as its own separate <ol start="N">, and marked's
+  // start attribute was then stripped by DOMPurify below — producing a
+  // "1., 1., 1." list until the message was fully re-rendered from scratch.)
+  let lastNonBlank = lines.length - 1;
+  while (lastNonBlank >= 0 && isBlank(lines[lastNonBlank])) lastNonBlank--;
+  if (lastNonBlank < 0) return safeEnd; // candidate is all blank lines
 
-  // Walk backward while lines keep belonging to the same open block.
-  let start = lines.length - 1;
+  const lastLine = lines[lastNonBlank];
+  let blockType = null;
+  // Check list markers before the table heuristic — an unambiguous "1. "/
+  // "- " prefix should never be overridden by a loose "contains a pipe"
+  // match (see isTableLine note above).
+  if (isListContinuation(lastLine)) blockType = 'list';
+  else if (isTableLine(lastLine)) blockType = 'table';
+  else return safeEnd; // plain prose line -> any earlier block is already closed
+
+  // Walk backward while lines keep belonging to the same open block,
+  // skipping over blank lines (they don't end a loose list/table either).
+  let start = lastNonBlank;
   while (start > 0) {
     const prev = lines[start - 1];
-    if (isBlank(prev)) break;
+    if (isBlank(prev)) { start--; continue; }
     if (blockType === 'table' && !isTableLine(prev)) break;
     if (blockType === 'list' && !isListContinuation(prev)) break;
     start--;
@@ -5429,15 +5422,11 @@ function updateAudioProviderKeyUI() {
 }
 
 // ── Tuning panel: generic collapse/expand for every top-level section ──
-// Wraps each panel section's content (from its .section-header up to
-// the next .section-header or <hr class="divider">, whichever comes first —
-// the divider itself is left outside the wrapper so it stays visible as a
-// permanent boundary even while the preceding section is collapsed) into a
-// .tuning-section div, adds a clickable arrow to the header, and persists the
-// open/closed state per section in localStorage. Idempotent per panel — runs
-// once per panelId. Originally #tuningPanel-only; generalized so any panel
-// with the same "section-header + <hr class=divider>" structure (e.g.
-// #settingsPanel) can opt in by passing its id + a distinct storage prefix.
+// Wraps each section (from .section-header to the next header or <hr
+// class="divider">, divider left outside so it stays visible) into a
+// .tuning-section div, adds a clickable arrow, and persists open/closed
+// state in localStorage. Idempotent per panel. Works on any panel with
+// this "section-header + hr.divider" structure via panelId+storagePrefix.
 function initPanelSectionCollapse(panelId, storagePrefix) {
   const panel = document.getElementById(panelId);
   if (!panel || panel.dataset.collapseInit) return;
@@ -6660,41 +6649,28 @@ function formatText(raw) {
   const PH_RE = /<!--KICBLK(\d+)-->/g;
   let s = raw;
 
+  // Builds one collapsible code-block's HTML, pushes it onto `blocks`, and
+  // returns its index. Shared by all four fence patterns below (4+/3
+  // backticks, closed/unclosed) — they differ only in which regex matched.
+  function pushCodeBlock(lang, code) {
+    const i = blocks.length;
+    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
+    const ll = escHtml((lang || '').trim() || 'code');
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
+    return i;
+  }
+
   // ── Step 1: Code and LaTeX blocks VOR protect from marked ────────
 
   // 4+-Backtick-Fences
-  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => {
-    const i = blocks.length;
-    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
-    const ll = escHtml((lang || '').trim() || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
-    return PH(i);
-  });
+  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => PH(pushCodeBlock(lang, code)));
 
   // 3-Backtick-Fences
-  s = s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => {
-    const i = blocks.length;
-    const b64 = toBase64Utf8(code);
-    const ll = escHtml(lang || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
-    return PH(i);
-  });
+  s = s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => PH(pushCodeBlock(lang, code)));
 
   // Not-closed Fences (Fallback)
-  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => {
-    const i = blocks.length;
-    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
-    const ll = escHtml((lang || '').trim() || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
-    return PH(i);
-  });
-  s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => {
-    const i = blocks.length;
-    const b64 = toBase64Utf8(code.replace(/\n$/, ''));
-    const ll = escHtml(lang || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
-    return PH(i);
-  });
+  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => PH(pushCodeBlock(lang, code)));
+  s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => PH(pushCodeBlock(lang, code)));
 
   // Inline-Code
   s = s.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -6703,36 +6679,36 @@ function formatText(raw) {
     return PH(i);
   });
 
+  // Pushes one captured LaTeX block/inline match into `blocks` and returns
+  // its placeholder - shared by the four regex.replace() calls below.
+  function pushMathBlock(html) {
+    const i = blocks.length;
+    blocks.push(html);
+    return PH(i);
+  }
+
   // LaTeX Display: \[ ... \]
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
-    const i = blocks.length;
     const latexB64 = toBase64Utf8(math);
-    blocks.push(`<div class="math-block" data-latex="${latexB64}">\\[${escHtml(math)}\\]</div>`);
-    return PH(i);
+    return pushMathBlock(`<div class="math-block" data-latex="${latexB64}">\\[${escHtml(math)}\\]</div>`);
   });
 
   // LaTeX Display: $$ ... $$
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
-    const i = blocks.length;
     const latexB64 = toBase64Utf8(math);
-    blocks.push(`<div class="math-block" data-latex="${latexB64}">$$${escHtml(math)}$$</div>`);
-    return PH(i);
+    return pushMathBlock(`<div class="math-block" data-latex="${latexB64}">$$${escHtml(math)}$$</div>`);
   });
 
   // LaTeX Inline: \( ... \)
   s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
-    const i = blocks.length;
     const latexB64 = toBase64Utf8(math);
-    blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
-    return PH(i);
+    return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
   // LaTeX Inline: $...$ (kein Leerzeichen am Rand, kein Zeilenumbruch)
   s = s.replace(/\$([^\s$\n][^$\n]*?[^\s$\n]|\S)\$/g, (_, math) => {
-    const i = blocks.length;
     const latexB64 = toBase64Utf8(math);
-    blocks.push(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
-    return PH(i);
+    return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
   // ── Step 1b: ensure a blank line precedes list blocks ──────────
@@ -6803,7 +6779,7 @@ function formatText(raw) {
                      'div','span','button','a','u','sup','sub','mark','small','s','ins',
                      'abbr','cite','kbd','details','summary','blockquote','input','img'],
       ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','data-latex',
-                     'type','checked','disabled','src','alt','loading'],
+                     'type','checked','disabled','src','alt','loading','start'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
       ALLOW_DATA_ATTR: false,
@@ -7017,7 +6993,7 @@ function clearAttachments(){attachments=[];renderAttachments();}
 
 // ── UI Helpers ────────────────────────────────────────────────────
 function closePanels(){
-  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel','introPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
+  ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
   document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('overlay').classList.remove('show');
   // Don't leave the "delete account" password prompt open/filled in the background.
@@ -7036,23 +7012,6 @@ function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic
 function openTuningPanel(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('tuningPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="tuningPanel"]')?.classList.add('active');initTuningSectionCollapse();}
 // Opens the Profiles panel.
 function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
-// Opens the Quick-intro/help panel (provider-status preview + the 5-step
-// guide text). This must run before the interactive guided tour so the
-// panel content is actually visible - startGuidedIntro() only drives the
-// step-by-step spotlight overlay, it doesn't open this panel itself.
-function openIntroPanel(){renderIntroPanel();document.getElementById('introPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="introPanel"]')?.classList.add('active');}
-// Updates the intro/welcome panel's provider-status summary text.
-function renderIntroPanel() {
-  const status = document.getElementById('introProviderStatus');
-  if (!status) return;
-  if (!providers.length) {
-    status.textContent = t('intro.noProvider');
-    return;
-  }
-  const withKeys = providers.filter(p => p.apiKey).length;
-  const names = providers.map(p => p.name).join(', ');
-  status.textContent = tf('intro.configuredProviders', { n: providers.length, keys: withKeys, names });
-}
 let _tourActive = false;
 let _tourStepIndex = 0;
 let _tourTargetEl = null;
@@ -7865,9 +7824,6 @@ function setupEventListeners(){
 
   // Settings Panel
   document.getElementById('settingsPanelClose').addEventListener('click', closePanels);
-  document.getElementById('introPanelClose').addEventListener('click', closePanels);
-  document.getElementById('introCloseBtn').addEventListener('click', closePanels);
-  document.getElementById('introGoProviderBtn').addEventListener('click',()=>startGuidedIntro(1));
   document.getElementById('tourSkipBtn')?.addEventListener('click', endGuidedIntro);
   document.getElementById('tourBackBtn')?.addEventListener('click', prevTourStep);
   document.getElementById('tourNextBtn')?.addEventListener('click', nextTourStep);
@@ -7970,13 +7926,18 @@ function setupEventListeners(){
     updateAudioProviderKeyUI();
     save();
   });
-  document.getElementById('ttsApiKey')?.addEventListener('input', e=>{
-    const provider = document.getElementById('ttsProviderSelect')?.value || 'openai';
-    config.audioProviders = config.audioProviders || {};
-    config.audioProviders[provider] = config.audioProviders[provider] || {};
-    config.audioProviders[provider].apiKey = e.target.value.trim();
-    scheduleTuningSave();
-  });
+  // Shared body for the TTS/STT API-key inputs below: saves the typed key
+  // under audioProviders[<selected provider>].apiKey.
+  function _bindAudioApiKeyInput(inputId, selectId, defaultProvider) {
+    document.getElementById(inputId)?.addEventListener('input', e => {
+      const provider = document.getElementById(selectId)?.value || defaultProvider;
+      config.audioProviders = config.audioProviders || {};
+      config.audioProviders[provider] = config.audioProviders[provider] || {};
+      config.audioProviders[provider].apiKey = e.target.value.trim();
+      scheduleTuningSave();
+    });
+  }
+  _bindAudioApiKeyInput('ttsApiKey', 'ttsProviderSelect', 'openai');
   document.getElementById('ttsVoiceId')?.addEventListener('input', e=>{
     config.audioProviders = config.audioProviders || {};
     config.audioProviders.elevenlabs = config.audioProviders.elevenlabs || {};
@@ -7989,13 +7950,7 @@ function setupEventListeners(){
     updateAudioProviderKeyUI();
     save();
   });
-  document.getElementById('sttApiKey')?.addEventListener('input', e=>{
-    const provider = document.getElementById('sttProviderSelect')?.value || 'groq';
-    config.audioProviders = config.audioProviders || {};
-    config.audioProviders[provider] = config.audioProviders[provider] || {};
-    config.audioProviders[provider].apiKey = e.target.value.trim();
-    scheduleTuningSave();
-  });
+  _bindAudioApiKeyInput('sttApiKey', 'sttProviderSelect', 'groq');
 
   // Thinking Toggle
   document.getElementById('thinkingToggle').addEventListener('click', toggleThinking);

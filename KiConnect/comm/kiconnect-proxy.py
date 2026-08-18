@@ -254,11 +254,14 @@ def _agent_encrypt(key_bytes, obj):
     ct = AESGCM(key_bytes).encrypt(iv, json.dumps(obj).encode('utf-8'), None)
     return base64.b64encode(iv + ct).decode('ascii')
 
-def _load_agent_registry(sess):
-    """Read+decrypt this account's project registry (see _key_path())."""
-    fpath = _key_path(sess['accountId'], 'agent_projects')
+# Generic encrypted per-account registry (JSON blob under datas/<id>/<key>.json,
+# body under `list_field`). Shared by the agent-project registry and the
+# knowledge-base registry below - same shape, different key/field names.
+def _load_encrypted_registry(sess, storage_key, list_field):
+    default = {list_field: []}
+    fpath = _key_path(sess['accountId'], storage_key)
     if not fpath or not os.path.isfile(fpath):
-        return {'projects': []}
+        return dict(default)
     with _store_lock:
         with open(fpath, 'r', encoding='utf-8') as f:
             raw = f.read()
@@ -267,20 +270,27 @@ def _load_agent_registry(sess):
     except ValueError:
         blob = None
     if not blob:
-        return {'projects': []}
+        return dict(default)
     data = _agent_decrypt(sess['key'], blob)
-    if not isinstance(data.get('projects'), list):
-        data['projects'] = []
+    if not isinstance(data.get(list_field), list):
+        data[list_field] = []
     return data
 
-def _save_agent_registry(sess, data):
-    fpath = _key_path(sess['accountId'], 'agent_projects')
+def _save_encrypted_registry(sess, storage_key, data):
+    fpath = _key_path(sess['accountId'], storage_key)
     if not fpath:
         return
     os.makedirs(os.path.dirname(fpath), exist_ok=True)
     blob = _agent_encrypt(sess['key'], data)
     with _store_lock:
         _atomic_write(fpath, json.dumps(blob).encode('utf-8'))
+
+def _load_agent_registry(sess):
+    """Read+decrypt this account's project registry (see _key_path())."""
+    return _load_encrypted_registry(sess, 'agent_projects', 'projects')
+
+def _save_agent_registry(sess, data):
+    _save_encrypted_registry(sess, 'agent_projects', data)
 
 def _is_blocked_root(target):
     """Refuse drive/filesystem roots and anything that equals, encloses, OR
@@ -336,6 +346,28 @@ def _agent_ok(payload=None, status=200):
     return Response(json.dumps(payload if payload is not None else {'ok': True}),
                     status, content_type='application/json')
 
+# Shared OPTIONS-preflight + unlocked-session check used by both
+# _agent_authed and _kb_route below. Returns (sess, None) on success or
+# (None, error_response) - callers just return the error_response as-is.
+def _require_unlocked_session(error_fn):
+    if request.method == 'OPTIONS':
+        return None, Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
+    sess = _agent_session_or_401()
+    if not sess:
+        return None, error_fn('Session expired - please log in again.', 401)
+    return sess, None
+
+def _agent_authed(fn):
+    """Decorator for /agent/* endpoints that need an unlocked session:
+    handles the OPTIONS preflight and the 401 check that every one of
+    them repeated, then calls fn with the session dict as first arg."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        sess, err = _require_unlocked_session(_agent_error)
+        if err: return err
+        return fn(sess, *args, **kwargs)
+    return wrapper
+
 # ── /agent/session/unlock - hand the server a per-account agent key ──
 # Called once after a normal password login (see kiconnect.js
 # unlockAgentSession()). Key is derived client-side from the password + a
@@ -373,12 +405,8 @@ def agent_session_unlock():
 # already-decrypted registry, never a client-supplied one, so a password
 # change can't smuggle in unvalidated project entries.
 @app.route('/agent/session/rekey', methods=['POST', 'OPTIONS'])
-def agent_session_rekey():
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    old_sess = _agent_session_or_401()
-    if not old_sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_session_rekey(old_sess):
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
     new_key_b64 = body.get('newKey')
@@ -489,15 +517,28 @@ def agent_browse():
         out['files'] = [{'name': n, 'path': os.path.join(target, n)} for n in (file_names or [])]
     return _agent_ok(out)
 
+# Resolves+validates a raw folder path for project registration/re-pointing:
+# realpath it, optionally create it, then check it exists and isn't a
+# blocked root. Returns (target, None) on success or (None, error_response).
+def _resolve_project_folder(raw_path, create):
+    if not raw_path:
+        return None, _agent_error('Please provide a folder path.')
+    target = os.path.realpath(raw_path)
+    if create and not os.path.isdir(target):
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError as e:
+            return None, _agent_error(f'Could not create folder: {e}')
+    if not os.path.isdir(target):
+        return None, _agent_error('Folder not found.', 404)
+    if _is_blocked_root(target):
+        return None, _agent_error('This folder is not allowed for security reasons (drive/system root or the app\'s own folder).', 403)
+    return target, None
+
 # ── /agent/projects - list / register project folders ────────────
 @app.route('/agent/projects', methods=['GET', 'POST', 'OPTIONS'])
-def agent_projects():
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
-
+@_agent_authed
+def agent_projects(sess):
     if request.method == 'GET':
         registry = _load_agent_registry(sess)
         projects = []
@@ -518,18 +559,8 @@ def agent_projects():
     create = bool(body.get('create'))
     if not name or len(name) > 64:
         return _agent_error('Invalid project name (1-64 characters).')
-    if not raw_path:
-        return _agent_error('Please provide a folder path.')
-    target = os.path.realpath(raw_path)
-    if create and not os.path.isdir(target):
-        try:
-            os.makedirs(target, exist_ok=True)
-        except OSError as e:
-            return _agent_error(f'Could not create folder: {e}')
-    if not os.path.isdir(target):
-        return _agent_error('Folder not found.', 404)
-    if _is_blocked_root(target):
-        return _agent_error('This folder is not allowed for security reasons (drive/system root or the app\'s own folder).', 403)
+    target, err = _resolve_project_folder(raw_path, create)
+    if err: return err
     with _store_lock:
         registry = _load_agent_registry(sess)
         if any(os.path.realpath(p.get('path') or '') == target for p in registry['projects']):
@@ -547,12 +578,8 @@ def agent_projects():
 # so /agent/exec below can independently double-check it server-side rather
 # than trusting whatever the frontend currently displays.
 @app.route('/agent/projects/<pid>/shell', methods=['PUT', 'OPTIONS'])
-def agent_set_shell(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_set_shell(sess, pid):
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
     enabled = bool(body.get('enabled'))
@@ -570,28 +597,14 @@ def agent_set_shell(pid):
 # Runs through the same validation as creating a new project (existence,
 # 'create' opt-in, blocked-root check, no duplicate-path collision).
 @app.route('/agent/projects/<pid>/path', methods=['PUT', 'OPTIONS'])
-def agent_set_project_path(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_set_project_path(sess, pid):
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
     raw_path = (body.get('path') or '').strip()
     create = bool(body.get('create'))
-    if not raw_path:
-        return _agent_error('Please provide a folder path.')
-    target = os.path.realpath(raw_path)
-    if create and not os.path.isdir(target):
-        try:
-            os.makedirs(target, exist_ok=True)
-        except OSError as e:
-            return _agent_error(f'Could not create folder: {e}')
-    if not os.path.isdir(target):
-        return _agent_error('Folder not found.', 404)
-    if _is_blocked_root(target):
-        return _agent_error('This folder is not allowed for security reasons (drive/system root or the app\'s own folder).', 403)
+    target, err = _resolve_project_folder(raw_path, create)
+    if err: return err
     with _store_lock:
         registry = _load_agent_registry(sess)
         entry = next((p for p in registry['projects'] if p.get('id') == pid), None)
@@ -679,12 +692,8 @@ def _sandbox_preexec():
             pass
 
 @app.route('/agent/exec/<pid>', methods=['POST', 'OPTIONS'])
-def agent_exec(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_exec(sess, pid):
     registry = _load_agent_registry(sess)
     entry = next((p for p in registry['projects'] if p.get('id') == pid), None)
     if not entry:
@@ -753,12 +762,8 @@ def agent_exec(pid):
 # Only removes the app's link to the folder - the folder itself is never
 # deleted, it's real user-owned data outside the app.
 @app.route('/agent/projects/<pid>', methods=['DELETE', 'OPTIONS'])
-def agent_delete_project(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_delete_project(sess, pid):
     with _store_lock:
         registry = _load_agent_registry(sess)
         remaining = [p for p in registry['projects'] if p.get('id') != pid]
@@ -770,12 +775,8 @@ def agent_delete_project(pid):
 
 # ── /agent/search/<id> - grep-style text search across a project ──
 @app.route('/agent/search/<pid>', methods=['GET', 'OPTIONS'])
-def agent_search(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_search(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
@@ -848,12 +849,8 @@ def agent_search(pid):
 
 # ── /agent/tree/<id> - recursive file listing ─────────────────────
 @app.route('/agent/tree/<pid>', methods=['GET', 'OPTIONS'])
-def agent_tree(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_tree(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
@@ -878,12 +875,8 @@ def agent_tree(pid):
 
 # ── /agent/file/<id>/<path> - read / write / delete a file ────────
 @app.route('/agent/file/<pid>/<path:rel_path>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
-def agent_file(pid, rel_path):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_file(sess, pid, rel_path):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
@@ -935,12 +928,8 @@ def agent_file(pid, rel_path):
 
 # ── /agent/dir/<id>/<path> - create / delete a directory ──────────
 @app.route('/agent/dir/<pid>/<path:rel_path>', methods=['POST', 'DELETE', 'OPTIONS'])
-def agent_dir(pid, rel_path):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_dir(sess, pid, rel_path):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
@@ -962,36 +951,48 @@ def agent_dir(pid, rel_path):
         return _agent_ok({'path': rel_path})
 
 
-# ── /agent/move/<id> - move/rename a file or folder ────────────────
-# shutil.move (not os.rename) so it also works across directories/filesystems.
-@app.route('/agent/move/<pid>', methods=['POST', 'OPTIONS'])
-def agent_move(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
-    pdir = _project_root_for_id(pid, sess)
-    if not pdir:
-        return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    try: body = request.get_json(force=True, silent=True) or {}
-    except Exception: body = {}
+# Shared by agent_move/agent_copy: resolves+validates the from/to body
+# fields against the project root. Returns (src, dst, rel_from, rel_to, None)
+# or (None, None, None, None, error_response).
+def _resolve_move_copy_paths(pdir, body):
     rel_from = body.get('from')
     rel_to = body.get('to')
     src = _safe_rel_path(pdir, rel_from) if rel_from else None
     dst = _safe_rel_path(pdir, rel_to) if rel_to else None
     if not src or not dst:
-        return _agent_error('Invalid from/to path.')
+        return None, None, None, None, _agent_error('Invalid from/to path.')
     if not os.path.exists(src):
-        return _agent_error('Source not found.', 404)
-    if os.path.exists(dst):
-        if not bool(body.get('overwrite')):
-            return _agent_error('Destination already exists (set overwrite to replace it).', 409)
-        with _store_lock:
-            if os.path.isdir(dst) and not os.path.islink(dst):
-                shutil.rmtree(dst, ignore_errors=True)
-            else:
-                os.remove(dst)
+        return None, None, None, None, _agent_error('Source not found.', 404)
+    return src, dst, rel_from, rel_to, None
+
+# Removes an existing destination before a move/copy, unless the caller
+# didn't opt into overwrite (then returns a 409 error_response).
+def _clear_destination_if_exists(dst, overwrite):
+    if not os.path.exists(dst):
+        return None
+    if not overwrite:
+        return _agent_error('Destination already exists (set overwrite to replace it).', 409)
+    with _store_lock:
+        if os.path.isdir(dst) and not os.path.islink(dst):
+            shutil.rmtree(dst, ignore_errors=True)
+        else:
+            os.remove(dst)
+    return None
+
+# ── /agent/move/<id> - move/rename a file or folder ────────────────
+# shutil.move (not os.rename) so it also works across directories/filesystems.
+@app.route('/agent/move/<pid>', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_move(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    src, dst, rel_from, rel_to, err = _resolve_move_copy_paths(pdir, body)
+    if err: return err
+    err = _clear_destination_if_exists(dst, bool(body.get('overwrite')))
+    if err: return err
     with _store_lock:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.move(src, dst)
@@ -1017,25 +1018,15 @@ def _dir_size(path):
     return total
 
 @app.route('/agent/copy/<pid>', methods=['POST', 'OPTIONS'])
-def agent_copy(pid):
-    if request.method == 'OPTIONS':
-        return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-    sess = _agent_session_or_401()
-    if not sess:
-        return _agent_error('Session expired - please log in again.', 401)
+@_agent_authed
+def agent_copy(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
-    rel_from = body.get('from')
-    rel_to = body.get('to')
-    src = _safe_rel_path(pdir, rel_from) if rel_from else None
-    dst = _safe_rel_path(pdir, rel_to) if rel_to else None
-    if not src or not dst:
-        return _agent_error('Invalid from/to path.')
-    if not os.path.exists(src):
-        return _agent_error('Source not found.', 404)
+    src, dst, rel_from, rel_to, err = _resolve_move_copy_paths(pdir, body)
+    if err: return err
     if src == dst:
         return _agent_error('Source and destination are the same path.')
     # A folder can't be copied into its own subtree (mirrors the "..\ nested
@@ -1049,14 +1040,8 @@ def agent_copy(pid):
     else:
         if os.path.getsize(src) > MAX_AGENT_FILE_SIZE:
             return _agent_error('File too large (>5 MB).', 413)
-    if os.path.exists(dst):
-        if not bool(body.get('overwrite')):
-            return _agent_error('Destination already exists (set overwrite to replace it).', 409)
-        with _store_lock:
-            if os.path.isdir(dst) and not os.path.islink(dst):
-                shutil.rmtree(dst, ignore_errors=True)
-            else:
-                os.remove(dst)
+    err = _clear_destination_if_exists(dst, bool(body.get('overwrite')))
+    if err: return err
     with _store_lock:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         if os.path.isdir(src):
@@ -1162,31 +1147,10 @@ import hashlib as _hashlib
 def _load_kb_registry(sess):
     """Read+decrypt this account's knowledge-base registry. Same shape/
     pattern as _load_agent_registry() above."""
-    fpath = _key_path(sess['accountId'], 'kb_registry')
-    if not fpath or not os.path.isfile(fpath):
-        return {'knowledgeBases': []}
-    with _store_lock:
-        with open(fpath, 'r', encoding='utf-8') as f:
-            raw = f.read()
-    try:
-        blob = json.loads(raw) if raw else None
-    except ValueError:
-        blob = None
-    if not blob:
-        return {'knowledgeBases': []}
-    data = _agent_decrypt(sess['key'], blob)
-    if not isinstance(data.get('knowledgeBases'), list):
-        data['knowledgeBases'] = []
-    return data
+    return _load_encrypted_registry(sess, 'kb_registry', 'knowledgeBases')
 
 def _save_kb_registry(sess, data):
-    fpath = _key_path(sess['accountId'], 'kb_registry')
-    if not fpath:
-        return
-    os.makedirs(os.path.dirname(fpath), exist_ok=True)
-    blob = _agent_encrypt(sess['key'], data)
-    with _store_lock:
-        _atomic_write(fpath, json.dumps(blob).encode('utf-8'))
+    _save_encrypted_registry(sess, 'kb_registry', data)
 
 def _kb_validate_file_list(raw_paths):
     """Validates a list of absolute file paths for KB use (exists, is a
@@ -1572,11 +1536,10 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
     except Exception as e:
         progress.update({'status': 'error', 'error': str(e)})
 
-def _kb_error(msg, status=400):
-    return Response(json.dumps({'error': msg}), status, content_type='application/json')
-
-def _kb_ok(payload=None, status=200):
-    return Response(json.dumps(payload if payload is not None else {'ok': True}), status, content_type='application/json')
+# Same shape as _agent_error/_agent_ok above - kept as separate names for
+# readability in /kb/* routes, but same implementation.
+_kb_error = _agent_error
+_kb_ok = _agent_ok
 
 # Every /kb/* view used to repeat the same five lines by hand (OPTIONS
 # preflight, session check, kb_id format check). This decorator does it
@@ -1586,11 +1549,8 @@ def _kb_ok(payload=None, status=200):
 def _kb_route(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if request.method == 'OPTIONS':
-            return Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
-        sess = _agent_session_or_401()
-        if not sess:
-            return _kb_error('Session expired - please log in again.', 401)
+        sess, err = _require_unlocked_session(_kb_error)
+        if err: return err
         kb_id = kwargs.get('kb_id')
         if kb_id is not None and not _SAFE_KB_ID_RE.match(kb_id):
             return _kb_error('Invalid id.', 400)
@@ -2557,7 +2517,7 @@ if __name__ == '__main__':
         print('[ERROR] waitress not installed. Run: pip install waitress')
         sys.exit(1)
 
-    W = 72   # Frame len
+    W = 89   # Frame len
     IW = W - 4  # Inner frame content width (68) — muss zur Randbreite von 6 passen
 
     def line(text=''):

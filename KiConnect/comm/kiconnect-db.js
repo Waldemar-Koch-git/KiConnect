@@ -1,34 +1,16 @@
-// ================================================================
-// kiconnect-db.js – Knowledge base / RAG module
-// Self-contained bolt-on module (same pattern as kiconnect-agent.js /
-// kiconnect-voice.js): pure API client for the /kb/* endpoints on the
-// local proxy (kiconnect-proxy.py) plus its own composer UI, built and
-// wired at runtime so kiconnect.html/kiconnect.js need only the tiny,
-// explicit extension points documented at the bottom of this file
-// (window.kbRetrieveForQuery / window.buildKbAugmentedContent /
-// window.buildKbSourcesRow), same pattern kiconnect.js already uses for
-// web search (buildWebAugmentedContent/_webSources).
+// kiconnect-db.js – Knowledge base / RAG module. Self-contained bolt-on
+// (like kiconnect-agent.js/kiconnect-voice.js): API client for /kb/*
+// on the local proxy plus its own composer UI, exposing only
+// window.kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow
+// to kiconnect.js (same pattern as web search's buildWebAugmentedContent).
 //
-// Reuses the Agent session (agentSessionHeader() from kiconnect.js) for
-// auth instead of a third independent unlock — the KB feature needs
-// exactly the same "reference a local folder, keep it encrypted at
-// rest" capability the coding-agent project registry already has (see
-// kiconnect-rag-spec.md section 2). Nothing here is tied to any single
-// specific local tool — the embedding provider is a plain
-// OpenAI-compatible base URL + model name, configured per knowledge
-// base, so anything speaking that format works (LM Studio, Ollama,
-// vLLM, AnythingLLM's built-in server, text-generation-webui, or any
-// hosted embeddings API). No tool-specific defaults (ports, model
-// names, ...) are assumed anywhere in this file.
+// Auth reuses the Agent session (agentSessionHeader()) instead of a
+// separate unlock. Embedding provider is any OpenAI-compatible base
+// URL + model name - no tool-specific defaults assumed.
 //
-// UI placement: the composer button lives right next to the
-// project/agent context chip (#agentContextBar, injected by
-// kiconnect-agent.js) rather than among the attachment icons — a
-// knowledge base is conceptually closer to "which project/context is
-// this chat working in" than to "attach a file". Falls back to the end
-// of the composer's action row if kiconnect-agent.js isn't loaded, so
-// this module still works standalone.
-// ================================================================
+// UI: composer button sits next to the agent context chip
+// (#agentContextBar), falling back to the action row's end if
+// kiconnect-agent.js isn't loaded (module still works standalone).
 
 (function () {
   'use strict';

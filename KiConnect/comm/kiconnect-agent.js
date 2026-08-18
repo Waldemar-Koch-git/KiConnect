@@ -334,28 +334,33 @@
   function encPath(p) {
     return String(p).replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/');
   }
+  // Shared body for all agentFetch()-based JSON calls below: parses the
+  // response and, on a non-ok status, either throws (throwOnError=true)
+  // or returns { error } (used by tool-facing calls, which report
+  // failures back to the model instead of raising).
+  async function agentJson(url, opts, throwOnError) {
+    const res = await agentFetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data.error || `HTTP ${res.status}`;
+      if (throwOnError) throw new Error(msg);
+      return { error: msg };
+    }
+    return data;
+  }
   async function apiListProjects() {
     const res = await agentFetch('/agent/projects');
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     return (await res.json()).projects || [];
   }
   async function apiBrowse(path) {
-    const res = await agentFetch('/agent/browse' + (path ? `?path=${encodeURIComponent(path)}` : ''));
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    return agentJson('/agent/browse' + (path ? `?path=${encodeURIComponent(path)}` : ''), undefined, true);
   }
   async function apiCreateProject(name, path, create) {
-    const res = await agentFetch('/agent/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, path, create: !!create }) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    return agentJson('/agent/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, path, create: !!create }) }, true);
   }
   async function apiDeleteProject(projectId) {
-    const res = await agentFetch(`/agent/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    return agentJson(`/agent/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' }, true);
   }
   async function apiTree(project) {
     const res = await agentFetch(`/agent/tree/${encodeURIComponent(project)}`);
@@ -368,10 +373,7 @@
     if (opts.regex) params.set('regex', '1');
     if (opts.caseSensitive) params.set('case', '1');
     if (opts.path) params.set('path', opts.path);
-    const res = await agentFetch(`/agent/search/${encodeURIComponent(project)}?${params.toString()}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    return agentJson(`/agent/search/${encodeURIComponent(project)}?${params.toString()}`, undefined, false);
   }
   // Base64 -> ArrayBuffer, for turning the backend's content_b64 (binary
   // files, see agent_file() in kiconnect-proxy.py) into something pdf.js
@@ -412,92 +414,57 @@
     return data;
   }
   async function apiWriteFile(project, path, content, createOnly) {
-    const res = await agentFetch(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`, {
+    return agentJson(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content, createOnly: !!createOnly }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    }, false);
   }
   async function apiDeleteFile(project, path) {
-    const res = await agentFetch(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    return agentJson(`/agent/file/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'DELETE' }, false);
   }
   async function apiMkdir(project, path) {
-    const res = await agentFetch(`/agent/dir/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'POST' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    return agentJson(`/agent/dir/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'POST' }, false);
   }
   async function apiRmdir(project, path) {
-    const res = await agentFetch(`/agent/dir/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    return agentJson(`/agent/dir/${encodeURIComponent(project)}/${encPath(path)}`, { method: 'DELETE' }, false);
   }
   // Moves/renames a file or folder server-side — no content ever passes
   // through the model's context, unlike a read+create+delete round trip.
   async function apiMove(project, from, to, overwrite) {
-    const res = await agentFetch(`/agent/move/${encodeURIComponent(project)}`, {
+    return agentJson(`/agent/move/${encodeURIComponent(project)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to, overwrite: !!overwrite }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    }, false);
   }
-  // Copies a file or folder server-side (recursively for folders) — no
-  // content ever passes through the model's context, unlike a
-  // read+create round trip, and — unlike apiMove — the original at
-  // `from` is left untouched. Requires a matching /agent/copy/<project>
-  // route on the local proxy (kiconnect-proxy.py); see that file for the
-  // handler paired with this call (same shape as the existing move route,
-  // just copying instead of renaming on disk, e.g. shutil.copy2 /
-  // shutil.copytree in Python, recursive so it works for folders too).
+  // Copies a file or folder server-side (recursively for folders) —
+  // unlike apiMove, the original at `from` is left untouched. Requires
+  // a matching /agent/copy/<project> route in kiconnect-proxy.py.
   async function apiCopy(project, from, to, overwrite) {
-    const res = await agentFetch(`/agent/copy/${encodeURIComponent(project)}`, {
+    return agentJson(`/agent/copy/${encodeURIComponent(project)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to, overwrite: !!overwrite }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    }, false);
   }
   // Runs a shell command in the project folder via the proxy's sandboxed
-  // /agent/exec/<id> endpoint (see kiconnect-proxy.py for the actual
-  // sandboxing: resource limits, minimal env, best-effort network
-  // isolation). Only reachable when the project has shell execution
-  // enabled — the backend re-checks that flag independently either way.
+  // /agent/exec/<id> endpoint. Only reachable when the project has shell
+  // execution enabled — the backend re-checks that flag independently.
   async function apiExec(project, command, cwd) {
-    const res = await agentFetch(`/agent/exec/${encodeURIComponent(project)}`, {
+    return agentJson(`/agent/exec/${encodeURIComponent(project)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command, cwd }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: data.error || `HTTP ${res.status}` };
-    return data;
+    }, false);
   }
   async function apiSetShellEnabled(project, enabled) {
-    const res = await agentFetch(`/agent/projects/${encodeURIComponent(project)}/shell`, {
+    return agentJson(`/agent/projects/${encodeURIComponent(project)}/shell`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!enabled }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    }, true);
   }
-  // Re-points an already-registered project at a different real folder
-  // (see agentSetProjectPath() below for the UI side) — lets the target
-  // folder be changed after creation instead of only being settable once
-  // when the project was first registered.
+  // Re-points an already-registered project at a different real folder,
+  // letting the target folder change after creation instead of only
+  // being settable once at first registration.
   async function apiSetProjectPath(project, path, create) {
-    const res = await agentFetch(`/agent/projects/${encodeURIComponent(project)}/path`, {
+    return agentJson(`/agent/projects/${encodeURIComponent(project)}/path`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, create: !!create }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    }, true);
   }
 
   // Minimal glob matcher for list_files' `pattern` filter: "*" matches
@@ -1129,6 +1096,17 @@
     return null;
   }
   function safeParseJson(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
+  // Shared ❌/🧪/🚫 status line for a tool result, used by several
+  // buildToolBody() branches below (write/edit/move/copy/delete/...).
+  // Returns null when none of these apply, e.g. plain success without
+  // a warning, so callers can append their own success line instead.
+  function resultStatusLine(result) {
+    if (!result) return null;
+    if (result.error) return `❌ ${result.error}`;
+    if (result.simulated) return `🧪 ${result.message}`;
+    if (result.rejected) return `🚫 ${result.message}`;
+    return null;
+  }
 
   // ── Rendering a run as collapsed <details> cards inside a chat bubble ──
   // (formatText() — the app's own markdown/code/DOMPurify pipeline — is
@@ -1233,9 +1211,8 @@
       const preview = content.length > 3000 ? content.slice(0, 3000) + truncNote() : content;
       lines.push('```' + lang); lines.push(preview); lines.push('```');
       if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
+        const status = resultStatusLine(result);
+        if (status) lines.push(status);
         else if (typeof result.bytes === 'number') lines.push(`✅ ${tf('agent.bytesSaved', { bytes: result.bytes })}`);
         if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
       }
@@ -1248,9 +1225,8 @@
         lines.push('```');
       });
       if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
+        const status = resultStatusLine(result);
+        if (status) lines.push(status);
         else if (typeof result.bytes === 'number') lines.push(`✅ ${tf('agent.bytesSaved', { bytes: result.bytes })}`);
       }
     } else if (name === 'replace_in_files') {
@@ -1264,63 +1240,28 @@
         else if (typeof it.occurrences === 'number' && it.occurrences) mark = `✅ ${tf('agent.nOccurrences', { n: it.occurrences })}`;
         lines.push(`- \`${esc(it.path)}\` ${mark}`);
       });
-    } else if (name === 'move_file') {
+    } else if (name === 'move_file' || name === 'copy_file' || name === 'delete_file' || name === 'delete_directory' || name === 'create_directory') {
       if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
-        else lines.push(`✅ ${t('agent.done', 'done.')}`);
+        lines.push(resultStatusLine(result) || `✅ ${t('agent.done', 'done.')}`);
         if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
       }
-    } else if (name === 'copy_file') {
-      if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
-        else lines.push(`✅ ${t('agent.done', 'done.')}`);
-        if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
-      }
-    } else if (name === 'copy_files') {
+    } else if (name === 'copy_files' || name === 'write_files' || name === 'delete_files' || name === 'create_directories' || name === 'delete_directories') {
       const items = (result && Array.isArray(result.files)) ? result.files : [];
       if (!items.length && result && result.error) lines.push(`❌ ${result.error}`);
       items.forEach(it => {
-        let mark = '✅';
-        if (it.error) mark = `❌ ${it.error}`;
-        else if (it.simulated) mark = `🧪 ${it.message}`;
-        else if (it.rejected) mark = `🚫 ${it.message}`;
-        if (it.warning) mark += ` ⚠️ ${esc(it.warning)}`;
-        lines.push(`- \`${esc(it.path)}\` ${mark}`);
-      });
-    } else if (name === 'write_files' || name === 'delete_files' || name === 'create_directories' || name === 'delete_directories') {
-      const items = (result && Array.isArray(result.files)) ? result.files : [];
-      if (!items.length && result && result.error) lines.push(`❌ ${result.error}`);
-      items.forEach(it => {
-        let mark = '✅';
-        if (it.error) mark = `❌ ${it.error}`;
-        else if (it.simulated) mark = `🧪 ${it.message}`;
-        else if (it.rejected) mark = `🚫 ${it.message}`;
-        if (it.warning) mark += ` ⚠️ ${esc(it.warning)}`;
-        lines.push(`- \`${esc(it.path)}\` ${mark}`);
+        const mark = resultStatusLine(it) || '✅';
+        lines.push(`- \`${esc(it.path)}\`${it.warning ? ` ${mark} ⚠️ ${esc(it.warning)}` : ` ${mark}`}`);
       });
     } else if (name === 'run_command') {
       lines.push('```bash'); lines.push(args.command || ''); lines.push('```');
       if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
+        const status = resultStatusLine(result);
+        if (status) lines.push(status);
         else {
           lines.push(`**${t('agent.exitCode', 'exit code')}:** ${result.exitCode ?? '—'}` + (result.timedOut ? ` ⏱ ${t('agent.timedOut', 'timed out')}` : ''));
           if (result.stdout) { lines.push('```text'); lines.push(result.stdout.length > 3000 ? result.stdout.slice(0, 3000) + truncNote() : result.stdout); lines.push('```'); }
           if (result.stderr) { lines.push('```text'); lines.push(result.stderr.length > 2000 ? result.stderr.slice(0, 2000) + truncNote() : result.stderr); lines.push('```'); }
         }
-      }
-    } else if (name === 'delete_file' || name === 'delete_directory' || name === 'create_directory') {
-      if (result) {
-        if (result.error) lines.push(`❌ ${result.error}`);
-        else if (result.simulated) lines.push(`🧪 ${result.message}`);
-        else if (result.rejected) lines.push(`🚫 ${result.message}`);
-        else lines.push(`✅ ${t('agent.done', 'done.')}`);
-        if (result.warning) lines.push(`⚠️ ${esc(result.warning)}`);
       }
     }
     return lines.join('\n');

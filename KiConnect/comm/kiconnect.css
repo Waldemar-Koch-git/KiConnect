@@ -573,17 +573,6 @@ header {
 }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-/* profile-badge is no longer rendered in header – kept for compat */
-.profile-badge { display: none; }
-.settings-btn {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  padding: 7px 10px; border-radius: 8px;
-  cursor: pointer; font-size: 16px; transition: all 0.2s;
-}
-.settings-btn:hover { color: var(--text); border-color: var(--accent); }
-
 /* Hidden native select (data store for custom dropdown) */
 .model-select { display: none; }
 
@@ -657,20 +646,6 @@ header {
 }
 
 
-/* ── Profile badge ───────────────────────────────────────────────── */
-
-.profile-badge {
-  display: flex; align-items: center; gap: 6px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 5px 10px;
-  font-size: 12px; font-family: 'IBM Plex Mono', monospace;
-  cursor: pointer; transition: all 0.2s;
-}
-.profile-badge:hover { border-color: var(--accent); }
-.profile-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-
 
 /* ── Language switcher ───────────────────────────────────────────── */
 
@@ -742,16 +717,6 @@ header {
   font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--accent2);
   min-width: 52px; text-align: right;
 }
-.thinking-badge {
-  display: inline-block;
-  background: rgba(124, 92, 252, 0.15);
-  border: 1px solid var(--accent2);
-  color: var(--accent2);
-  font-size: 10px; font-family: 'IBM Plex Mono', monospace;
-  padding: 1px 6px; border-radius: 20px;
-  margin-left: 4px; vertical-align: middle;
-}
-
 
 /* ── Overlay ─────────────────────────────────────────────────────── */
 
@@ -2187,67 +2152,6 @@ textarea::placeholder { color: var(--muted); }
   color: var(--muted);
   font-family: 'IBM Plex Mono', monospace;
   white-space: nowrap;
-}
-
-/* Intro panel */
-.intro-lead {
-  font-size: 12px;
-  color: var(--muted);
-  line-height: 1.5;
-  margin-bottom: 14px;
-}
-.intro-status {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-}
-.intro-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.intro-step {
-  display: grid;
-  grid-template-columns: 24px 1fr;
-  gap: 10px;
-  align-items: start;
-}
-.intro-step-num {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--accent);
-  color: white;
-  font-size: 12px;
-  font-weight: 700;
-}
-.intro-step-title {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-  margin-bottom: 2px;
-}
-.intro-step-text {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-.intro-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-}
-.intro-actions .ghost-btn,
-.intro-actions .save-btn {
-  margin: 0;
-  flex: 1;
 }
 
 /* Guided setup tour */
