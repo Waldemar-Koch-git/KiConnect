@@ -50,6 +50,8 @@
     'agent.shellWarning': 'Enable shell commands for "{name}"?\n\nThe agent will then be able to run arbitrary terminal commands in the project folder (e.g. install packages, run tests, delete files outside the project). This runs with the same permissions as the local KI Connect server on your machine — there is no real sandbox, only the project folder as the working directory.\n\nOnly proceed if you trust this project.',
     'agent.compactedNote': 'Older tool result cleared to save tokens',
     'agent.compactedHint': 'Call the same tool again with the same arguments if you still need this content — the underlying file/data on disk is unchanged, only this copy was removed from the conversation.',
+    'agent.editNofM': 'Edit {n}/{total}',
+    'agent.unchangedLines': '{n} unchanged lines',
   };
   // Like t(), but substitutes {placeholder} vars; prefers the host app's tf().
   function tf(key, vars) {
@@ -85,8 +87,17 @@
   let settings = { autonomy: 'confirm', ...loadSettings() };
 
   // ── Runtime state ────────────────────────────────────────────────
-  let running = false;
-  let abortController = null;
+  // There's no single global `running`/`abortController` pair — instead
+  // kiconnect.js's isChatStreaming(chatId)/runsForChat(chatId) read the SAME
+  // activeRuns registry this module already writes into (kind:'agent').
+  // That's what lets two different project chats each run their own agent
+  // turn at the same time. `pendingConfirm`/the confirm bar stay a single
+  // global for now: only one confirmation prompt can be on screen at once
+  // regardless of how many chats are running, so if two project chats both
+  // hit a confirm-required tool call simultaneously, the second one waits
+  // behind the first's confirm bar rather than showing its own. Known
+  // limitation — flagged here rather than silently accepted; would need a
+  // per-chat confirm queue/UI to fix properly.
   let pendingConfirm = null;
 
   const MAX_ITERATIONS = 200;
@@ -458,6 +469,23 @@
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!enabled }),
     }, true);
   }
+  async function apiSetCheckpointsEnabled(project, enabled) {
+    return agentJson(`/agent/projects/${encodeURIComponent(project)}/checkpoints`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!enabled }),
+    }, true);
+  }
+  // Stages+commits whatever changed in the project folder since the last
+  // checkpoint, via the project's own (or freshly created) git repo. Called
+  // once right before a mutating tool actually runs (see executeTool()
+  // below) — never awaited to the point of blocking the tool on failure,
+  // since a missing safety net should never itself stop the agent from
+  // doing its job. `throwOnError=false` so a failed/unavailable git is
+  // just a quiet {error} the caller can choose to surface once.
+  async function apiCheckpoint(project, message) {
+    return agentJson(`/agent/checkpoint/${encodeURIComponent(project)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }),
+    }, false);
+  }
   // Re-points an already-registered project at a different real folder,
   // letting the target folder change after creation instead of only
   // being settable once at first registration.
@@ -596,8 +624,53 @@
     return { files: results };
   }
 
+  // ── Read cache (scoped to a single agent turn) ──────────────────────
+  // A tool loop commonly does search_in_files -> read_file on the same
+  // path, or reads the same file more than once within one turn (e.g.
+  // edit_file re-reading before applying, right after read_file already
+  // fetched it). Without this, every one of those re-reads the file from
+  // disk via a fresh HTTP round trip AND pumps its full content into the
+  // model's context a second time. Cleared at the start of every turn (see
+  // runAgentCompletion) and entirely flushed before any mutating tool call
+  // (see MUTATING_TOOL_NAMES below) — coarse (a write to one file drops
+  // cached reads of every file, not just that one) but simple and never
+  // risks serving stale content within a turn.
+  const _readFileCache = new Map(); // `${project}::${path}` -> apiReadFile() result
+  async function cachedReadFile(project, path) {
+    const key = `${project}::${path}`;
+    if (_readFileCache.has(key)) return _readFileCache.get(key);
+    const res = await apiReadFile(project, path);
+    // Don't cache errors — e.g. a 404 right after create_file shouldn't
+    // stick around and mask a file that shows up moments later.
+    if (res && !res.error) _readFileCache.set(key, res);
+    return res;
+  }
+
+  // ── Git checkpoints (opt-in per project, see agentCheckpointsEnabled) ──
+  // Every tool that can change something on disk — used to gate the
+  // pre-mutation apiCheckpoint() call in executeTool() below. Deliberately
+  // excludes create_file/create_directory(ies): those can only add
+  // something new, never destroy existing content, so there's nothing a
+  // checkpoint would protect there.
+  const MUTATING_TOOL_NAMES = new Set([
+    'write_file', 'write_files', 'edit_file', 'delete_file', 'delete_files',
+    'move_file', 'copy_file', 'copy_files', 'replace_in_files', 'delete_directory', 'delete_directories',
+  ]);
+  const _checkpointWarned = new Set(); // project ids already warned about missing git this session
+  function projectCheckpointsEnabled(projectId) {
+    const f = folders.find(x => x.agentProject === projectId);
+    return !!(f && f.agentCheckpointsEnabled);
+  }
+  function checkpointMessage(name, args) {
+    return `Agent: ${compactToolCallLabel(name, args)}`.slice(0, 200);
+  }
+
   // ── Tool execution (respects autonomy mode) ────────────────────────
-  async function executeTool(name, args, project, autonomy, step) {
+  // `run` is the specific RunState this tool call belongs to — threaded
+  // through so the confirm-bar rerender below updates THIS run's live
+  // bubble even while a different project chat's agent run is also in
+  // flight, instead of falling back to "whatever chat is on screen".
+  async function executeTool(name, args, project, autonomy, step, run) {
     if (name === 'list_files') {
       const data = await apiTree(project);
       const prefix = (args.path || '').replace(/\\/g, '/').replace(/\/+$/, '');
@@ -614,7 +687,7 @@
     }
     if (name === 'read_file') {
       if (!args.path) return { error: t('agent.err.missingPath', 'missing path') };
-      const res = await apiReadFile(project, args.path);
+      const res = await cachedReadFile(project, args.path);
       if (res.error || res.binary || typeof res.content !== 'string') return res;
       if (args.startLine || args.endLine) {
         const lines = res.content.split('\n');
@@ -628,7 +701,7 @@
       const paths = Array.isArray(args.paths) ? args.paths : [];
       if (!paths.length) return { error: t('agent.err.missingPaths', 'missing paths') };
       const files = [];
-      for (const p of paths) files.push({ path: p, ...(await apiReadFile(project, p)) });
+      for (const p of paths) files.push({ path: p, ...(await cachedReadFile(project, p)) });
       return { files };
     }
     if (name === 'web_search') {
@@ -670,7 +743,7 @@
 
     if (autonomy === 'confirm' || riskWarning) {
       step.status = 'pending';
-      rerenderCurrentRun();
+      rerenderCurrentRun(run);
       const ok = await waitForConfirmationBar(step);
       if (!ok) return { rejected: true, message: t('agent.err.rejectedByUser', 'Rejected by user — no change made.') };
     }
@@ -697,6 +770,28 @@
         return { files: list.map(p => ({ path: p, simulated: true, message: tf(BATCH_ITEM_KEY[name], { path: p, len: 0 }) })) };
       }
     }
+
+    // Real (non-simulated) mutation is about to happen — take a git
+    // checkpoint first if this project has them enabled, so the change
+    // that's about to be made is always recoverable via `git log`/`git
+    // revert` in the project folder, not just via the model's own good
+    // behavior. Fire-and-forget in spirit: a failed/unavailable git NEVER
+    // blocks the actual tool call (see _git_checkpoint() in the proxy),
+    // it's just surfaced once per project per session so the user knows
+    // the safety net isn't there, instead of silently doing nothing forever.
+    if (MUTATING_TOOL_NAMES.has(name) && project && projectCheckpointsEnabled(project)) {
+      try {
+        const cp = await apiCheckpoint(project, checkpointMessage(name, args));
+        if (cp && cp.error === undefined && cp.ok === false && cp.reason === 'git-not-installed' && !_checkpointWarned.has(project)) {
+          _checkpointWarned.add(project);
+          showToast(t('agent.checkpointNoGit', '⚠️ Checkpoints are on for this project, but git isn\'t installed on the server — changes won\'t be recoverable this way.'));
+        }
+      } catch (e) { /* best-effort only, never blocks the actual tool call */ }
+    }
+    // Any mutation invalidates the whole read cache above — coarser than
+    // per-path, but simple and guarantees the next read_file/read_files
+    // never serves stale pre-edit content within this turn.
+    if (MUTATING_TOOL_NAMES.has(name)) _readFileCache.clear();
 
     if (name === 'create_file') return withNestWarning(args.path, await apiWriteFile(project, args.path, args.content ?? '', true));
     if (name === 'write_file') return mergeWarnings(withNestWarning(args.path, await apiWriteFile(project, args.path, args.content ?? '', false)), riskWarning);
@@ -781,8 +876,14 @@
     if (bar) bar.style.display = 'none';
     if (pendingConfirm) { pendingConfirm.resolve(false); pendingConfirm = null; }
   }
-  function stopAgent() {
-    if (abortController) abortController.abort();
+  // Stops the agent run for one chat (defaults to whichever chat is on
+  // screen) — mirrors kiconnect.js's stopStreaming(chatId). Reuses the same
+  // activeRuns registry stopStreaming already knows how to abort, so this
+  // is really just "stopStreaming, plus also close the confirm bar if it
+  // happened to belong to the run being stopped".
+  function stopAgent(chatId) {
+    chatId = chatId || currentChatId;
+    stopStreaming(chatId);
     hideConfirmBar();
   }
 
@@ -890,12 +991,17 @@
     });
     return out;
   }
-  async function callModel(history, provider, folder, sessionId) {
+  // `signal` is now passed in explicitly by the caller (the run's OWN
+  // AbortController — see runAgentCompletion) instead of read from a shared
+  // module-level `abortController`. With several agent runs able to be in
+  // flight at once (one per project chat), a single shared controller
+  // would abort every chat's request when ANY one of them was stopped —
+  // each run needs its own.
+  async function callModel(history, provider, folder, sessionId, signal) {
     if (!provider) throw new Error(t('agent.noModelHdr', 'Please select an AI/model in the header (top left).'));
     if (!provider.apiKey) throw new Error(t('agent.err.noApiKey', 'The selected provider has no API key.'));
     if (provider.enabled === false) throw new Error(t('agent.err.providerDisabled', 'The selected provider is disabled.'));
     const modelId = splitModelId(config.model).modelId;
-    const signal = abortController ? abortController.signal : undefined;
 
     if (provider.type === 'anthropic') {
       const { system, messages } = toAnthropicHistory(history);
@@ -1113,9 +1219,64 @@
   // reused so this renders identically live and after reload; DOMPurify's
   // config already allows <details>/<summary>, and code fences inside are
   // extracted into the app's normal collapsible/copyable code blocks.)
-  let _liveBubble = null, _liveSteps = null;
-  function rerenderCurrentRun() {
-    if (!_liveBubble || !_liveSteps) return;
+  //
+  // With several project chats able to run an agent turn at the same time,
+  // a single singleton `_currentRunId` would break as soon as a second run
+  // started — whichever run started LAST would silently "steal" every
+  // subsequent rerenderCurrentRun()/updateTokenCounterUI() call from the
+  // other chat's still-running turn (wrong bubble gets updated, or the
+  // right one doesn't). Fixed by threading the specific `run` object
+  // explicitly through runAgentCompletion's loop and executeTool(), instead
+  // of relying on a shared pointer. `_agentRun(chatId)` below is now just a
+  // convenience default for call sites that mean "whichever run belongs to
+  // the chat that's actually on screen right now" (there's still only ever
+  // at most one agent run per chat) — used by the language-retranslate hook
+  // and any other caller that doesn't have a specific `run` handy.
+  function _agentRun(chatId) {
+    chatId = chatId || currentChatId;
+    for (const run of activeRuns.values()) {
+      if (run.chatId === chatId && run.kind === 'agent' && run.status === 'running') return run;
+    }
+    return null;
+  }
+  // Builds a full message row for a still-running agent run being
+  // reattached after a chat switch — same shape as appendEmptyAI() (so it's
+  // visually identical to a row that never lost its DOM node), but the
+  // bubble is pre-filled from run.steps and the token counter (if any usage
+  // has come in yet) from run.usage, instead of starting empty.
+  function _buildAgentRowSkeleton(run) {
+    const row = appendEmptyAI(run.model, run.runId);
+    const bubble = row.querySelector('.bubble');
+    bubble.innerHTML = formatText(renderRunMarkdown(run.steps || [])) || '<p>…</p>';
+    typesetMath(bubble);
+    const bubbleWrap = bubble.parentNode;
+    const tokenEl = document.createElement('div');
+    tokenEl.className = 'agent-token-counter';
+    if (run.usage) {
+      const cached = run.usage.cache_read_input_tokens || 0;
+      let text = `🔢 ${formatTokenCount(run.usage.input_tokens)} in / ${formatTokenCount(run.usage.output_tokens)} out`;
+      if (cached) text += ` (${formatTokenCount(cached)} cached)`;
+      tokenEl.textContent = text;
+    }
+    if (bubbleWrap) bubbleWrap.insertBefore(tokenEl, bubble.nextSibling);
+    return row;
+  }
+  // `run` should almost always be passed explicitly by callers that are
+  // acting on a SPECIFIC run (the tool loop, executeTool — see below) — only
+  // falls back to _agentRun() (the current chat's run) for callers that
+  // genuinely mean "whatever's on screen", like the language-retranslate hook.
+  function rerenderCurrentRun(run) {
+    run = run || _agentRun();
+    if (!run || !run.steps) return;
+    // _runBubbleEl() (from kiconnect.js) returns null whenever this run's
+    // chat isn't the one currently on screen — in that case there's simply
+    // no DOM to update right now; `run.steps` in the registry already has
+    // the latest state, and renderMessages()'s reattach will paint it from
+    // there the moment the user switches back to this chat.
+    const liveRow = _runBubbleEl(run);
+    if (!liveRow) return;
+    const liveBubble = liveRow.querySelector('.bubble');
+    if (!liveBubble) return;
     // formatText() rebuilds the whole trace from scratch on every call (a
     // new/updated step, a status change, ...), which would otherwise wipe
     // out any <details> the user manually expanded/collapsed to follow
@@ -1123,10 +1284,10 @@
     // appended, never reordered or removed, so the Nth <details.agent-trace>
     // before the rebuild is still the Nth one after — capture open states
     // by position and reapply them once the new DOM is in place.
-    const openStates = Array.from(_liveBubble.querySelectorAll('details.agent-trace')).map(d => d.open);
-    _liveBubble.innerHTML = formatText(renderRunMarkdown(_liveSteps)) || '<p>…</p>';
-    _liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
-    typesetMath(_liveBubble);
+    const openStates = Array.from(liveBubble.querySelectorAll('details.agent-trace')).map(d => d.open);
+    liveBubble.innerHTML = formatText(renderRunMarkdown(run.steps)) || '<p>…</p>';
+    liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
+    typesetMath(liveBubble);
     // Only follow the run to the bottom if the user hasn't scrolled away
     // (pinnedToBottom, tracked in kiconnect.js) — e.g. scrolled up to
     // reread an earlier step while later ones are still running.
@@ -1142,6 +1303,72 @@
       return `<details class="agent-trace" data-status="${esc(step.status)}"><summary>${summary}</summary>\n\n${body}\n\n</details>`;
     }).join('\n\n');
   }
+  // Line-level diff between old_str and new_str via classic LCS
+  // backtracking, instead of just prefixing every line of old_str with
+  // '-' and every line of new_str with '+' regardless of overlap. That
+  // naive approach makes EVERY line look changed for the common case of
+  // a small edit inside a large old_str/new_str pair (the model resends
+  // a whole block with one line tweaked), which defeats the point of a
+  // confirm-mode diff preview. Snippets going through edit_file are
+  // small enough that the O(n·m) DP table here is cheap.
+  function _lcsLineDiff(oldLines, newLines) {
+    const n = oldLines.length, m = newLines.length;
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const ops = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (oldLines[i] === newLines[j]) { ops.push({ type: 'eq', text: oldLines[i] }); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ type: 'del', text: oldLines[i] }); i++; }
+      else { ops.push({ type: 'add', text: newLines[j] }); j++; }
+    }
+    while (i < n) { ops.push({ type: 'del', text: oldLines[i] }); i++; }
+    while (j < m) { ops.push({ type: 'add', text: newLines[j] }); j++; }
+    return ops;
+  }
+  // Renders _lcsLineDiff()'s ops as a compact unified-style diff: a run of
+  // unchanged lines keeps up to CONTEXT lines on whichever side(s) border
+  // an actual change and collapses the rest into a "N unchanged lines"
+  // marker — so a one-line change inside a 200-line old_str/new_str pair
+  // shows as a handful of lines, not the whole snippet twice over.
+  function renderUnifiedDiff(oldStr, newStr) {
+    const CONTEXT = 2;
+    const ops = _lcsLineDiff(String(oldStr).split('\n'), String(newStr).split('\n'));
+    const out = [];
+    let i = 0;
+    while (i < ops.length) {
+      if (ops[i].type !== 'eq') {
+        out.push((ops[i].type === 'del' ? '-' : '+') + ops[i].text);
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < ops.length && ops[j].type === 'eq') j++;
+      const run = ops.slice(i, j);
+      const isStart = i === 0, isEnd = j === ops.length;
+      if (isStart && isEnd) {
+        // old_str === new_str line-for-line — no actual change; show as-is.
+        run.forEach(o => out.push(' ' + o.text));
+      } else {
+        const headKeep = isStart ? 0 : Math.min(CONTEXT, run.length);
+        const tailKeep = isEnd ? 0 : Math.min(CONTEXT, run.length);
+        if (headKeep + tailKeep >= run.length) {
+          run.forEach(o => out.push(' ' + o.text));
+        } else {
+          for (let k = 0; k < headKeep; k++) out.push(' ' + run[k].text);
+          out.push(`@@ ${tf('agent.unchangedLines', { n: run.length - headKeep - tailKeep })} @@`);
+          for (let k = run.length - tailKeep; k < run.length; k++) out.push(' ' + run[k].text);
+        }
+      }
+      i = j;
+    }
+    return out.join('\n');
+  }
+
   function buildToolBody(step) {
     const { name, args, result } = step;
     const lines = [];
@@ -1218,10 +1445,10 @@
       }
     } else if (name === 'edit_file') {
       const edits = Array.isArray(args.edits) && args.edits.length ? args.edits : [{ old_str: args.old_str, new_str: args.new_str }];
-      edits.forEach(e => {
+      edits.forEach((e, idx) => {
+        if (edits.length > 1) lines.push(`_${tf('agent.editNofM', { n: idx + 1, total: edits.length })}_`);
         lines.push('```diff');
-        lines.push(`- ${(e.old_str || '').split('\n').join('\n- ')}`);
-        lines.push(`+ ${(e.new_str || '').split('\n').join('\n+ ')}`);
+        lines.push(renderUnifiedDiff(e.old_str || '', e.new_str || ''));
         lines.push('```');
       });
       if (result) {
@@ -1259,12 +1486,32 @@
         if (status) lines.push(status);
         else {
           lines.push(`**${t('agent.exitCode', 'exit code')}:** ${result.exitCode ?? '—'}` + (result.timedOut ? ` ⏱ ${t('agent.timedOut', 'timed out')}` : ''));
+          const sandboxLine = sandboxStatusLine(result);
+          if (sandboxLine) lines.push(sandboxLine);
           if (result.stdout) { lines.push('```text'); lines.push(result.stdout.length > 3000 ? result.stdout.slice(0, 3000) + truncNote() : result.stdout); lines.push('```'); }
           if (result.stderr) { lines.push('```text'); lines.push(result.stderr.length > 2000 ? result.stderr.slice(0, 2000) + truncNote() : result.stderr); lines.push('```'); }
         }
       }
     }
     return lines.join('\n');
+  }
+  // Surfaces the proxy's actual sandboxing state for THIS run (see
+  // 'sandboxed'/'networkIsolated' in agent_exec()'s response,
+  // kiconnect-proxy.py) instead of leaving it invisible. Resource-limit
+  // sandboxing (CPU/memory/process caps) is POSIX-only, so it's silently
+  // absent on Windows; network isolation additionally needs `unshare`,
+  // which isn't always available even on Linux. The per-project shell
+  // warning dialog can't know the server's OS ahead of time, so this is
+  // the one place that reports what actually happened, per command.
+  function sandboxStatusLine(result) {
+    if (typeof result.sandboxed !== 'boolean') return '';
+    if (!result.sandboxed) {
+      return `⚠️ ${t('agent.sandboxWeak', 'Ran WITHOUT resource-limit sandboxing (not supported on this server\'s OS) — full local permissions, no CPU/memory/process caps.')}`;
+    }
+    if (!result.networkIsolated) {
+      return `ℹ️ ${t('agent.sandboxNoNet', 'Ran with resource limits, but without network isolation — this command could still reach the network.')}`;
+    }
+    return `✅ ${t('agent.sandboxFull', 'Ran with resource limits and network isolation.')}`;
   }
 
   // ── Main agent turn — runs inside the normal chat flow ────────────
@@ -1285,9 +1532,11 @@
   }
 
   async function runAgentChatTurn(task, folder, att) {
-    if (running) { showToast(t('agent.stillRunning', 'The agent is still working — please wait or stop it.')); return; }
     let chat = currentChat();
     if (!chat) { newChat(folder.id); chat = currentChat(); }
+    // Per-chat guard: a different project chat already running its own
+    // turn no longer blocks sending in THIS one.
+    if (isChatStreaming(chat.id)) { showToast(t('agent.stillRunning', 'The agent is still working — please wait or stop it.')); return; }
 
     // Snapshot the conversation so far, BEFORE adding the new user message,
     // and turn it into context for the model — this is what was missing:
@@ -1330,7 +1579,7 @@
     const chat = currentChat(); if (!chat) return;
     const folder = folders.find(f => f.id === chat.folderId);
     if (!folder || !folder.agentProject) return false;
-    if (running) { showToast(t('agent.stillRunning', 'The agent is still working — please wait or stop it.')); return true; }
+    if (isChatStreaming(chat.id)) { showToast(t('agent.stillRunning', 'The agent is still working — please wait or stop it.')); return true; }
     const path = getActivePath(chat);
     const msg = path[idx];
     if (!msg || msg.role !== 'assistant') return true;
@@ -1374,23 +1623,64 @@
       showToast(t('agent.noModelHdr', 'Please select an AI/model in the header (top left).'));
       return;
     }
-    running = true;
-    abortController = new AbortController();
-    setComposerRunningUI(true);
 
     // Same model badge as any normal reply — it's literally the same
     // header selection, so this is never out of sync.
-    const aiRow = appendEmptyAI();
-    const bubble = aiRow.querySelector('.bubble');
+    const runId = _makeRunId(chat.id);
     const steps = [];
-    _liveBubble = bubble; _liveSteps = steps;
-    rerenderCurrentRun();
+    // Own AbortController per run (not a shared module-level one) — this
+    // is what lets stopAgent(chatId) cancel one project chat's turn without
+    // touching any other chat's in-flight run.
+    const run = {
+      runId,
+      chatId: chat.id,
+      kind: 'agent',
+      provider: provider.type,
+      model: config.model,       // frozen now, same reasoning as the chat-stream side
+      abortController: new AbortController(),
+      steps,                     // authoritative state — rerenderCurrentRun() reads this,
+                                  // not a separate run.text/thinkingText pair
+      usage: null,
+      status: 'running',
+      bubbleEl: null,
+      // Reattach hook used by kiconnect.js's renderMessages(): builds a
+      // fresh row from `run.steps`/`run.usage` when this chat is switched
+      // back to mid-run, instead of the generic chat-bubble builder (which
+      // knows nothing about tool-call trace cards or the token counter).
+      buildLiveEl: () => _buildAgentRowSkeleton(run),
+    };
+    activeRuns.set(runId, run);
+    // Sidebar live-dot + composer stop button for whichever chat is
+    // actually on screen right now — same choke point kiconnect.js's
+    // _streamAIResponse uses for the chat-stream side, so a background
+    // agent run shows up the same way a background chat stream does.
+    renderSidebar();
+    syncAgentComposerUI();
+
+    const aiRow = appendEmptyAI(config.model, runId);
+    run.bubbleEl = aiRow;
+    const bubble = aiRow.querySelector('.bubble');
+    // Sibling of .bubble inside .bubble-wrap, NOT a child of bubble itself
+    // — rerenderCurrentRun() replaces bubble.innerHTML wholesale on every
+    // step, which would wipe this out immediately if it lived inside.
+    // Starts empty/invisible-by-content and only gets text once the first
+    // usage figures come in (see updateTokenCounterUI in the loop below);
+    // removed again in the `finally` block once the run ends.
+    const bubbleWrap = bubble.parentNode;
+    const liveTokenEl = document.createElement('div');
+    liveTokenEl.className = 'agent-token-counter';
+    if (bubbleWrap) bubbleWrap.insertBefore(liveTokenEl, bubble.nextSibling);
+    rerenderCurrentRun(run);
 
     let history = [
       { role: 'system', text: systemPrompt(folder.name) },
       ...priorHistory,
       Array.isArray(content) ? { role: 'user', text: task, content } : { role: 'user', text: task },
     ];
+    // Fresh per turn — a file read at the start of a brand new user
+    // message shouldn't be served from whatever the agent last saw
+    // several turns ago; only duplicate reads WITHIN this turn are cached.
+    _readFileCache.clear();
 
     let iterations = 0, aborted = false;
     // A single agent "turn" can involve several model calls (one per
@@ -1409,11 +1699,11 @@
         // this never mutates a prefix that caching depends on staying stable.
         if (!KNOWN_CACHING_PROVIDERS.has(provider.type)) compactOldToolResults(history);
         let result;
-        try { result = await callModel(history, provider, folder, chat.id); }
+        try { result = await callModel(history, provider, folder, chat.id, run.abortController.signal); }
         catch (err) {
           if (err.name === 'AbortError') { aborted = true; break; }
           steps.push({ kind: 'text', text: `❌ ${tf('agent.err.modelCallFailed', { error: esc(err.message) })}` });
-          rerenderCurrentRun(); break;
+          rerenderCurrentRun(run); break;
         }
         if (result.usage) {
           sawUsage = true;
@@ -1421,11 +1711,12 @@
           totalUsage.output_tokens += result.usage.output_tokens || 0;
           totalUsage.cache_read_input_tokens += result.usage.cache_read_input_tokens || 0;
           totalUsage.cache_creation_input_tokens += result.usage.cache_creation_input_tokens || 0;
+          updateTokenCounterUI(totalUsage, run);
         }
         const toolCalls = result.toolCalls || [];
         if (result.text) {
           steps.push({ kind: 'text', text: result.text });
-          rerenderCurrentRun();
+          rerenderCurrentRun(run);
         }
         history.push({ role: 'assistant', text: result.text || '', toolCalls });
 
@@ -1433,55 +1724,87 @@
 
         const toolResults = [];
         for (const call of toolCalls) {
-          if (abortController.signal.aborted) { aborted = true; break; }
+          if (run.abortController.signal.aborted) { aborted = true; break; }
           const step = { kind: 'tool', name: call.name, args: call.arguments || {}, status: 'running', result: null };
-          steps.push(step); rerenderCurrentRun();
+          steps.push(step); rerenderCurrentRun(run);
           let result2;
-          try { result2 = await executeTool(call.name, call.arguments || {}, folder.agentProject, folder.agentAutonomy, step); }
+          try { result2 = await executeTool(call.name, call.arguments || {}, folder.agentProject, folder.agentAutonomy, step, run); }
           catch (err) { result2 = { error: err.message }; }
           step.result = result2 || {};
           if (step.result.error) step.status = 'error';
           else if (step.result.simulated) step.status = 'simulated';
           else if (step.result.rejected) step.status = 'rejected';
           else step.status = 'done';
-          rerenderCurrentRun();
+          rerenderCurrentRun(run);
           toolResults.push({ id: call.id, name: call.name, args: call.arguments || {}, result: result2 });
         }
         history.push({ role: 'tool_results', results: toolResults });
         if (aborted) break;
       }
-      if (iterations >= MAX_ITERATIONS) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: MAX_ITERATIONS })}` }); rerenderCurrentRun(); }
-      if (aborted) { steps.push({ kind: 'text', text: `⏹ ${t('agent.aborted', 'Stopped.')}` }); rerenderCurrentRun(); }
+      if (iterations >= MAX_ITERATIONS) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: MAX_ITERATIONS })}` }); rerenderCurrentRun(run); }
+      if (aborted) { steps.push({ kind: 'text', text: `⏹ ${t('agent.aborted', 'Stopped.')}` }); rerenderCurrentRun(run); }
     } finally {
-      bubble.classList.remove('streaming');
+      // Use the run's CURRENT bubble — may have been reattached to a fresh
+      // node if the chat was switched away and back mid-run (see
+      // run.buildLiveEl above), or be null if the chat isn't on screen
+      // right now — never the originally-captured `bubble`/`aiRow` locals,
+      // which may be long detached from the DOM.
+      const finishBubbleRow = _runBubbleEl(run);
+      const finishBubble = finishBubbleRow && finishBubbleRow.querySelector('.bubble');
+      if (finishBubble) finishBubble.classList.remove('streaming');
       const finalMd = renderRunMarkdown(steps);
       // Plain-text version (no tool-call HTML cards) — this is what's fed
       // back as context on the NEXT message in this chat (see
       // extractContextText() above), and also what a future agent run in
       // this chat will "remember" as this turn's reply.
       const contextText = steps.filter(s => s.kind === 'text').map(s => s.text).join('\n\n');
-      const msgObj = { role: 'assistant', content: finalMd, _model: config.model, _agentText: contextText, _agentSteps: steps, _usage: sawUsage ? totalUsage : undefined };
+      // _model uses run.model (frozen at run start), not the live
+      // config.model — same "header changed mid-run" fix as the chat-stream
+      // path (see TODO.md, Abschnitt 0).
+      const msgObj = { role: 'assistant', content: finalMd, _model: run.model, _agentText: contextText, _agentSteps: steps, _usage: sawUsage ? totalUsage : undefined };
       container.push(msgObj);
       save();
+      run.status = 'done';
 
-      // Upgrade the just-finished live bubble into its final interactive
-      // form — same helper the normal streaming path uses, so agent
-      // replies get exactly the same "attachments" under the bubble
-      // (copy/edit/branch/regenerate/print/🔊/delete + note section)
-      // instead of staying a bare, action-less placeholder.
-      const path = getActivePath(chat);
-      const idx = path.length - 1;
-      if (!_finalizeAIRowInPlace(aiRow, path[idx], idx)) {
-        const newRow = buildMsgEl(path[idx], idx);
-        const messagesEl = document.getElementById('messages');
-        if (aiRow && aiRow.parentNode) aiRow.parentNode.replaceChild(newRow, aiRow);
-        else if (messagesEl) appendToMessages(newRow);
+      // Only touch #messages if this chat is still the one on screen — if
+      // the run finished while the user had switched to a different chat,
+      // the finished reply is already saved above and will render normally
+      // (as a plain non-streaming bubble) the next time this chat is
+      // opened. See the matching guard in kiconnect.js's _attachAIActions()
+      // for the chat-stream path.
+      if (chat === currentChat()) {
+        // Upgrade the just-finished live bubble into its final interactive
+        // form — same helper the normal streaming path uses, so agent
+        // replies get exactly the same "attachments" under the bubble
+        // (copy/edit/branch/regenerate/print/🔊/delete + note section)
+        // instead of staying a bare, action-less placeholder.
+        // Drop the live token counter before finalizing — it's a
+        // this-run-only indicator, not part of the saved message, and
+        // _buildBubbleChrome() below isn't guaranteed to clear stray
+        // .bubble-wrap children on its own.
+        const finishTokenEl = finishBubbleRow && finishBubbleRow.querySelector('.agent-token-counter');
+        if (finishTokenEl && finishTokenEl.parentNode) finishTokenEl.parentNode.removeChild(finishTokenEl);
+
+        const path = getActivePath(chat);
+        const idx = path.length - 1;
+        if (!_finalizeAIRowInPlace(finishBubbleRow, path[idx], idx)) {
+          const newRow = buildMsgEl(path[idx], idx);
+          const messagesEl = document.getElementById('messages');
+          if (finishBubbleRow && finishBubbleRow.parentNode) finishBubbleRow.parentNode.replaceChild(newRow, finishBubbleRow);
+          else if (messagesEl) appendToMessages(newRow);
+        }
+        updateChatTokenTotal();
       }
-      updateChatTokenTotal();
 
-      running = false; abortController = null;
-      _liveBubble = null; _liveSteps = null;
-      setComposerRunningUI(false);
+      activeRuns.delete(runId);
+      // Sidebar dot for `chat` disappears now that its run is gone; the
+      // composer stop button only changes if `chat` is still the one on
+      // screen (syncAgentComposerUI reads currentChatId itself).
+      renderSidebar();
+      syncAgentComposerUI();
+      // hideConfirmBar() only matters if THIS run's confirm prompt was the
+      // one showing — see the Phase 2 limitation noted at `pendingConfirm`
+      // above (single shared confirm bar across concurrently-running chats).
       hideConfirmBar();
     }
   }
@@ -1536,7 +1859,7 @@
     if (currentChatId && !chats.some(c => c.id === currentChatId)) {
       currentChatId = chats[0]?.id || null;
       if (currentChatId) renderMessages(currentChat().messages);
-      else { const c = document.getElementById('messages'); c.innerHTML = ''; const e = document.getElementById('emptyState'); if (e) { c.appendChild(e); e.style.display = ''; } }
+      else { const c = document.getElementById('messages'); c.innerHTML = ''; const e = document.getElementById('emptyState'); if (e) { c.appendChild(e); e.style.display = ''; } syncComposerStreamingUI(); }
     }
     save(); renderSidebar();
     showToast(t('agent.projectDeleted', '🗑 Project and its chats removed (files remain on disk).'));
@@ -1561,12 +1884,13 @@
     const s = document.createElement('style');
     s.id = 'kiconnect-agent-styles';
     s.textContent = `
-.agent-context-bar{display:inline-flex;align-items:center;gap:2px;position:relative;padding:3px;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:22px;background:var(--surface2,rgba(128,128,128,.05));}
-.agent-context-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:18px;border:none;background:none;color:var(--muted,#888);font-size:11.5px;cursor:pointer;transition:.15s;max-width:140px;}
+/* Matches the neighboring Knowledge-Base button's height (kiconnect-db.js). */
+.agent-context-bar{display:inline-flex;align-items:center;gap:2px;position:relative;height:44px;box-sizing:border-box;padding:3px;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:22px;background:var(--surface2,rgba(128,128,128,.05));}
+.agent-context-chip{display:inline-flex;align-items:center;gap:5px;height:100%;padding:0 10px;border-radius:18px;border:none;background:none;color:var(--muted,#888);font-size:11.5px;cursor:pointer;transition:.15s;max-width:140px;box-sizing:border-box;}
 .agent-context-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .agent-context-chip:hover{color:var(--text,#eee);}
 .agent-context-chip.agent-focused{color:#fff;background:var(--accent,#3d7eff);font-weight:600;}
-.agent-gear-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);font-size:14px;padding:5px 7px;border-radius:16px;}
+.agent-gear-btn{display:inline-flex;align-items:center;justify-content:center;height:100%;background:none;border:none;cursor:pointer;color:var(--muted,#888);font-size:14px;padding:0 7px;border-radius:16px;box-sizing:border-box;}
 .agent-gear-btn:hover{background:var(--surface2,rgba(128,128,128,.12));color:var(--text,#eee);}
 .agent-context-menu{position:fixed;min-width:220px;max-width:320px;background:var(--surface,#1c1c1e);border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.35);padding:6px;z-index:130;max-height:280px;overflow-y:auto;}
 .agent-header-toggle{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:5px 11px;border-radius:16px;border:1px solid var(--border,rgba(128,128,128,.25));background:none;color:var(--muted,#888);font-size:11.5px;cursor:pointer;max-width:150px;vertical-align:middle;}
@@ -1582,7 +1906,8 @@
 .agent-confirm-bar button{padding:6px 12px;border-radius:7px;border:none;cursor:pointer;font-size:11.5px;font-weight:600;}
 #agentConfirmAccept{background:var(--green,#2ecc71);color:#fff;}
 #agentConfirmReject{background:var(--red,#e74c3c);color:#fff;}
-.agent-stop-btn{padding:5px 10px;margin-left:2px;border-radius:16px;border:1px solid var(--red,#e74c3c);background:none;color:var(--red,#e74c3c);font-size:11px;cursor:pointer;}
+.agent-stop-btn{display:inline-flex;align-items:center;height:100%;padding:0 10px;margin-left:2px;border-radius:16px;border:1px solid var(--red,#e74c3c);background:none;color:var(--red,#e74c3c);font-size:11px;cursor:pointer;box-sizing:border-box;}
+.agent-token-counter{display:block;margin:4px 2px 0;color:var(--muted);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .agent-stop-btn:hover{background:var(--red,#e74c3c);color:#fff;}
 details.agent-trace{border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;padding:6px 10px;margin:6px 0;font-size:12.5px;background:var(--surface2,rgba(128,128,128,.05));}
 details.agent-trace summary{cursor:pointer;list-style:revert;font-family:'IBM Plex Mono',monospace;font-size:12px;}
@@ -1768,10 +2093,53 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       hdrBtn.firstChild.textContent = focused ? '🤖 ' : '📁 ';
       hdrLabel.textContent = focused ? folder.name : t('agent.noProject', 'No project');
     }
+    // Phase 2: stop button also lives here now — always called together
+    // with the chip (renderSidebar's hook below, switchChat/newChat via
+    // that, and runAgentCompletion's start/finish), so both stay in sync.
+    syncAgentComposerUI();
   }
-  function setComposerRunningUI(isRunning) {
+  // Shows/hides the agent stop button based on whether the chat CURRENTLY ON
+  // SCREEN has a running agent turn — replaces the old setComposerRunningUI(),
+  // which just took a plain isRunning boolean because there used to be only
+  // ever one agent run in the whole app. Now a background project chat can
+  // be running its own turn while the visible chat is idle (or running a
+  // DIFFERENT turn) — the button must reflect the latter, not "is anything
+  // running anywhere".
+  function syncAgentComposerUI() {
     const stopBtn = document.getElementById('agentStopBtn');
-    if (stopBtn) stopBtn.style.display = isRunning ? '' : 'none';
+    if (stopBtn) stopBtn.style.display = _agentRun(currentChatId) ? '' : 'none';
+  }
+  // Compact human-readable token count: 850 -> "850", 12400 -> "12.4K",
+  // 3200000 -> "3.2M". Kept local rather than reusing any currency
+  // formatter — this only ever needs to be short and rough, not precise.
+  function formatTokenCount(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+  }
+  // Live running total shown directly under the streaming bubble it
+  // belongs to — not in the composer bar, which can't be tied to a
+  // specific run once more than one message is on screen. Created fresh
+  // per run (see the run.buildLiveEl/liveTokenEl setup in runAgentCompletion) as a sibling of the
+  // bubble inside .bubble-wrap, so bubble.innerHTML resets in
+  // rerenderCurrentRun() never wipe it out. Removed again once the run
+  // finishes (see the `finally` block) — this is a "how much is this
+  // costing right now" indicator, not a permanent record; MAX_ITERATIONS
+  // allows up to 200 model round-trips per turn, and without this the
+  // only way to know a run's actual cost was to inspect network traffic.
+  // `run` should be passed explicitly by the tool loop (see
+  // runAgentCompletion) — same reasoning as rerenderCurrentRun(run) above;
+  // falls back to _agentRun() only for callers that mean "the current chat".
+  function updateTokenCounterUI(usage, run) {
+    run = run || _agentRun();
+    if (run) run.usage = usage; // stored so a reattached bubble can prefill the counter immediately
+    const liveRow = run ? _runBubbleEl(run) : null;
+    const liveTokenEl = liveRow ? liveRow.querySelector('.agent-token-counter') : null;
+    if (!liveTokenEl) return;
+    const cached = usage.cache_read_input_tokens || 0;
+    let text = `🔢 ${formatTokenCount(usage.input_tokens)} in / ${formatTokenCount(usage.output_tokens)} out`;
+    if (cached) text += ` (${formatTokenCount(cached)} cached)`;
+    liveTokenEl.textContent = text;
   }
 
   // ── Settings popover (provider / model / autonomy / manage projects) ──
@@ -1781,10 +2149,10 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     panel.id = 'agentSettingsPanel';
     panel.innerHTML = `
       <div class="agent-settings-title"><span>🤖 <span id="agentSettingsProjectName">${esc(t('agent.settingsTitle', 'Agent Settings'))}</span></span><button class="close-btn" id="agentSettingsClose">✕</button></div>
-      <div class="agent-hint" style="font-size:10.5px;color:var(--muted);margin-bottom:6px;">${esc(t('agent.modelHint', 'The agent always uses the AI selected in the header (top left), including its thinking mode — the same one as in normal chat.'))}</div>
+      <div class="agent-hint" id="agentModelHint" style="font-size:10.5px;color:var(--muted);margin-bottom:6px;">${esc(t('agent.modelHint', 'The agent always uses the AI selected in the header (top left), including its thinking mode — the same one as in normal chat.'))}</div>
       <div id="agentSettingsNoProject" style="font-size:11.5px;color:var(--muted);padding:4px 0 8px;" hidden>${esc(t('agent.pickProjectFirst', 'Select a project below (or create one) to configure its access mode.'))}</div>
       <div id="agentSettingsModelBlock">
-        <div class="setting-label">${esc(t('agent.autonomy', 'Access mode'))}</div>
+        <div class="setting-label" id="agentAutonomyLabel">${esc(t('agent.autonomy', 'Access mode'))}</div>
         <div class="agent-chip-row" id="agentAutonomyRow">
           <div class="agent-chip" data-mode="auto">${esc(t('agent.autoMode', 'Autonomous'))}</div>
           <div class="agent-chip" data-mode="confirm">${esc(t('agent.confirmMode', 'Confirm'))}</div>
@@ -1792,12 +2160,17 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         </div>
         <div class="agent-chip-desc" id="agentAutonomyDesc"></div>
         <div class="setting-label" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;">
-          <span>⚡ ${esc(t('agent.shellLabel', 'Shell commands'))}</span>
+          <span id="agentShellLabel">⚡ ${esc(t('agent.shellLabel', 'Shell commands'))}</span>
           <label class="agent-toggle-switch"><input type="checkbox" id="agentShellToggle"><span class="agent-toggle-slider"></span></label>
         </div>
-        <div class="agent-hint" style="font-size:10px;color:var(--muted);">${esc(t('agent.shellHint', 'Allows the agent to run terminal commands in the project folder (e.g. npm install, tests). Runs with the same permissions as the local server — only enable for trusted projects.'))}</div>
+        <div class="agent-hint" id="agentShellHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.shellHint', 'Allows the agent to run terminal commands in the project folder (e.g. npm install, tests). Runs with the same permissions as the local server — only enable for trusted projects.'))}</div>
+        <div class="setting-label" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;">
+          <span id="agentCheckpointLabel">🕘 ${esc(t('agent.checkpointLabel', 'Git checkpoints'))}</span>
+          <label class="agent-toggle-switch"><input type="checkbox" id="agentCheckpointToggle"><span class="agent-toggle-slider"></span></label>
+        </div>
+        <div class="agent-hint" id="agentCheckpointHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.checkpointHint', 'Before every file change, a git commit is made in the project folder so you can always go back (git log / git revert). Requires git to be installed on the server; creates a repo in the project folder if none exists yet.'))}</div>
       </div>
-      <div class="setting-label" style="margin-top:12px;">${esc(t('agent.projects', 'Projects'))}</div>
+      <div class="setting-label" id="agentProjectsLabel" style="margin-top:12px;">${esc(t('agent.projects', 'Projects'))}</div>
       <div id="agentProjList"></div>
     `;
     document.body.appendChild(panel);
@@ -1823,6 +2196,24 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         folder.agentShellEnabled = box.checked;
         save();
         showToast(box.checked ? t('agent.shellOn', '⚡ Shell commands enabled.') : t('agent.shellOff', 'Shell commands disabled.'));
+      } catch (err) {
+        box.checked = !box.checked;
+        showToast(`❌ ${err.message}`);
+      }
+    });
+    document.getElementById('agentCheckpointToggle').addEventListener('change', async e => {
+      const folder = currentProjectFolder();
+      const box = e.target;
+      if (!folder) { box.checked = false; return; }
+      try {
+        const res = await apiSetCheckpointsEnabled(folder.agentProject, box.checked);
+        folder.agentCheckpointsEnabled = box.checked;
+        save();
+        if (box.checked && res && res.gitAvailable === false) {
+          showToast(t('agent.checkpointNoGit', '⚠️ Checkpoints are on for this project, but git isn\'t installed on the server — changes won\'t be recoverable this way.'));
+        } else {
+          showToast(box.checked ? t('agent.checkpointOn', '🕘 Git checkpoints enabled.') : t('agent.checkpointOff', 'Git checkpoints disabled.'));
+        }
       } catch (err) {
         box.checked = !box.checked;
         showToast(`❌ ${err.message}`);
@@ -2002,6 +2393,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const mode = folder.agentAutonomy;
     const shellToggle = document.getElementById('agentShellToggle');
     if (shellToggle) shellToggle.checked = !!folder.agentShellEnabled;
+    const checkpointToggle = document.getElementById('agentCheckpointToggle');
+    if (checkpointToggle) checkpointToggle.checked = !!folder.agentCheckpointsEnabled;
     document.querySelectorAll('#agentAutonomyRow .agent-chip').forEach(c => c.classList.toggle('selected', c.dataset.mode === mode));
     const d = document.getElementById('agentAutonomyDesc');
     if (d) d.textContent = t('agent.mode.' + mode, AUTONOMY_DESCRIPTIONS[mode] || '');
@@ -2015,12 +2408,14 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       (await apiListProjects()).forEach(p => {
         if (p.missing) missingIds.add(p.id);
         const f = projectFolders.find(x => x.agentProject === p.id);
-        if (f) f.agentShellEnabled = !!p.shell;
+        if (f) { f.agentShellEnabled = !!p.shell; f.agentCheckpointsEnabled = !!p.checkpoints; }
       });
     } catch (e) {}
     const shellToggle = document.getElementById('agentShellToggle');
+    const checkpointToggle = document.getElementById('agentCheckpointToggle');
     const focused = currentProjectFolder();
     if (shellToggle && focused) shellToggle.checked = !!focused.agentShellEnabled;
+    if (checkpointToggle && focused) checkpointToggle.checked = !!focused.agentCheckpointsEnabled;
     list.innerHTML = projectFolders.length ? '' : `<div style="font-size:11px;color:var(--muted);">${esc(t('agent.noProjects', '– no projects –'))}</div>`;
     projectFolders.forEach(f => {
       const missing = missingIds.has(f.agentProject);
@@ -2165,11 +2560,11 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (settingsTitle && !currentProjectFolder()) settingsTitle.textContent = t('agent.settingsTitle', 'Agent Settings');
     const panel = document.getElementById('agentSettingsPanel');
     if (panel) {
-      const modelHint = panel.querySelector('.agent-hint');
+      const modelHint = document.getElementById('agentModelHint');
       if (modelHint) modelHint.textContent = t('agent.modelHint', 'The agent always uses the AI selected in the header (top left), including its thinking mode — the same one as in normal chat.');
       const noProjectEl = document.getElementById('agentSettingsNoProject');
       if (noProjectEl) noProjectEl.textContent = t('agent.pickProjectFirst', 'Select a project below (or create one) to configure its access mode.');
-      const autonomyLabel = panel.querySelector('#agentSettingsModelBlock .setting-label');
+      const autonomyLabel = document.getElementById('agentAutonomyLabel');
       if (autonomyLabel) autonomyLabel.textContent = t('agent.autonomy', 'Access mode');
       const chipAuto = panel.querySelector('.agent-chip[data-mode="auto"]');
       if (chipAuto) chipAuto.textContent = t('agent.autoMode', 'Autonomous');
@@ -2177,11 +2572,15 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       if (chipConfirm) chipConfirm.textContent = t('agent.confirmMode', 'Confirm');
       const chipSimulate = panel.querySelector('.agent-chip[data-mode="simulate"]');
       if (chipSimulate) chipSimulate.textContent = t('agent.simulateMode', 'Simulate');
-      const shellLabel = panel.querySelector('#agentSettingsModelBlock span');
+      const shellLabel = document.getElementById('agentShellLabel');
       if (shellLabel) shellLabel.textContent = '⚡ ' + t('agent.shellLabel', 'Shell commands');
-      const shellHint = panel.querySelectorAll('.agent-hint')[1];
+      const shellHint = document.getElementById('agentShellHint');
       if (shellHint) shellHint.textContent = t('agent.shellHint', 'Allows the agent to run terminal commands in the project folder (e.g. npm install, tests). Runs with the same permissions as the local server — only enable for trusted projects.');
-      const projectsLabel = panel.querySelectorAll('.setting-label')[1];
+      const checkpointLabel = document.getElementById('agentCheckpointLabel');
+      if (checkpointLabel) checkpointLabel.textContent = '🕘 ' + t('agent.checkpointLabel', 'Git checkpoints');
+      const checkpointHint = document.getElementById('agentCheckpointHint');
+      if (checkpointHint) checkpointHint.textContent = t('agent.checkpointHint', 'Before every file change, a git commit is made in the project folder so you can always go back (git log / git revert). Requires git to be installed on the server; creates a repo in the project folder if none exists yet.');
+      const projectsLabel = document.getElementById('agentProjectsLabel');
       if (projectsLabel) projectsLabel.textContent = t('agent.projects', 'Projects');
       if (panel.classList.contains('open')) { renderAutonomyChips(); renderProjectList(); }
     }

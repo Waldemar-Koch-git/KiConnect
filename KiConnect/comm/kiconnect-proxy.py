@@ -548,6 +548,7 @@ def agent_projects(sess):
                 'id': p.get('id'), 'name': p.get('name'), 'path': target,
                 'missing': not (os.path.isdir(target) and not _is_blocked_root(target)),
                 'shell': bool(p.get('shell')),
+                'checkpoints': bool(p.get('checkpoints')),
             })
         return _agent_ok({'projects': projects})
 
@@ -571,6 +572,98 @@ def agent_projects(sess):
         registry['projects'].append({'id': pid, 'name': name, 'path': target, 'shell': False})
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'name': name, 'path': target})
+
+# ── Git checkpointing ────────────────────────────────────────────
+# Best-effort safety net for destructive agent operations (write_file,
+# delete_file(s), edit_file, replace_in_files, move/copy overwrites, ...).
+# When a project has 'checkpoints' enabled, the frontend calls
+# POST /agent/checkpoint/<id> exactly once before each mutating tool call
+# (see apiCheckpoint()/executeTool() in kiconnect-agent.js) — this stages
+# and commits whatever changed on disk SINCE THE LAST CHECKPOINT, using the
+# project folder's own (possibly pre-existing) git repo, or a fresh one
+# created on first use. This is NOT a replacement for the user's own git
+# workflow: it never touches branches, remotes, or existing history, only
+# ever commits to whatever branch is currently checked out, and a failed
+# git operation (not installed, folder not writable, mid-rebase, ...) is
+# swallowed and reported back as {ok:false} rather than blocking the tool
+# call that triggered it — a missing safety net should never itself become
+# a reason the agent can't do its job.
+_git_available_cache = None
+
+def _git_available():
+    global _git_available_cache
+    if _git_available_cache is None:
+        _git_available_cache = shutil.which('git') is not None
+    return _git_available_cache
+
+def _git_checkpoint(pdir, message):
+    """Stages all changes in pdir and commits them as a checkpoint. Never
+    raises. Returns a small status dict the frontend can silently ignore
+    or (on repeated failure) surface once to the user."""
+    if not _git_available():
+        return {'ok': False, 'reason': 'git-not-installed'}
+    import subprocess as _sp
+    try:
+        if not os.path.isdir(os.path.join(pdir, '.git')):
+            _sp.run(['git', 'init', '-q'], cwd=pdir, check=True, capture_output=True, timeout=15)
+            # Local-only identity, scoped to this repo - never touches the
+            # user's own global git config.
+            _sp.run(['git', 'config', 'user.email', 'agent@kiconnect.local'], cwd=pdir, capture_output=True, timeout=10)
+            _sp.run(['git', 'config', 'user.name', 'KI Connect Agent'], cwd=pdir, capture_output=True, timeout=10)
+        _sp.run(['git', 'add', '-A'], cwd=pdir, check=True, capture_output=True, timeout=30)
+        # Nothing staged -> nothing changed since the last checkpoint (or
+        # the very first call on an already-clean folder); not an error.
+        diff = _sp.run(['git', 'diff', '--cached', '--quiet'], cwd=pdir, timeout=30)
+        if diff.returncode == 0:
+            return {'ok': True, 'committed': False}
+        commit = _sp.run(['git', 'commit', '-q', '-m', message or 'Agent checkpoint'],
+                          cwd=pdir, capture_output=True, timeout=30, text=True)
+        if commit.returncode != 0:
+            return {'ok': False, 'reason': (commit.stderr or 'commit failed')[:200]}
+        return {'ok': True, 'committed': True}
+    except Exception as e:
+        return {'ok': False, 'reason': str(e)[:200]}
+
+# ── /agent/projects/<id>/checkpoints - enable/disable git checkpoints ────
+# Off by default, same opt-in pattern as shell execution below. Enabling it
+# does not immediately create a commit - the first checkpoint happens right
+# before the next mutating tool call.
+@app.route('/agent/projects/<pid>/checkpoints', methods=['PUT', 'OPTIONS'])
+@_agent_authed
+def agent_set_checkpoints(sess, pid):
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    enabled = bool(body.get('enabled'))
+    with _store_lock:
+        registry = _load_agent_registry(sess)
+        entry = next((p for p in registry['projects'] if p.get('id') == pid), None)
+        if not entry:
+            return _agent_error('Project not found.', 404)
+        entry['checkpoints'] = enabled
+        _save_agent_registry(sess, registry)
+    return _agent_ok({'id': pid, 'checkpoints': enabled, 'gitAvailable': _git_available()})
+
+# ── /agent/checkpoint/<id> - stage+commit current changes ────────────────
+# Called by the frontend right before a mutating tool call is actually
+# executed (not during simulate mode, and not if checkpoints are off for
+# this project). Re-checks the 'checkpoints' flag server-side rather than
+# trusting the caller, same pattern as the shell 'enabled' re-check below.
+@app.route('/agent/checkpoint/<pid>', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_checkpoint(sess, pid):
+    registry = _load_agent_registry(sess)
+    entry = next((p for p in registry['projects'] if p.get('id') == pid), None)
+    if not entry:
+        return _agent_error('Project not found.', 404)
+    if not entry.get('checkpoints'):
+        return _agent_error('Checkpoints are not enabled for this project.', 403)
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    message = (body.get('message') or 'Agent checkpoint').strip()[:200] or 'Agent checkpoint'
+    return _agent_ok(_git_checkpoint(pdir, message))
 
 # ── /agent/projects/<id>/shell - enable/disable shell command execution ──
 # Kept as its own explicit endpoint (rather than folded into general project

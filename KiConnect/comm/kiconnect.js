@@ -87,6 +87,38 @@ function tf(key, vars) {
   if (vars) Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll(`{${k}}`, v); });
   return s;
 }
+
+// ── Battle-Modus i18n ──────────────────────────────────────────────
+// Same pattern as kiconnect-agent.js's TF_FALLBACKS: new strings go through
+// the normal TRANSLATIONS table when a key exists there, but never show a
+// raw key to the user if kiconnect-languages-i18n.js hasn't been touched —
+// bt()/btf() fall back to this inline English text instead.
+const BATTLE_FALLBACKS = {
+  'battle.toggleTitle': 'Battle mode: let several models answer the same message at once',
+  'battle.toggleLabel': 'Battle',
+  'battle.pickModels': 'Pick 2–4 models to compare',
+  'battle.needTwoModels': 'Pick at least 2 models for a battle.',
+  'battle.tooManyModels': 'Pick at most 4 models — more gets cramped and expensive.',
+  'battle.start': 'Start battle',
+  'battle.cancel': 'Cancel',
+  'battle.chooseWinner': '✓ Use this one',
+  'battle.winnerChosen': 'In use',
+  'battle.defaultBanner': 'No winner chosen yet — "{model}" will be used by default until you pick one.',
+  'battle.pending': 'Waiting…',
+  'battle.generating': 'Generating…',
+  'battle.aborted': '[Generation stopped]',
+  'battle.errorPrefix': 'Error: {e}',
+  'battle.noProviderForModel': 'No working provider/API key configured for this model.',
+  'battle.noModelsSelected': 'No models selected for the battle.',
+  'battle.searchPlaceholder': 'Search models…',
+  'battle.noModelFound': 'No model found',
+};
+function bt(key) { return t(key) === key ? (BATTLE_FALLBACKS[key] || key) : t(key); }
+function btf(key, vars) {
+  let s = bt(key);
+  if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
+  return s;
+}
 // Applies all data-i18n attributes for the current language.
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -134,6 +166,12 @@ function setLang(code) {
   if (typeof window._kicAgentRetranslate === 'function') window._kicAgentRetranslate();
   if (typeof window._kicDbRetranslate === 'function') window._kicDbRetranslate();
   if (typeof renderSidebar === 'function') renderSidebar();
+  // These panels build their content with t() at render time instead of
+  // static data-i18n markup, so re-render them if open.
+  if (document.getElementById('providerPanel')?.classList.contains('open') && typeof renderProviderList === 'function') renderProviderList();
+  if (document.getElementById('profilePanel')?.classList.contains('open') && typeof renderProfileList === 'function') renderProfileList();
+  if (document.getElementById('modelMaxPanel')?.classList.contains('open') && typeof renderModelMaxList === 'function') renderModelMaxList();
+  if (document.getElementById('accountSelectView') && document.getElementById('accountSelectView').style.display !== 'none' && typeof renderAccountGrid === 'function') renderAccountGrid();
   renderLangDropdown();
   // During the tour language step: re-render the tour card in the new language,
   // keep the dropdown open so the checkmark is visible, and unlock the Next button.
@@ -504,9 +542,91 @@ let chats     = [];
 let currentChatId   = null;
 let activeFolderId  = undefined;
 let attachments     = [];
-let isStreaming      = false;
-let abortController = null;
-let activeStreamSnapshot = null;
+
+// ── Run registry (one RunState per in-flight generation) ──
+// Every in-flight generation (chat stream, and — mirrored in
+// kiconnect-agent.js — agent run) gets its own RunState, keyed by a unique
+// runId, instead of a single shared global. This is what lets a streaming
+// answer survive a chat switch: the registry is the source of truth, the
+// DOM bubble is just a projection of it that renderMessages() can
+// rebuild/reattach at any time.
+//
+// RunState shape: { runId, chatId, kind, provider, model, abortController,
+//   text, thinkingText, usage, status, bubbleEl, targetContainer, onDone }
+// `bubbleEl` is the CURRENT live DOM node for this run, or null when the
+// owning chat isn't the one on screen right now — always re-read from the
+// registry, never captured in a closure, so a stale/detached node is never
+// written into.
+const activeRuns = new Map();
+
+// Pure UI state for the composer's model multi-select (Battle-Modus) — not
+// persisted, resets to "off" on reload same as e.g. selectedLinkUrls. When
+// active and >=2 models are picked, sendMessage() calls sendBattleMessage()
+// instead of the normal single-model sendMessageCore().
+let battleModeActive = false;
+let battleSelectedModels = [];
+
+// Builds a reasonably-unique run id. Prefixed with the chat id purely to
+// make runIds readable in the DOM (data-run-id) / devtools; uniqueness comes
+// from the timestamp + random suffix, not the prefix.
+function _makeRunId(chatId) {
+  return `${chatId || currentChatId || 'x'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+// Returns this run's live bubble element, but only if it's actually still
+// attached to the document — i.e. the chat it belongs to is the one
+// currently rendered. Every DOM write during streaming must go through this
+// (never through a captured `aiEl`/`streamEl` local), so that switching away
+// from a chat mid-stream simply stops touching the DOM instead of throwing
+// or writing into a detached node.
+function _runBubbleEl(run) {
+  return (run && run.bubbleEl && run.bubbleEl.isConnected) ? run.bubbleEl : null;
+}
+// Records the latest streamed text/usage for a run so an aborted/backgrounded
+// stream can still be saved (or reattached) with whatever was generated so
+// far, even while its chat isn't on screen. Replaces `_rememberStreamSnapshot`.
+function _updateRunText(runId, text, usageData, thinkingText) {
+  const run = activeRuns.get(runId);
+  if (!run) return;
+  run.text = text || '';
+  if (usageData !== undefined) run.usage = usageData || null;
+  // thinkingText kept separately (not just embedded in `text`'s stored
+  // <thinking> block) so a reattached live bubble can hand it straight to
+  // renderStreamingBubble() without having to re-parse the stored format.
+  if (thinkingText !== undefined) run.thinkingText = thinkingText;
+}
+
+// ── Per-chat streaming state ───────────────────────────────
+// A chat can only ever have one turn running at a time (Battle-Modus's
+// several-variants-for-one-turn is the exception), but DIFFERENT chats can
+// each have their own in-flight run, fully independent of one another.
+// `kind` covers both chat streams and agent runs (kiconnect-agent.js shares
+// this same registry), so this one check works for both without either
+// module needing to know about the other's flag.
+function isChatStreaming(chatId) {
+  if (!chatId) return false;
+  for (const run of activeRuns.values()) {
+    if (run.chatId === chatId && run.status === 'running') return true;
+  }
+  return false;
+}
+// The actual running run(s) for a chat, not just yes/no — used wherever the
+// run itself (its abortController, kind, ...) is needed, e.g. stopStreaming().
+// Normally 0 or 1 entries (see isChatStreaming above); returns an array
+// rather than a single value since Battle-Modus can have several concurrent
+// runs for the SAME chat.
+function runsForChat(chatId) {
+  return [...activeRuns.values()].filter(r => r.chatId === chatId && r.status === 'running');
+}
+// Reflects the composer's send/stop button to whichever chat is CURRENTLY
+// ON SCREEN — never "is anything streaming anywhere in the app", which is
+// what the old single global `isStreaming` amounted to. Call this after
+// anything that can change either: switchChat/newChat/deleteChat, and
+// whenever a run starts or finishes (paralleling the old inline
+// `setSendMode('stop'/'send')` calls, which used to be safe to do
+// unconditionally because there was only ever one stream in the whole app).
+function syncComposerStreamingUI() {
+  setSendMode(isChatStreaming(currentChatId) ? 'stop' : 'send');
+}
 
 // ── Auto-scroll behaviour ───────────────────────────────────────────
 // The list stays pinned to the bottom while streaming unless the user scrolls
@@ -2808,7 +2928,7 @@ function deleteFolder(id) {
   if (currentChatId && !chats.some(c=>c.id===currentChatId)) {
     currentChatId = chats[0]?.id || null;
     if (currentChatId) renderMessages(currentChat().messages);
-    else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} }
+    else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} syncComposerStreamingUI(); }
   }
   save(); renderSidebar();
 }
@@ -2896,7 +3016,7 @@ function deleteChat(id) {
     currentChatId = chats[0]?.id||null;
     activeFolderId = currentChat()?.folderId || null;
     if (currentChatId) renderMessages(currentChat().messages);
-    else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} }
+    else { const c=document.getElementById('messages'); c.innerHTML=''; const e=document.getElementById('emptyState'); if(e){c.appendChild(e);e.style.display='';} syncComposerStreamingUI(); }
   }
   save(); renderSidebar();
 }
@@ -3134,6 +3254,7 @@ function deleteSelectedChats() {
       const empty = document.getElementById('emptyState');
       Array.from(cont.children).forEach(el => { if(el!==empty) el.remove(); });
       if (empty) empty.style.display = '';
+      syncComposerStreamingUI();
     }
   }
   _selectedChatIds.clear();
@@ -3170,7 +3291,7 @@ function renderSidebar() {
     if (!msBar) {
       msBar = document.createElement('div');
       msBar.id = 'multiSelectBar';
-      msBar.style.cssText = 'display:none;align-items:center;gap:4px;padding:4px 6px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0;';
+      msBar.style.cssText = 'display:none;align-items:center;gap:6px;padding:8px 8px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0;';
       actionsEl.parentNode.insertBefore(msBar, actionsEl);
     }
     if (_multiSelectMode) {
@@ -3181,18 +3302,18 @@ function renderSidebar() {
       cancelBtn.className = 'sidebar-action-btn';
       cancelBtn.title = t('js.cancelSelection') || 'Cancel selection';
       cancelBtn.textContent = '✕';
-      cancelBtn.style.cssText = 'flex:0 0 auto;min-width:28px;';
+      cancelBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;';
       cancelBtn.addEventListener('click', exitMultiSelectMode);
       // Count label
       const countLbl = document.createElement('span');
-      countLbl.style.cssText = 'flex:1;font-size:11px;color:var(--muted);font-family:"IBM Plex Mono",monospace;';
+      countLbl.style.cssText = 'flex:1;font-size:12.5px;color:var(--muted);font-family:"IBM Plex Mono",monospace;';
       countLbl.textContent = _selectedChatIds.size > 0 ? tf('js.chosenChats', {n: _selectedChatIds.size}) : (t('js.selectedChats') || 'Selected chats');
       // Select all
       const selAllBtn = document.createElement('button');
       selAllBtn.className = 'sidebar-action-btn';
       selAllBtn.title = t('js.selectAll') || 'Select all';
       selAllBtn.textContent = '☑';
-      selAllBtn.style.cssText = 'flex:0 0 auto;min-width:28px;';
+      selAllBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;';
       selAllBtn.addEventListener('click', () => {
         chats.forEach(c => _selectedChatIds.add(c.id));
         renderSidebar();
@@ -3202,7 +3323,7 @@ function renderSidebar() {
       delBtn.className = 'sidebar-action-btn';
       delBtn.title = t('js.deleteSelectedItems') || 'Delete selected items';
       delBtn.textContent = '🗑';
-      delBtn.style.cssText = 'flex:0 0 auto;min-width:28px;color:var(--red);';
+      delBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;color:var(--red);';
       delBtn.disabled = _selectedChatIds.size === 0;
       delBtn.addEventListener('click', () => {
         if (_selectedChatIds.size === 0) return;
@@ -3428,6 +3549,16 @@ function buildChatItem(c) {
   div.appendChild(cb);
   div.appendChild(titleSpan);
   if (c.branchOf) { const bb=document.createElement('span'); bb.className='branch-badge'; bb.textContent='↩'; div.appendChild(bb); }
+  // Live-indicator: a small pulsing dot next to the title while this chat
+  // has an in-flight run (chat stream or agent turn) somewhere — most
+  // useful while it's NOT the one on screen, so a background stream stays
+  // visible without switching into it.
+  if (isChatStreaming(c.id)) {
+    const liveDot = document.createElement('span');
+    liveDot.className = 'chat-item-live-dot';
+    liveDot.title = t('js.chatStreamingHint') || 'This chat is still generating a reply…';
+    titleSpan.insertAdjacentElement('afterend', liveDot);
+  }
   div.appendChild(menuBtn);
   return div;
 }
@@ -3493,6 +3624,17 @@ function renderMessages(messages, limitCount) {
   const chat = currentChat();
   const container = document.getElementById('messages');
   const empty     = document.getElementById('emptyState');
+
+  // Any run belonging to a DIFFERENT chat than the one about to be rendered
+  // is about to lose its DOM node (we wipe #messages below) — null out its
+  // bubbleEl so nothing keeps trying to write into a detached node. (The
+  // isConnected check in _runBubbleEl() would catch this too, but doing it
+  // explicitly here is cleaner, and covers switchChat/newChat/deleteChat all
+  // in one place without touching each of them individually.)
+  for (const run of activeRuns.values()) {
+    if (!chat || run.chatId !== chat.id) run.bubbleEl = null;
+  }
+
   let path = chat ? getActivePath(chat) : (Array.isArray(messages) ? messages : []);
   // limitCount: optionally render only the first N nodes of the active path.
   // Used by regenerate() to render up to (and including) the user message only,
@@ -3500,21 +3642,226 @@ function renderMessages(messages, limitCount) {
   // instead of rendering it and relying on a later swap (which used to leave
   // a stale duplicate bubble behind — see regenerate()).
   if (typeof limitCount === 'number') path = path.slice(0, limitCount);
-  if (!path.length) {
+
+  // Reattach mechanism (bugfix for "bubble disappears on chat switch"): any
+  // still-running run (chat stream OR agent turn — see kiconnect-agent.js)
+  // that belongs to THIS chat gets a fresh live bubble appended below,
+  // pre-filled with whatever the registry has accumulated so far — not an
+  // empty one. The registry (activeRuns) is the source of truth for an
+  // in-flight answer; the DOM is only ever a rebuildable projection of it.
+  // A run can supply its own `buildLiveEl()` (agent runs do, to render tool
+  // trace cards + token counter instead of plain streamed text) — falls
+  // back to the generic chat-bubble builder when it doesn't.
+  const liveRuns = chat
+    ? [...activeRuns.values()].filter(r => r.chatId === chat.id && r.status === 'running')
+    : [];
+
+  if (!path.length && !liveRuns.length) {
     Array.from(container.children).forEach(el => { if(el!==empty) el.remove(); });
     if (empty) empty.style.display = '';
+    syncComposerStreamingUI();
     return;
   }
   if (empty) empty.style.display = 'none';
   Array.from(container.children).forEach(el => { if(el!==empty) el.remove(); });
   path.forEach((msg, i) => container.appendChild(buildMsgEl(msg, i)));
+  liveRuns.forEach(run => {
+    const liveRow = (typeof run.buildLiveEl === 'function') ? run.buildLiveEl() : _buildLiveRunBubble(run);
+    container.appendChild(liveRow);
+    run.bubbleEl = liveRow;
+  });
   container.scrollTop = container.scrollHeight;
   typesetMath();
   updateChatTokenTotal();
+  // The send/stop button must always reflect whichever chat this render
+  // just put on screen, not "is anything streaming anywhere" — this covers
+  // switchChat/newChat/deleteChat in one place, same as the bubbleEl-nulling
+  // loop above covers those for the run registry.
+  syncComposerStreamingUI();
+}
+
+// Builds a DOM row for a still-running run being reattached after a chat
+// switch — same shape as appendEmptyAI()'s row (so it's visually identical
+// to a bubble that never lost its DOM node), but pre-filled with the run's
+// accumulated text/thinking instead of starting empty.
+function _buildLiveRunBubble(run) {
+  const pureModelId = splitModelId(run.model || '').modelId || run.model || '';
+  const div = document.createElement('div');
+  div.className = 'message-row ai';
+  div.dataset.runId = run.runId;
+  const avatarCol = document.createElement('div'); avatarCol.className = 'avatar-col';
+  const avatar = document.createElement('div'); avatar.className = 'avatar ai';
+  avatar.title = pureModelId; avatar.textContent = t('js.aiAvatar');
+  avatarCol.appendChild(avatar);
+  if (pureModelId) {
+    const ml = document.createElement('div'); ml.className = 'model-label';
+    ml.title = pureModelId; ml.textContent = pureModelId.split('/').pop();
+    avatarCol.appendChild(ml);
+  }
+  const wrap = document.createElement('div'); wrap.className = 'bubble-wrap';
+  const bubble = document.createElement('div'); bubble.className = 'bubble streaming';
+  wrap.appendChild(bubble);
+  div.appendChild(avatarCol); div.appendChild(wrap);
+  renderStreamingBubble(bubble, run.thinkingText || '', run.text ? _stripStoredThinking(run.text) : '');
+  return div;
+}
+
+// run.text is stored in the combined "<thinking>...</thinking>\n\nanswer"
+// format (see _streamStoredText) so it can be saved as-is if the stream
+// aborts — but renderStreamingBubble() wants the answer text and thinking
+// text as two separate arguments. Strip the stored <thinking> block back out
+// (run.thinkingText already holds it separately) before handing the answer
+// portion to renderStreamingBubble().
+function _stripStoredThinking(storedText) {
+  const m = /^<thinking>\n[\s\S]*?\n<\/thinking>\n\n([\s\S]*)$/.exec(storedText || '');
+  return m ? m[1] : (storedText || '');
 }
 
 // Builds the full DOM row for a single chat message: avatar, bubble content (text/images/files/web sources), and surrounding chrome.
+/**
+ * _buildBattleTileGridRow: renders an in-progress (or resolved-but-not-yet-
+ * winner-picked) Battle-Modus message as a row of side-by-side tiles, one
+ * per model in msg._siblings. Mirrors _buildLiveRunBubble()'s reattach
+ * trick: every RUNNING battle-variant run for this exact message+sibling
+ * gets its `bubbleEl` pointed at the freshly built tile bubble, so a chat
+ * switch away and back (this whole row is just rebuilt again by
+ * renderMessages()) picks the live stream back up mid-flight instead of
+ * losing it — the registry (activeRuns), not the DOM, is the source of
+ * truth for what's actually been generated so far.
+ */
+function _buildBattleTileGridRow(msg, idx) {
+  const row = document.createElement('div');
+  row.className = 'message-row ai battle-row';
+  if (idx !== undefined) row.dataset.idx = idx;
+  if (msg._battleId) row.dataset.battleId = msg._battleId;
+
+  const avatarCol = document.createElement('div');
+  avatarCol.className = 'avatar-col';
+  const avatar = document.createElement('div');
+  avatar.className = 'avatar ai';
+  avatar.textContent = '⚔️';
+  avatar.title = bt('battle.toggleLabel');
+  avatarCol.appendChild(avatar);
+  row.appendChild(avatarCol);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'bubble-wrap battle-wrap';
+
+  const allDone = msg._siblings.every(s => !s._pending);
+  if (allDone && !msg._winnerChosen) {
+    // While no explicit winner has been picked, a default is already
+    // active behind the scenes (see _resolveBattleDefault) so the
+    // conversation can continue — but the grid stays visible and this
+    // banner makes the default explicit rather than silently swapping the
+    // view to a single bubble the user never chose.
+    const defIdx = msg._siblingIdx ?? 0;
+    const defModel = splitModelId(msg._siblings[defIdx]?._model || '').modelId || msg._siblings[defIdx]?._model || '';
+    const banner = document.createElement('div');
+    banner.className = 'battle-default-banner';
+    banner.textContent = btf('battle.defaultBanner', { model: defModel });
+    wrap.appendChild(banner);
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'battle-tile-grid';
+  grid.style.setProperty('--battle-n', msg._siblings.length);
+
+  const chat = currentChat();
+  msg._siblings.forEach((sibling, i) => {
+    const tile = document.createElement('div');
+    tile.className = 'battle-tile';
+    tile.dataset.siblingIdx = i;
+
+    const run = chat ? [...activeRuns.values()].find(r =>
+      r.kind === 'battle-variant' && r.chatId === chat.id &&
+      r.battleMsg === msg && r.battleSiblingIdx === i && r.status === 'running') : null;
+
+    const header = document.createElement('div');
+    header.className = 'battle-tile-header';
+    const pureModelId = splitModelId(sibling._model || '').modelId || sibling._model || '';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'battle-tile-model';
+    nameSpan.textContent = pureModelId.split('/').pop();
+    nameSpan.title = pureModelId;
+    header.appendChild(nameSpan);
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'battle-tile-status';
+    if (run) { statusSpan.textContent = bt('battle.generating'); statusSpan.classList.add('live'); }
+    else if (sibling._pending) { statusSpan.textContent = bt('battle.pending'); }
+    else if (sibling.error) { statusSpan.textContent = '⚠️'; statusSpan.classList.add('error'); }
+    else { statusSpan.textContent = '✓'; statusSpan.classList.add('done'); }
+    header.appendChild(statusSpan);
+    tile.appendChild(header);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble battle-tile-bubble' + (run ? ' streaming' : '');
+    if (sibling.error) {
+      bubble.innerHTML = `<em style="color:var(--red)">${escHtml(sibling.error)}</em>`;
+    } else if (run) {
+      // Reconnect this run to its (freshly rebuilt) tile bubble and
+      // pre-fill with whatever the registry has accumulated so far —
+      // same reattach pattern as _buildLiveRunBubble(), scoped to one tile.
+      run.bubbleEl = bubble;
+      renderStreamingBubble(bubble, run.thinkingText || '', run.text ? _stripStoredThinking(run.text) : '');
+    } else if (sibling.content) {
+      bubble.innerHTML = formatText(sibling.content);
+    } else {
+      bubble.innerHTML = `<em style="color:var(--muted)">${escHtml(bt('battle.pending'))}</em>`;
+    }
+    tile.appendChild(bubble);
+
+    const footer = document.createElement('div');
+    footer.className = 'battle-tile-footer';
+    const winBtn = document.createElement('button');
+    winBtn.className = 'battle-winner-btn';
+    winBtn.textContent = bt('battle.chooseWinner');
+    winBtn.addEventListener('click', () => chooseBattleWinner(idx, i));
+    footer.appendChild(winBtn);
+    tile.appendChild(footer);
+
+    grid.appendChild(tile);
+  });
+  wrap.appendChild(grid);
+  row.appendChild(wrap);
+  return row;
+}
+
+/**
+ * chooseBattleWinner: explicit "✓ Diese verwenden" pick.
+ * Sets msg._siblingIdx to the chosen variant and msg._winnerChosen = true —
+ * the next renderMessages()/buildMsgEl() pass then falls through to the
+ * normal single-bubble + sibling-nav rendering (the other variants remain
+ * reachable via the nav arrows, nothing is discarded, same guarantee
+ * regenerate() already gives).
+ */
+function chooseBattleWinner(idx, siblingIdx) {
+  const chat = currentChat(); if (!chat) return;
+  const path = getActivePath(chat);
+  const msg = path[safeIdx(idx)]; if (!msg || !msg._siblings) return;
+  const variant = msg._siblings[siblingIdx]; if (!variant) return;
+  msg._siblingIdx = siblingIdx;
+  msg._winnerChosen = true;
+  msg.content   = variant.content;
+  msg._model    = variant._model;
+  msg._usage    = variant._usage;
+  msg._note     = variant._note;
+  msg._noteOpen = variant._noteOpen;
+  save();
+  renderMessages(chat.messages);
+}
+
 function buildMsgEl(msg, idx) {
+  // Battle-Modus: an assistant message started via sendBattleMessage()
+  // renders as a side-by-side tile grid — one tile per model — for as long
+  // as no winner has been explicitly chosen (msg._winnerChosen). Once a
+  // winner IS chosen, msg._siblingIdx points at it and this falls through
+  // to the normal single-bubble path below (which already renders a
+  // sibling-nav since msg._siblings.length > 1 — Battle-Modus deliberately
+  // reuses that existing regenerate()/sibling infrastructure instead of
+  // inventing a second message shape).
+  if (msg.role === 'assistant' && msg._battle && !msg._winnerChosen) {
+    return _buildBattleTileGridRow(msg, idx);
+  }
   const isUser = msg.role === 'user';
   const cls = isUser ? 'user' : 'ai';
   const row = document.createElement('div');
@@ -4520,13 +4867,6 @@ function _streamStoredText(thinkingText, assistantText) {
   return (thinkingText ? `<thinking>\n${thinkingText}\n</thinking>\n\n` : '') + (assistantText || '');
 }
 
-// Records the latest streamed text/usage so an aborted stream can still be saved with whatever was generated so far.
-function _rememberStreamSnapshot(text, usageData) {
-  if (!activeStreamSnapshot) activeStreamSnapshot = { text: '', usage: null };
-  activeStreamSnapshot.text = text || '';
-  activeStreamSnapshot.usage = usageData || null;
-}
-
 // Removes the 'streaming' animation class from any bubble still marked as live.
 function _finishLiveStreamUI() {
   document.querySelectorAll('.bubble.streaming').forEach(b => b.classList.remove('streaming'));
@@ -4548,8 +4888,44 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
   // "streamed" text before the model's own live delta text is appended —
   // same trick already used below for the <thinking> block.
   let assistantText = (opts && opts.prefixText) ? (opts.prefixText + '\n\n') : '', usageData = null;
-  let aiRowEl = null; // the actual DOM row created for this streamed answer (see appendEmptyAI() below)
-  activeStreamSnapshot = { text: '', usage: null };
+  // runId: caller (_runStreamAndAttach) generates and passes one via
+  // opts.runId so it's known even if this function throws before returning
+  // (registration below happens synchronously, before any await, so the
+  // run is always in the registry by the time an AbortError/network error
+  // can occur). Falls back to self-generating for any other caller.
+  const runId = (opts && opts.runId) || _makeRunId(currentChatId);
+  // Every run gets its OWN AbortController instead of sharing a single
+  // global one — this is what lets stopStreaming(chatId) cancel exactly
+  // one chat's in-flight request while a different chat's stream keeps
+  // running untouched.
+  const runAbortController = (opts && opts.abortController) || new AbortController();
+  const run = {
+    runId,
+    chatId: currentChatId,      // which chat this run belongs to
+    kind: 'chat',
+    provider: provider && provider.type,
+    model: config.model,        // frozen NOW, never re-read from config.model later —
+                                 // fixes the "wrong model label if header is changed
+                                 // mid-stream" bug
+    abortController: runAbortController,
+    text: '',
+    thinkingText: '',
+    usage: null,
+    status: 'running',
+    bubbleEl: null,              // set right after appendEmptyAI() below
+    targetContainer: null,       // unused outside Battle-Modus
+  };
+  activeRuns.set(runId, run);
+  // This is the single choke point where a chat-stream run becomes
+  // "visible" as in-flight — update the sidebar's live-indicator dot and
+  // (if this run's chat happens to be the one on screen) the composer's
+  // send/stop button right away, before the first network await below.
+  // syncComposerStreamingUI() reads currentChatId itself, so this is always
+  // correct even if the user switched chats during sendMessageCore's
+  // earlier awaits (upload/link-fetch/web-search/KB) and is now looking at
+  // a completely different chat than the one this run belongs to.
+  renderSidebar();
+  syncComposerStreamingUI();
 
   if (provider.type === 'anthropic') {
     const { modelId } = splitModelId(config.model);
@@ -4594,12 +4970,12 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(body),
-      signal: abortController.signal,
+      signal: run.abortController.signal,
     });
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
     removeTyping(typingId);
-    const aiEl = appendEmptyAI();
-    aiRowEl = aiEl;
+    const aiEl = appendEmptyAI(run.model, runId);
+    run.bubbleEl = aiEl;
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '', inThinkingBlock = false;
     while (true) {
@@ -4612,30 +4988,30 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
           const ev = JSON.parse(line.slice(6).trim());
           if (ev.type === 'message_start' && ev.message?.usage) {
             usageData = { ...(usageData || {}), ...ev.message.usage };
-            _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+            _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
           }
           else if (ev.type === 'message_delta' && ev.usage) {
             usageData = { ...(usageData || {}), ...ev.usage };
-            _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+            _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
           }
           else if (ev.type === 'content_block_start') { inThinkingBlock = ev.content_block?.type === 'thinking'; }
           else if (ev.type === 'content_block_stop') { inThinkingBlock = false; }
           else if (ev.type === 'content_block_delta') {
             if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
               thinkingText += ev.delta.thinking || '';
-              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
-              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
+              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
             } else if (ev.delta?.type === 'text_delta') {
               assistantText += ev.delta.text;
-              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
-              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
+              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
               if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
             }
           }
         } catch {}
       }
     }
-    _finalizeStreamingBubble(aiEl.querySelector('.bubble'), assistantText);
+    { const liveBubble = _runBubbleEl(run); if (liveBubble) _finalizeStreamingBubble(liveBubble.querySelector('.bubble'), assistantText); }
     if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
 
   } else {
@@ -4715,12 +5091,12 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
       body: JSON.stringify(reqBody),
-      signal: abortController.signal,
+      signal: run.abortController.signal,
     });
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     removeTyping(typingId);
-    const aiEl = appendEmptyAI();
-    aiRowEl = aiEl;
+    const aiEl = appendEmptyAI(run.model, runId);
+    run.bubbleEl = aiEl;
     const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '';
     const isZhipu = provider.type === 'zhipu';
@@ -4771,13 +5147,13 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
           if (showsThinking) {
             // GLM / MiniMax: render live bubble with thinking block + assistant text
             if (reasoningDelta || delta) {
-              renderStreamingBubble(aiEl.querySelector('.bubble'), thinkingText, assistantText);
-              _rememberStreamSnapshot(_streamStoredText(thinkingText, assistantText), usageData);
+              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
+              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
               if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
             }
           } else if (delta) {
-            renderStreamingBubble(aiEl.querySelector('.bubble'), '', assistantText);
-            _rememberStreamSnapshot(assistantText, usageData);
+            { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), '', assistantText); }
+            _updateRunText(runId, assistantText, usageData, '');
             if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
           }
           if (chunk.usage) {
@@ -4787,40 +5163,59 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
             // fall back to it so DeepSeek's cache savings actually show up
             // in the token badge instead of always reading 0.
             usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
-            _rememberStreamSnapshot(showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData);
+            _updateRunText(runId, showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData, showsThinking ? thinkingText : '');
           }
         } catch {}
       }
     }
-    _finalizeStreamingBubble(aiEl.querySelector('.bubble'), assistantText);
+    { const liveBubble = _runBubbleEl(run); if (liveBubble) _finalizeStreamingBubble(liveBubble.querySelector('.bubble'), assistantText); }
     if (showsThinking && thinkingText) {
       assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
     }
   }
 
   _finishLiveStreamUI();
-  return { text: assistantText, usage: usageData, el: aiRowEl };
+  run.status = 'done';
+  run.text = assistantText;
+  // Return the run's CURRENT bubble (may have been reattached to a fresh
+  // node by renderMessages() if the chat was switched away and back mid-
+  // stream, or be null if the chat isn't on screen right now) — never the
+  // originally-captured node, which may be long detached from the DOM.
+  return { text: assistantText, usage: usageData, el: run.bubbleEl, runId };
 }
 
 /**
  * _runStreamAndAttach: shared "call _streamAIResponse, handle abort/errors,
  * then attach the finished bubble's chrome" logic used by both
  * sendMessageCore (new message) and rerunFromUserMsg (regenerate from an
- * earlier point). Assumes the caller has already set isStreaming=true,
- * setSendMode('stop') and created abortController.
- * Resets isStreaming/abortController/send-mode/status when done.
+ * earlier point).
+ * There's no global isStreaming/abortController to set up beforehand or
+ * reset afterwards — the run this call creates IS the per-chat streaming
+ * state (see isChatStreaming/runsForChat), and it carries its own
+ * AbortController (see _streamAIResponse). At the end this only updates the
+ * send/stop button (via syncComposerStreamingUI) if `chat` happens to be the
+ * one currently on screen — a background chat finishing must never flip the
+ * button for whatever chat the user is actually looking at right now.
  */
 async function _runStreamAndAttach(chat, messages, provider, typingId, documentIds, opts) {
   let assistantText = '', usageData = null, streamEl = null;
+  // Generated here (not inside _streamAIResponse) so it's known even if that
+  // call throws before returning — _streamAIResponse registers the run in
+  // activeRuns synchronously before its first await, so by the time an
+  // AbortError/network error can happen the run is already in the registry
+  // and reachable via this runId.
+  const runId = _makeRunId(chat && chat.id);
   try {
-    const result = await _streamAIResponse(messages, provider, typingId, documentIds, opts);
+    const result = await _streamAIResponse(messages, provider, typingId, documentIds, { ...(opts || {}), runId });
     assistantText = result.text; usageData = result.usage; streamEl = result.el;
   } catch (e) {
     removeTyping(typingId);
     if (e.name === 'AbortError') {
-      const partialText = activeStreamSnapshot?.text || assistantText;
+      const run = activeRuns.get(runId);
+      const partialText = run?.text || assistantText;
       assistantText = partialText || t('js.generationStopped');
-      usageData = activeStreamSnapshot?.usage || usageData;
+      usageData = run?.usage || usageData;
+      streamEl = _runBubbleEl(run);
       _finishLiveStreamUI();
     } else {
       assistantText = tf('js.errorPrefix', { e: escHtml(e.message) });
@@ -4829,9 +5224,291 @@ async function _runStreamAndAttach(chat, messages, provider, typingId, documentI
     }
   }
 
-  if (assistantText) _attachAIActions(chat, assistantText, usageData, streamEl);
-  activeStreamSnapshot = null;
-  isStreaming = false; abortController = null; setSendMode('send'); setStatus('green');
+  // Model actually used to generate this answer, frozen at run start — read
+  // from the registry (not live config.model), so a header model-switch
+  // mid-stream can never mislabel a finished answer (see TODO.md, Abschnitt 0).
+  const modelUsed = activeRuns.get(runId)?.model ?? config.model;
+  if (assistantText) _attachAIActions(chat, assistantText, usageData, streamEl, modelUsed);
+  activeRuns.delete(runId);
+  // Sidebar's live-indicator dot for `chat` needs to disappear now that its
+  // run is gone from the registry; the composer button only changes if
+  // `chat` is the one on screen (syncComposerStreamingUI reads currentChatId
+  // itself, so this is a no-op for a background chat finishing).
+  renderSidebar();
+  syncComposerStreamingUI();
+  if (chat === currentChat()) setStatus('green');
+}
+
+// ── Battle-Modus ────────────────────────────────────────────
+// Battle-Modus reuses the existing sibling/tail tree (see getActivePath/
+// getActiveContainer/regenerate above) instead of inventing a new message
+// shape: one assistant message node is created with msg._siblings already
+// populated (one entry per chosen model) and msg._siblingIdx left unset
+// until a winner is picked. Each variant streams via its own activeRuns
+// entry (kind: 'battle-variant'), fully independent — this reuses the same
+// per-chat parallel-run infrastructure, just for several concurrent runs on
+// the SAME chat/message instead of different chats.
+
+// Finds the live tile bubble element for one battle variant in the DOM (if
+// the owning chat happens to be the one on screen right now) — same idea as
+// _runBubbleEl(), just addressed by battleId+siblingIdx instead of a
+// captured closure reference, since a battle tile grid can be torn down and
+// rebuilt by renderMessages() (chat switch, regular re-render) at any time.
+function _findBattleTileBubble(battleId, siblingIdx) {
+  if (!battleId) return null;
+  const row = document.querySelector(`.battle-row[data-battle-id="${battleId}"]`);
+  if (!row) return null;
+  const tile = row.querySelector(`.battle-tile[data-sibling-idx="${siblingIdx}"]`);
+  return tile ? tile.querySelector('.battle-tile-bubble') : null;
+}
+
+// Resolves a not-yet-explicitly-chosen battle message to a sensible default
+// once every variant has finished — picks whichever variant finished FIRST
+// (msg._battleDoneOrder, appended to by _runBattleVariant as each one
+// completes), falling back to index 0 if that's somehow empty. Does NOT set
+// _winnerChosen, so the tile grid keeps rendering (with the "default in
+// use" banner) until the user explicitly picks one via chooseBattleWinner().
+function _resolveBattleDefault(chat, msg) {
+  if (msg._winnerChosen) return; // user already picked explicitly
+  const defIdx = (msg._battleDoneOrder && msg._battleDoneOrder.length) ? msg._battleDoneOrder[0] : 0;
+  const variant = msg._siblings[defIdx] || msg._siblings[0];
+  if (!variant) return;
+  msg._siblingIdx = defIdx;
+  msg.content   = variant.content;
+  msg._model    = variant._model;
+  msg._usage    = variant._usage;
+}
+
+// Streams a single model's variant into msg._siblings[i], writing chunks
+// into both the RunState (registry — survives a chat switch) and, when
+// connected, straight into the tile bubble via renderStreamingBubble(),
+// mirroring _streamAIResponse's Anthropic/OpenAI-compat branches but scoped
+// to one tile instead of the single main bubble, and parameterized by
+// `provider`/`modelId` explicitly (never reads the shared global
+// config.model) so N variants can run concurrently without racing each
+// other over which model's request is "currently" being built.
+async function _streamBattleVariant(chat, msg, i, provider, modelId, messages) {
+  const sibling = msg._siblings[i];
+  const runId = _makeRunId(chat.id);
+  const run = {
+    runId, chatId: chat.id, kind: 'battle-variant',
+    provider: provider.type, model: modelId,
+    abortController: new AbortController(),
+    text: '', thinkingText: '', usage: null, status: 'running',
+    bubbleEl: _findBattleTileBubble(msg._battleId, i),
+    battleMsg: msg, battleSiblingIdx: i,
+  };
+  activeRuns.set(runId, run);
+  renderSidebar(); syncComposerStreamingUI();
+
+  let assistantText = '', usageData = null, thinkingText = '';
+  try {
+    if (provider.type === 'anthropic') {
+      const body = { model: modelId, max_tokens: effectiveMaxTokens(), stream: true, messages };
+      if (isTemperatureSupported(modelId)) body.temperature = config.temperature;
+      if (config.systemPrompt) body.system = [{ type: 'text', text: config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
+      if (config.thinkingEnabled && isThinkingCapable(modelId)) {
+        if (isAdaptiveThinkingModel(modelId)) {
+          const effortMap = { 1: 'low', 2: 'medium', 3: 'high' };
+          body.thinking = { type: 'adaptive' };
+          body.output_config = { effort: effortMap[config.thinkingIntensity || 2] };
+          delete body.temperature;
+        } else {
+          const budget = usesTokenBudget(modelId) ? (config.thinkingBudget || 8000) : CLAUDE_BUDGET[config.thinkingIntensity || 2];
+          body.thinking = { type: 'enabled', budget_tokens: budget };
+          body.temperature = 1;
+          body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+        }
+      }
+      const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify(body),
+        signal: run.abortController.signal,
+      });
+      if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+      const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
+      let inThinkingBlock = false;
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const ev = JSON.parse(line.slice(6).trim());
+            if (ev.type === 'message_start' && ev.message?.usage) usageData = { ...(usageData || {}), ...ev.message.usage };
+            else if (ev.type === 'message_delta' && ev.usage) usageData = { ...(usageData || {}), ...ev.usage };
+            else if (ev.type === 'content_block_start') inThinkingBlock = ev.content_block?.type === 'thinking';
+            else if (ev.type === 'content_block_stop') inThinkingBlock = false;
+            else if (ev.type === 'content_block_delta') {
+              if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) thinkingText += ev.delta.thinking || '';
+              else if (ev.delta?.type === 'text_delta') assistantText += ev.delta.text;
+            }
+          } catch {}
+          run.text = assistantText; run.thinkingText = thinkingText; run.usage = usageData;
+          sibling.content = assistantText;
+          const bubbleEl = _runBubbleEl(run);
+          if (bubbleEl) renderStreamingBubble(bubbleEl, thinkingText, assistantText);
+        }
+      }
+    } else {
+      const endpoint = getProviderEndpoint(provider);
+      const apiMsgs = [];
+      if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
+      messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
+      const reqBody = { model: modelId, messages: apiMsgs, stream: true };
+      const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
+      if (isOSeries) {
+        reqBody.max_completion_tokens = effectiveMaxTokens();
+        if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+      } else {
+        reqBody.temperature = config.temperature;
+        reqBody.max_tokens = effectiveMaxTokens();
+        if (config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+      }
+      if (provider.type !== 'zhipu') reqBody.stream_options = { include_usage: true };
+      const extraHeaders = {};
+      if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+      const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
+        body: JSON.stringify(reqBody),
+        signal: run.abortController.signal,
+      });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
+          try {
+            const chunk = JSON.parse(payload);
+            const delta = chunk.choices?.[0]?.delta?.content || '';
+            assistantText += delta;
+            if (chunk.usage) {
+              const u = chunk.usage;
+              usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
+            }
+          } catch {}
+          run.text = assistantText; run.usage = usageData;
+          sibling.content = assistantText;
+          const bubbleEl = _runBubbleEl(run);
+          if (bubbleEl) renderStreamingBubble(bubbleEl, '', assistantText);
+        }
+      }
+    }
+    { const bubbleEl = _runBubbleEl(run); if (bubbleEl) _finalizeStreamingBubble(bubbleEl, assistantText); }
+    sibling.content = assistantText || bt('battle.pending');
+    sibling._model = modelId;
+    sibling._usage = usageData || undefined;
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      sibling.content = assistantText || bt('battle.aborted');
+      sibling._model = modelId;
+    } else {
+      sibling.error = btf('battle.errorPrefix', { e: e.message || String(e) });
+    }
+  } finally {
+    sibling._pending = false;
+    run.status = 'done';
+    if (!msg._battleDoneOrder) msg._battleDoneOrder = [];
+    msg._battleDoneOrder.push(i);
+    activeRuns.delete(runId);
+    renderSidebar();
+    // Re-render the tile grid in place (this variant's status dot / final
+    // content) if the owning chat is still the one on screen — a variant
+    // finishing while the user is elsewhere doesn't need to touch the DOM;
+    // it'll render correctly (as a normal, non-running tile) the next time
+    // this chat is opened.
+    if (chat === currentChat()) renderMessages(chat.messages);
+    syncComposerStreamingUI();
+  }
+}
+
+// Resolves the provider/model for one battle variant and either runs it or
+// (no provider/key configured) records that as this tile's error — a
+// mis-configured model must not abort the other, working variants.
+async function _runBattleVariant(chat, msg, i, fullModelId, messages) {
+  const provider = providerForModel(fullModelId);
+  const { modelId } = splitModelId(fullModelId);
+  if (!provider || !provider.apiKey || provider.enabled === false) {
+    msg._siblings[i].error = bt('battle.noProviderForModel');
+    msg._siblings[i]._pending = false;
+    if (!msg._battleDoneOrder) msg._battleDoneOrder = [];
+    msg._battleDoneOrder.push(i);
+    if (chat === currentChat()) renderMessages(chat.messages);
+    return;
+  }
+  // Build the wire-format history in THIS variant's provider's shape —
+  // provider type can differ per model, exactly like the normal single-send
+  // path branches on provider.type (see sendMessageCore).
+  let wireMessages;
+  if (provider.type === 'anthropic') {
+    wireMessages = messages.map(m => ({ role: m.role, content: _toAnthropicContent(m.content) }));
+    _applyPromptCache(wireMessages);
+  } else {
+    wireMessages = messages.map(m => ({ role: m.role, content: _toOpenAIContent(m.content) }));
+  }
+  await _streamBattleVariant(chat, msg, i, provider, modelId, wireMessages);
+}
+
+/**
+ * sendBattleMessage: Battle-Modus entry point, analogous to
+ * sendMessageCore() but fans one user message out to N models at once
+ * instead of the single currently-selected one. Web search / knowledge-base
+ * augmentation are intentionally out of scope here (kept for the normal
+ * single-model send path only) to keep N-way concurrent requests simple —
+ * plain text + attachments only.
+ */
+async function sendBattleMessage(text, att, modelIds) {
+  if (!currentChatId) newChat();
+  const chat = currentChat(); if (!chat) return;
+  if (isChatStreaming(chat.id)) return;
+  if (!modelIds || modelIds.length < 2) { toast(bt('battle.needTwoModels')); return; }
+
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.style.display = 'none';
+
+  const { userContent, fileNames } = buildAttachmentContent(text, att);
+  const activeContainer = getActiveContainer(chat);
+  const userMsg = { role: 'user', content: userContent, _files: fileNames.length ? fileNames : undefined };
+  activeContainer.push(userMsg);
+  if (chat.messages.length === 1) { chat.title = '…'; renderSidebar(); autoGenerateChatTitle(chat, text); }
+
+  const battleMsg = {
+    role: 'assistant', content: '', _battle: true, _winnerChosen: false,
+    _battleId: _makeRunId(chat.id) + '_battle',
+    _siblings: modelIds.map(id => ({ content: '', _model: id, tail: [], _pending: true })),
+    _siblingIdx: null,
+  };
+  getActiveContainer(chat).push(battleMsg);
+  save();
+  renderMessages(chat.messages);
+  scrollToBottom();
+
+  // History for the API call: active path up to (but not including) the
+  // still-empty battleMsg placeholder just pushed — same idea as
+  // sendMessageCore's activePath.slice(0,-1), just built once and reused
+  // per-provider inside _runBattleVariant.
+  const activePath = getActivePath(chat);
+  const historyMsgs = activePath.slice(0, -1)
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role, content: m.content }));
+
+  const results = await Promise.allSettled(
+    modelIds.map((id, i) => _runBattleVariant(chat, battleMsg, i, id, historyMsgs))
+  );
+  results.forEach(r => { if (r.status === 'rejected') console.warn('[battle] variant failed:', r.reason); });
+
+  _resolveBattleDefault(chat, battleMsg);
+  save();
+  renderSidebar();
+  syncComposerStreamingUI();
+  if (chat === currentChat()) { renderMessages(chat.messages); setStatus('green'); }
 }
 
 /**
@@ -4839,13 +5516,14 @@ async function _runStreamAndAttach(chat, messages, provider, typingId, documentI
  * Shared post-stream logic for both sendMessageCore and rerunFromUserMsg.
  */
 // _attachAIActions: tree-aware, writes into active sibling tail
-function _attachAIActions(chat, assistantText, usageData, streamEl) {
+function _attachAIActions(chat, assistantText, usageData, streamEl, modelUsed) {
+  if (modelUsed === undefined) modelUsed = config.model; // fallback for any other caller
   if (chat._pendingRegenMsg) {
     // Regeneration: push new sibling with empty tail onto the branch node.
     // _note/_noteOpen start fresh (undefined/false) — a regenerated answer
     // is new content and must not inherit the note from the previous variant.
     const msg = chat._pendingRegenMsg;
-    const newSibling = { content: assistantText, _model: config.model, _usage: usageData || undefined, _note: undefined, _noteOpen: false, tail: [] };
+    const newSibling = { content: assistantText, _model: modelUsed, _usage: usageData || undefined, _note: undefined, _noteOpen: false, tail: [] };
     msg._siblings.push(newSibling);
     msg._siblingIdx = msg._siblings.length - 1;
     // Sync live fields to the new active variant
@@ -4858,7 +5536,7 @@ function _attachAIActions(chat, assistantText, usageData, streamEl) {
   } else {
     // Normal send: append to the active container (chat.messages or deepest active tail)
     const container = getActiveContainer(chat);
-    const msgObj = { role: 'assistant', content: assistantText, _model: config.model };
+    const msgObj = { role: 'assistant', content: assistantText, _model: modelUsed };
     if (usageData) msgObj._usage = usageData;
     container.push(msgObj);
   }
@@ -4875,19 +5553,28 @@ function _attachAIActions(chat, assistantText, usageData, streamEl) {
   const messagesEl = document.getElementById('messages');
   const emptyState = document.getElementById('emptyState');
 
-  if (!_finalizeAIRowInPlace(streamEl, path[idx], idx)) {
-    // Fallback: streamEl is missing/detached (e.g. chat was switched away
-    // from mid-stream) — build a fresh row the old way. We still avoid
-    // replacing an unrelated node: fall back to the last message row, never
-    // the #chatTokenTotal footer div appendToMessages() always keeps last.
-    const newRow = buildMsgEl(path[idx], idx);
-    const oldRow = (streamEl && streamEl.parentNode === messagesEl) ? streamEl : messagesEl.lastElementChild;
-    if (oldRow && oldRow !== emptyState) oldRow.replaceWith(newRow);
-    else messagesEl.appendChild(newRow);
-    typesetMath(newRow);
+  // Only touch #messages at all if `chat` is actually the chat on screen
+  // right now — if the stream finished while the user was on a DIFFERENT
+  // chat, #messages holds THAT chat's rows, and neither finalizing in place
+  // nor the "build a fresh row" fallback below may write into it. The
+  // finished answer is already saved into chat.messages/container above, so
+  // it'll render correctly (as a normal, non-streaming bubble) the next time
+  // this chat is opened via renderMessages() — nothing further to do here.
+  if (chat === currentChat()) {
+    if (!_finalizeAIRowInPlace(streamEl, path[idx], idx)) {
+      // Fallback: streamEl is missing/detached (e.g. reattach never
+      // happened, or the row was otherwise lost) — build a fresh row the
+      // old way. We still avoid replacing an unrelated node: fall back to
+      // the last message row, never the #chatTokenTotal footer div
+      // appendToMessages() always keeps last.
+      const newRow = buildMsgEl(path[idx], idx);
+      const oldRow = (streamEl && streamEl.parentNode === messagesEl) ? streamEl : messagesEl.lastElementChild;
+      if (oldRow && oldRow !== emptyState) oldRow.replaceWith(newRow);
+      else messagesEl.appendChild(newRow);
+      typesetMath(newRow);
+    }
+    if (pinnedToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
   }
-
-  if (pinnedToBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
   updateChatTokenTotal();
   save();
 }
@@ -4900,7 +5587,7 @@ async function regenerate(idx) {
   const path=getActivePath(chat);
   const msg=path[idx];
   if(!msg||msg.role!=='assistant') return;
-  if(isStreaming){stopStreaming();return;}
+  if(isChatStreaming(chat.id)){stopStreaming(chat.id);return;}
 
   const userMsg=path[idx-1];
   if(!userMsg||userMsg.role!=='user'){save();renderMessages(chat.messages);return;}
@@ -4967,7 +5654,9 @@ async function rerunFromUserMsg(userMsg) {
   if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
 
   const typingId=showTyping();
-  isStreaming=true; setSendMode('stop'); abortController=new AbortController();
+  // See the matching comment in sendMessageCore — no global
+  // isStreaming/abortController to set up here anymore; the composer
+  // button updates itself once the run registers inside _streamAIResponse.
 
   // build history from active path up to (including) userMsg
   const activePath = getActivePath(chat);
@@ -4993,9 +5682,21 @@ async function rerunFromUserMsg(userMsg) {
 
 
 // ── Send / Stop ───────────────────────────────────────────────────
-function handleSendStop() { isStreaming ? stopStreaming() : sendMessage(); }
-// Aborts the in-progress AI response stream, if any.
-function stopStreaming() { if(abortController){abortController.abort();abortController=null;} }
+// Reflects the chat CURRENTLY ON SCREEN (see isChatStreaming) — pressing
+// the button always acts on what the user is looking at, never on whatever
+// other chat might also happen to be streaming in the background.
+function handleSendStop() { isChatStreaming(currentChatId) ? stopStreaming(currentChatId) : sendMessage(); }
+// Aborts the in-progress AI response stream(s) for one chat (defaults to
+// whichever chat is on screen). Each run carries its own AbortController
+// (see _streamAIResponse), so this only ever cancels runs belonging to
+// `chatId` — a stream running for a different chat in the background is
+// completely unaffected. Accepts an explicit chatId so a future per-chat
+// stop control in the sidebar (see the live-indicator dot) can target a
+// background chat without switching to it first.
+function stopStreaming(chatId) {
+  chatId = chatId || currentChatId;
+  runsForChat(chatId).forEach(run => { if (run.abortController) run.abortController.abort(); });
+}
 // Switches the send button between its 'send' and 'stop' (streaming) appearance/behaviour.
 function setSendMode(mode) {
   const btn=document.getElementById('sendBtn');
@@ -6050,10 +6751,25 @@ function buildLinkedPageAugmentedContent(originalContent, pages) {
 
 // Entry point for sending the current draft message: validates state and delegates to sendMessageCore.
 async function sendMessage() {
-  if(isStreaming) return;
+  // Only blocks sending in THIS chat while THIS chat already has a run
+  // going — a different chat streaming in the background no longer blocks
+  // sending here (that's the whole point of parallel streaming).
+  if(isChatStreaming(currentChatId)) return;
   const input=document.getElementById('messageInput');
   const text=input.value.trim();
   if(!text&&!attachments.length) return;
+
+  // Battle-Modus: if the composer's battle toggle is active with >=2
+  // models picked, fan out to sendBattleMessage() instead of the normal
+  // single-model path. Deliberately skips the web-search/KB checks below
+  // (out of scope for Battle-Modus, see sendBattleMessage's doc comment).
+  if (battleModeActive && battleSelectedModels.length >= 2) {
+    const att0=[...attachments];
+    input.value=''; autoResize(input); clearAttachments();
+    await sendBattleMessage(text, att0, [...battleSelectedModels]);
+    return;
+  }
+
   if(!config.model){toast(t('js.noModel'));return;}
   const provider=providerForModel(config.model)||providers[0];
   if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
@@ -6265,7 +6981,15 @@ async function sendMessageCore(text, att) {
   renderDetectedLinks();
 
   const typingId=showTyping();
-  isStreaming=true; setSendMode('stop'); abortController=new AbortController();
+  // No global isStreaming/abortController to set here. The run
+  // _streamAIResponse creates below (via _runStreamAndAttach) IS this chat's
+  // streaming state (see isChatStreaming/runsForChat); the composer
+  // button/sidebar dot update themselves the moment that run registers
+  // (_streamAIResponse calls syncComposerStreamingUI()+renderSidebar() right
+  // after adding itself to activeRuns) — correctly reflecting whichever chat
+  // is actually on screen at that point, even if the user switched away
+  // during one of the awaits above (attachment upload, link fetch, web
+  // search, KB retrieval).
 
   // build wire-format message list, then delegate to shared _streamAIResponse
   let messages;
@@ -6378,11 +7102,12 @@ function appendToMessages(el) {
   if(total){c.insertBefore(el,total);}else{c.appendChild(el);}
 }
 // Appends a new, empty assistant bubble to the message list (filled in as the stream arrives).
-function appendEmptyAI(modelOverride) {
+function appendEmptyAI(modelOverride, runId) {
   const mid=modelOverride||config.model||'';
   const pureModelId=splitModelId(mid).modelId||mid;
   const div=document.createElement('div');
   div.className='message-row ai';
+  if (runId) div.dataset.runId = runId;
   const avatarCol=document.createElement('div');avatarCol.className='avatar-col';
   const avatar=document.createElement('div');avatar.className='avatar ai';avatar.title=pureModelId;avatar.textContent=t('js.aiAvatar');
   avatarCol.appendChild(avatar);
@@ -6410,10 +7135,10 @@ function removeTyping(id){document.getElementById(id)?.remove();}
 // Scrolls the message list to the bottom.
 function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;pinnedToBottom=true;}
 // Keep pinnedToBottom in sync with whatever the user actually does with
-// the scrollbar (mouse wheel, drag, keyboard, ...) — independent of
-// whether a normal chat stream (isStreaming) or an agent run (running,
-// defined in kiconnect-agent.js) is currently active, so both share the
-// same "did the user scroll away from the bottom?" signal.
+// the scrollbar (mouse wheel, drag, keyboard, ...) — independent of which
+// chat's run (chat stream or agent turn, tracked per-chat in activeRuns —
+// see isChatStreaming) is currently active, so both share the same "did
+// the user scroll away from the bottom?" signal.
 document.addEventListener('DOMContentLoaded', () => {
   const messagesEl = document.getElementById('messages');
   if (messagesEl) messagesEl.addEventListener('scroll', () => { pinnedToBottom = isMessagesNearBottom(); });
@@ -8365,4 +9090,105 @@ async function bootApp() {
     });
     window._cmData=data;window.syncCustomDropdown();
   };
+})();
+
+// ── Battle-Modus composer popover ──────────────────────────
+// Multi-select checkbox list for picking the 2-4 models a battle runs
+// against, built from the same window._cmData the custom model dropdown
+// above already maintains — no separate data source to keep in sync.
+(function () {
+  const toggleBtn = document.getElementById('battleToggleBtn');
+  const popover = document.getElementById('battlePopover');
+  const titleEl = document.getElementById('battlePopoverTitle');
+  const searchEl = document.getElementById('battleSearch');
+  const listEl = document.getElementById('battleModelList');
+  if (!toggleBtn || !popover || !listEl) return;
+  const MAX_BATTLE_MODELS = 4;
+  let open = false;
+
+  function refreshToggleUI() {
+    toggleBtn.classList.toggle('active', battleModeActive && battleSelectedModels.length >= 2);
+    toggleBtn.title = bt('battle.toggleTitle');
+  }
+
+  // filter: lowercase search string, matched against each model's label —
+  // useful once a provider list is large enough to scroll (see chat
+  // feedback). Already-checked models stay checked while filtered out of
+  // view (state lives in battleSelectedModels, not in the filtered DOM).
+  function renderList(filter) {
+    const q = (filter || '').trim().toLowerCase();
+    titleEl.textContent = bt('battle.pickModels');
+    if (searchEl) searchEl.placeholder = bt('battle.searchPlaceholder');
+    listEl.innerHTML = '';
+    const groups = window._cmData || [];
+    let shown = 0;
+    groups.forEach(group => {
+      const items = group.items.filter(m => !q || m.label.toLowerCase().includes(q));
+      if (!items.length) return;
+      if (group.group) {
+        const gl = document.createElement('div');
+        gl.className = 'battle-model-group-label';
+        gl.textContent = group.group;
+        listEl.appendChild(gl);
+      }
+      items.forEach(m => {
+        const row = document.createElement('label');
+        row.className = 'battle-model-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = m.value;
+        cb.checked = battleSelectedModels.includes(m.value);
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            if (battleSelectedModels.length >= MAX_BATTLE_MODELS) {
+              cb.checked = false;
+              toast(bt('battle.tooManyModels'));
+              return;
+            }
+            battleSelectedModels.push(m.value);
+          } else {
+            battleSelectedModels = battleSelectedModels.filter(v => v !== m.value);
+          }
+          battleModeActive = battleSelectedModels.length >= 2;
+          refreshToggleUI();
+        });
+        const span = document.createElement('span');
+        span.textContent = m.label;
+        row.appendChild(cb); row.appendChild(span);
+        listEl.appendChild(row);
+        shown++;
+      });
+    });
+    if (!shown) {
+      const em = document.createElement('div');
+      em.className = 'battle-model-empty';
+      em.textContent = bt('battle.noModelFound');
+      listEl.appendChild(em);
+    }
+  }
+
+  function openPopover() {
+    open = true; popover.hidden = false;
+    if (searchEl) searchEl.value = '';
+    renderList('');
+    if (searchEl) searchEl.focus();
+  }
+  function closePopover() { open = false; popover.hidden = true; }
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    open ? closePopover() : openPopover();
+  });
+  if (searchEl) {
+    searchEl.addEventListener('input', () => renderList(searchEl.value));
+    searchEl.addEventListener('click', (e) => e.stopPropagation());
+    searchEl.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { closePopover(); toggleBtn.focus(); }
+    });
+  }
+  document.addEventListener('click', (e) => { if (open && !popover.contains(e.target) && e.target !== toggleBtn) closePopover(); });
+  document.addEventListener('keydown', (e) => { if (open && e.key === 'Escape') closePopover(); });
+
+  refreshToggleUI();
 })();

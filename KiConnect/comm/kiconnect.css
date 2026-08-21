@@ -1065,6 +1065,16 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
   border-radius: 4px; padding: 1px 4px; flex-shrink: 0;
   font-family: 'IBM Plex Mono', monospace;
 }
+/* Phase 2 (parallele Streams): small pulsing dot next to a chat's title in
+   the sidebar while it has an in-flight run (chat stream or agent turn) —
+   most useful for chats OTHER than the one currently on screen, so a
+   background stream stays visible without switching into it. Reuses the
+   same @keyframes pulse the header's status dot already uses. */
+.chat-item-live-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--green); box-shadow: 0 0 5px var(--green);
+  animation: pulse 1.2s infinite;
+}
 .chat-item-menu {
   display: none; flex-shrink: 0;
   background: none; border: none; color: var(--muted);
@@ -1097,12 +1107,13 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 .chat-item.multi-selected .chat-item-cb { color: var(--accent); }
 
-/* Multi-select toolbar (injected above sidebar-actions by JS) */
+/* Multi-select toolbar (injected above sidebar-actions by JS; JS sets the
+   actual inline styles below, this is just the resting/closed state) */
 #multiSelectBar {
   display: none;
   align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 8px 8px;
   background: var(--surface2);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -1838,6 +1849,118 @@ textarea::placeholder { color: var(--muted); }
 .bubble.streaming {
   will-change: contents;
   contain: layout;
+}
+
+
+/* ── Phase 3: Battle-Modus ───────────────────────────────────────────────── */
+
+/* Composer toggle button + model-picker popover (mirrors .web-context-wrap /
+   .web-context-popover / .mini-toggle right next to it). */
+.battle-context-wrap { position: relative; display: inline-flex; order: 2; }
+.battle-toggle-btn {
+  font-size: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.battle-toggle-btn.active {
+  color: var(--accent2);
+  border-color: rgba(124, 92, 252, 0.55);
+  background: rgba(124, 92, 252, 0.14);
+}
+.battle-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 520;
+  width: min(320px, calc(100vw - 32px));
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+}
+.battle-popover-title {
+  font-size: 12px; font-weight: 700; color: var(--text);
+  margin-bottom: 8px;
+}
+.battle-search {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  padding: 5px 9px; border-radius: 7px; outline: none;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+.battle-search:focus { border-color: var(--accent); }
+.battle-model-empty {
+  padding: 16px; text-align: center;
+  color: var(--muted);
+  font-size: 12px; font-family: 'IBM Plex Mono', monospace;
+}
+.battle-model-group-label {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.05em; margin: 8px 0 4px;
+}
+.battle-model-group-label:first-child { margin-top: 0; }
+.battle-model-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 4px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  color: var(--text);
+}
+.battle-model-row:hover { background: var(--surface2); }
+.battle-model-row input[type="checkbox"] { accent-color: var(--accent2); cursor: pointer; }
+
+/* Tile grid — one row per Battle-Modus message, one tile per model, until a
+   winner is picked (see chooseBattleWinner()/msg._winnerChosen). */
+.battle-wrap { flex: 1; min-width: 0; }
+.battle-default-banner {
+  font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace;
+  margin-bottom: 8px; padding: 6px 10px; border: 1px dashed var(--border);
+  border-radius: 6px; background: var(--surface2);
+}
+.battle-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.battle-tile {
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--ai-bg); overflow: hidden;
+}
+.battle-tile-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  background: var(--surface2);
+}
+.battle-tile-model {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700;
+  color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.battle-tile-status { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.battle-tile-status.live  { color: var(--accent2); animation: pulse 1.2s infinite; }
+.battle-tile-status.done  { color: var(--green); }
+.battle-tile-status.error { color: var(--red); }
+.battle-tile-bubble {
+  flex: 1; padding: 10px 12px; font-size: 14px; line-height: 1.55;
+  min-height: 60px; max-height: 420px; overflow-y: auto;
+}
+.battle-tile-footer {
+  display: flex; justify-content: flex-end; padding: 6px 10px;
+  border-top: 1px solid var(--border);
+}
+.battle-winner-btn {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+  font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  font-family: 'IBM Plex Mono', monospace; transition: all 0.15s;
+}
+.battle-winner-btn:hover { color: var(--green); border-color: var(--green); }
+@media (max-width: 640px) {
+  .battle-tile-grid { grid-template-columns: 1fr; }
 }
 
 
