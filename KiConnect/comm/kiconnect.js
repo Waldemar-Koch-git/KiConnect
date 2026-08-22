@@ -1,17 +1,14 @@
-// ================================================================
 // kiconnect.js – KI Connect application logic
 // Requires: kiconnect-languages-i18n.js (loaded before this file)
-// ================================================================
 
-// ── PDF.js worker wiring ─────────────────────────────────────────
-// workerSrc must be set before the first getDocument() call (happens lazily
-// inside extractPdfText()); merged here from the former kiconnect-pdf-init.js.
+// PDF.js worker wiring
+// workerSrc must be set before the first getDocument() call (in extractPdfText()).
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
   window._pdfjsLib = pdfjsLib;
 }
 
-// ── Theme ─────────────────────────────────────────────────────────
+// Theme
 const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
 // Swatch data: [theme, label, tooltip]. The 12 near-identical HTML blocks
@@ -88,37 +85,11 @@ function tf(key, vars) {
   return s;
 }
 
-// ── Battle-Modus i18n ──────────────────────────────────────────────
-// Same pattern as kiconnect-agent.js's TF_FALLBACKS: new strings go through
-// the normal TRANSLATIONS table when a key exists there, but never show a
-// raw key to the user if kiconnect-languages-i18n.js hasn't been touched —
-// bt()/btf() fall back to this inline English text instead.
-const BATTLE_FALLBACKS = {
-  'battle.toggleTitle': 'Battle mode: let several models answer the same message at once',
-  'battle.toggleLabel': 'Battle',
-  'battle.pickModels': 'Pick 2–4 models to compare',
-  'battle.needTwoModels': 'Pick at least 2 models for a battle.',
-  'battle.tooManyModels': 'Pick at most 4 models — more gets cramped and expensive.',
-  'battle.start': 'Start battle',
-  'battle.cancel': 'Cancel',
-  'battle.chooseWinner': '✓ Use this one',
-  'battle.winnerChosen': 'In use',
-  'battle.defaultBanner': 'No winner chosen yet — "{model}" will be used by default until you pick one.',
-  'battle.pending': 'Waiting…',
-  'battle.generating': 'Generating…',
-  'battle.aborted': '[Generation stopped]',
-  'battle.errorPrefix': 'Error: {e}',
-  'battle.noProviderForModel': 'No working provider/API key configured for this model.',
-  'battle.noModelsSelected': 'No models selected for the battle.',
-  'battle.searchPlaceholder': 'Search models…',
-  'battle.noModelFound': 'No model found',
-};
-function bt(key) { return t(key) === key ? (BATTLE_FALLBACKS[key] || key) : t(key); }
-function btf(key, vars) {
-  let s = bt(key);
-  if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
-  return s;
-}
+// Battle-Modus i18n. All keys live in _lang/<code>.js like the rest of the
+// app's strings — bt()/btf() are just aliases of t()/tf() kept for call-site
+// readability in the battle-mode code.
+function bt(key) { return t(key); }
+function btf(key, vars) { return tf(key, vars); }
 // Applies all data-i18n attributes for the current language.
 function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -265,8 +236,8 @@ function retranslateCodeBlockButtons(root = document) {
     const block = btn.closest('.code-block');
     const collapsed = !!block?.classList.contains('collapsed');
     const label = collapsed
-      ? (t('js.codeExpand') || 'Expand')
-      : (t('js.codeCollapse') || 'Collapse');
+      ? (t('js.codeExpand'))
+      : (t('js.codeCollapse'));
 
     btn.title = label;
     //btn.setAttribute('aria-label', label);
@@ -297,7 +268,7 @@ document.addEventListener('click', e => {
   if (switcher && !switcher.contains(e.target)) closeLangDropdown();
 });
 
-// ─── Konstanten ───────────────────────────────────────────────────
+// Konstanten
 const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
 // Labels = the company operating the API, not the model name. 'google' was 'gemini'
 // and 'zhipu' was 'glm' (see LEGACY_PROVIDER_TYPE_MAP in decryptProvider()).
@@ -338,15 +309,11 @@ const THINKING_MODELS = new Set([
   'gpt-4.5-preview','gpt-4.1','gpt-4.1-mini',
 ]);
 
-// KNOWN_MODELS: used only as metadata fallback (maxOutput, vision) when the live API
-// doesn't provide these values. The display list is always built dynamically from fetchModels().
-// Last reviewed 2026-07-23 against each provider's live docs. See chat notes for sources/rationale.
+// KNOWN_MODELS: metadata fallback (maxOutput, vision) when the live API doesn't
+// provide these values. The display list itself is built dynamically from fetchModels().
+// Last reviewed 2026-07-23.
 const KNOWN_MODELS = {
-  // ── Anthropic ── Opus 4.1 (legacy) retiring 2026-08-05; Sonnet 4/Opus 4 retired 2026-06-15;
-  // Claude 3.7 Sonnet + 3.5 Haiku retired 2026-02-19; Claude 3 Opus retired 2026-01-05;
-  // Claude 3.5 Sonnet (both snapshots) retired 2025-10-28. All removed below — calls to those
-  // IDs now error out on the API. Fable 5 / Mythos 5 launched 2026-06-09 (briefly export-controlled
-  // 2026-06-12 to 2026-07-01, now restored).
+  // ── Anthropic ── retired models removed below (calls to those IDs now error).
   'claude-fable-5':             { label:'Claude Fable 5 (top capability)', maxOutput:128000, vision:true  },
   'claude-opus-4-8':            { label:'Claude Opus 4.8',           maxOutput:128000, vision:true  },
   'claude-sonnet-5':            { label:'Claude Sonnet 5',           maxOutput:128000, vision:true  },
@@ -354,18 +321,13 @@ const KNOWN_MODELS = {
   'claude-opus-4-6':            { label:'Claude Opus 4.6 (legacy)',  maxOutput:32000,  vision:true  },
   'claude-sonnet-4-6':          { label:'Claude Sonnet 4.6 (legacy)',maxOutput:64000,  vision:true  },
 
-  // ── OpenAI ── the o1/o3/o4-mini and GPT-4o/4.1/4.5/4-turbo lines were pulled from ChatGPT on
-  // 2026-02-13 / 2026-06-27 and the API deprecation wave already removed 18 snapshots on
-  // 2026-07-23 (today), with o3, o4-mini, gpt-4-turbo scheduled for 2026-10-23 and the last GPT-5/
-  // o3 snapshots for 2026-12-11. Current line is GPT-5.3/5.4/5.5 (all 1M-ish context, 128k output).
+  // ── OpenAI ── o1/o3/o4-mini and GPT-4 lines retired; current line is GPT-5.3/5.4/5.5.
   'gpt-5.5':                    { label:'GPT-5.5',                   maxOutput:128000, vision:true  },
   'gpt-5.4':                    { label:'GPT-5.4 (Thinking)',        maxOutput:128000, vision:true  },
   'gpt-5.4-mini':                { label:'GPT-5.4 mini',              maxOutput:128000, vision:true  },
   'gpt-5.3-codex':              { label:'GPT-5.3 Codex',             maxOutput:128000, vision:true  },
 
-  // ── Mistral ── these three are '-latest' aliases, so they auto-resolve to the current
-  // generation (Large 3 / Medium 3.5 / Small 4) without needing an update here; context grew to
-  // ~256k in the process. codestral-latest / mistral-nemo are older but still served.
+  // ── Mistral ── '-latest' aliases auto-resolve to the current generation (no update needed here).
   'mistral-large-latest':       { label:'Mistral Large (3)',         maxOutput:131072, vision:true  },
   'mistral-medium-latest':      { label:'Mistral Medium (3.5)',      maxOutput:131072, vision:false },
   'mistral-small-latest':       { label:'Mistral Small (4)',         maxOutput:131072, vision:true  },
@@ -378,22 +340,16 @@ const KNOWN_MODELS = {
   'gemini-3.5-flash':           { label:'Gemini 3.5 Flash',          maxOutput:65536,  vision:true  },
   'gemini-3.5-flash-lite':      { label:'Gemini 3.5 Flash Lite',     maxOutput:65536,  vision:true  },
 
-  // ── xAI ── Grok 3/2 are gone; Grok 4.5 (2026-07-08) is the current flagship. xAI's own docs
-  // give it a 500k context window (third-party trackers disagree, so treat context figures for
-  // Grok with some caution and check console.x.ai before relying on an exact number).
+  // ── xAI ── Grok 4.5 is the current flagship; verify context size at console.x.ai.
   'grok-4.5':                   { label:'Grok 4.5',                  maxOutput:128000, vision:true  },
   'grok-4':                     { label:'Grok 4',                    maxOutput:128000, vision:true  },
 
-  // ── Groq ── Groq deprecated llama-4-maverick, kimi-k2-instruct-0905 and gemma2-9b-it during
-  // 2026 in favor of gpt-oss-120b; mixtral-8x7b and the un-versioned llama3-70b-8192 are long gone
-  // from Groq's console. Kept llama-3.3-70b / llama-3.1-8b since Groq still serves them.
+  // ── Groq ── older models (mixtral-8x7b, llama3-70b-8192) deprecated; kept what's still served.
   'llama-3.3-70b-versatile':    { label:'Llama 3.3 70B',             maxOutput:32768,  vision:false },
   'llama-3.1-8b-instant':       { label:'Llama 3.1 8B',              maxOutput:8000,   vision:false },
   'openai/gpt-oss-120b':        { label:'GPT-OSS 120B (via Groq)',   maxOutput:32768,  vision:false },
 
-  // ── DeepSeek ── ⚠️ deepseek-chat / deepseek-reasoner retire 2026-07-24 15:59 UTC (i.e. tomorrow
-  // relative to today) and currently just alias to deepseek-v4-flash. Migrate configs to the v4
-  // IDs directly. V4 context is 1M, max output is 384k for both Pro and Flash.
+  // ── DeepSeek ── deepseek-chat/-reasoner retire 2026-07-24, migrate configs to v4 IDs directly.
   'deepseek-v4-pro':            { label:'DeepSeek V4 Pro',           maxOutput:384000, vision:false },
   'deepseek-v4-flash':          { label:'DeepSeek V4 Flash',         maxOutput:384000, vision:false },
 
@@ -409,7 +365,7 @@ const KNOWN_MODELS = {
 const CLAUDE_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('claude')).map(([id,m])=>({id,...m}));
 const OPENAI_MODELS  = Object.entries(KNOWN_MODELS).filter(([id])=>id.startsWith('gpt')||id.startsWith('o')).map(([id,m])=>({id,...m}));
 
-// ── Image storage limit (user-configurable, default 500 KB) ──────
+// Image storage limit (user-configurable, default 500 KB)
 // Kept in localStorage as 'kic_max_img_bytes' (plain, not sensitive).
 const DEFAULT_MAX_IMAGE_STORAGE_BYTES = 500 * 1024;
 // Returns the configured max image size in bytes (default if unset).
@@ -421,7 +377,7 @@ function setMaxImageStorageBytes(bytes) {
   localStorage.setItem('kic_max_img_bytes', String(bytes));
 }
 
-// ── OpenRouter model-meta cache (localStorage) ───────────────────
+// OpenRouter model-meta cache (localStorage)
 let _orModelMeta = {};
 (function _loadOrCache() {
   try {
@@ -433,7 +389,7 @@ function _saveOrCache() {
   try { localStorage.setItem('kic_or_model_meta', JSON.stringify(_orModelMeta)); } catch(e) {}
 }
 
-// ── Anthropic model-capabilities cache (localStorage) ────────────
+// Anthropic model-capabilities cache (localStorage)
 // Filled from the live /v1/models API in fetchModels(); per-model flags
 // (adaptiveThinking, noTemperature) avoid hard-coded model-name checks.
 let _anthropicModelCaps = {};
@@ -517,7 +473,7 @@ function getModelMaxOutput(modelId) {
   return getModelDefaultMax(modelId);
 }
 
-// ── STATE ─────────────────────────────────────────────────────────
+// STATE
 const DEFAULT_CONFIG = {
   model: '', temperature: 0.7, maxTokens: null, systemPrompt: '',
   activeProfileId: null, userModelMaxOverrides: {}, chatMaxWidth: 880,
@@ -543,65 +499,50 @@ let currentChatId   = null;
 let activeFolderId  = undefined;
 let attachments     = [];
 
-// ── Run registry (one RunState per in-flight generation) ──
-// Every in-flight generation (chat stream, and — mirrored in
-// kiconnect-agent.js — agent run) gets its own RunState, keyed by a unique
-// runId, instead of a single shared global. This is what lets a streaming
-// answer survive a chat switch: the registry is the source of truth, the
-// DOM bubble is just a projection of it that renderMessages() can
-// rebuild/reattach at any time.
+// Run registry (one RunState per in-flight generation)
+// Every generation (chat stream or agent run) gets its own RunState keyed by
+// runId instead of a shared global, so a streaming answer survives a chat
+// switch: the registry is the source of truth, the DOM bubble just a
+// projection renderMessages() can rebuild/reattach at any time.
 //
 // RunState shape: { runId, chatId, kind, provider, model, abortController,
 //   text, thinkingText, usage, status, bubbleEl, targetContainer, onDone }
-// `bubbleEl` is the CURRENT live DOM node for this run, or null when the
-// owning chat isn't the one on screen right now — always re-read from the
-// registry, never captured in a closure, so a stale/detached node is never
-// written into.
+// `bubbleEl` is the live DOM node for this run, or null if its chat isn't on
+// screen — always re-read from the registry, never captured in a closure.
 const activeRuns = new Map();
 
-// Pure UI state for the composer's model multi-select (Battle-Modus) — not
-// persisted, resets to "off" on reload same as e.g. selectedLinkUrls. When
-// active and >=2 models are picked, sendMessage() calls sendBattleMessage()
-// instead of the normal single-model sendMessageCore().
+// Pure UI state for the composer's model multi-select (Battle-Modus), not
+// persisted. When active with >=2 models picked, sendMessage() calls
+// sendBattleMessage() instead of sendMessageCore().
 let battleModeActive = false;
 let battleSelectedModels = [];
 
-// Builds a reasonably-unique run id. Prefixed with the chat id purely to
-// make runIds readable in the DOM (data-run-id) / devtools; uniqueness comes
-// from the timestamp + random suffix, not the prefix.
+// Builds a run id. Chat-id prefix is just for readability in devtools;
+// uniqueness comes from the timestamp + random suffix.
 function _makeRunId(chatId) {
   return `${chatId || currentChatId || 'x'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
-// Returns this run's live bubble element, but only if it's actually still
-// attached to the document — i.e. the chat it belongs to is the one
-// currently rendered. Every DOM write during streaming must go through this
-// (never through a captured `aiEl`/`streamEl` local), so that switching away
-// from a chat mid-stream simply stops touching the DOM instead of throwing
-// or writing into a detached node.
+// Returns this run's live bubble element, only if still attached to the
+// document. Every DOM write during streaming must go through this (never a
+// captured local), so switching chats mid-stream just stops touching the DOM.
 function _runBubbleEl(run) {
   return (run && run.bubbleEl && run.bubbleEl.isConnected) ? run.bubbleEl : null;
 }
-// Records the latest streamed text/usage for a run so an aborted/backgrounded
-// stream can still be saved (or reattached) with whatever was generated so
-// far, even while its chat isn't on screen. Replaces `_rememberStreamSnapshot`.
+// Records the latest streamed text/usage so an aborted/backgrounded run can
+// still be saved or reattached with whatever was generated so far.
 function _updateRunText(runId, text, usageData, thinkingText) {
   const run = activeRuns.get(runId);
   if (!run) return;
   run.text = text || '';
   if (usageData !== undefined) run.usage = usageData || null;
-  // thinkingText kept separately (not just embedded in `text`'s stored
-  // <thinking> block) so a reattached live bubble can hand it straight to
-  // renderStreamingBubble() without having to re-parse the stored format.
+  // Kept separate from `text` so a reattached bubble can use it directly.
   if (thinkingText !== undefined) run.thinkingText = thinkingText;
 }
 
-// ── Per-chat streaming state ───────────────────────────────
-// A chat can only ever have one turn running at a time (Battle-Modus's
-// several-variants-for-one-turn is the exception), but DIFFERENT chats can
-// each have their own in-flight run, fully independent of one another.
-// `kind` covers both chat streams and agent runs (kiconnect-agent.js shares
-// this same registry), so this one check works for both without either
-// module needing to know about the other's flag.
+// Per-chat streaming state
+// A chat has at most one running turn (Battle-Modus is the exception), but
+// different chats can each have their own independent in-flight run. `kind`
+// covers both chat streams and agent runs (shared registry with kiconnect-agent.js).
 function isChatStreaming(chatId) {
   if (!chatId) return false;
   for (const run of activeRuns.values()) {
@@ -609,26 +550,20 @@ function isChatStreaming(chatId) {
   }
   return false;
 }
-// The actual running run(s) for a chat, not just yes/no — used wherever the
-// run itself (its abortController, kind, ...) is needed, e.g. stopStreaming().
-// Normally 0 or 1 entries (see isChatStreaming above); returns an array
-// rather than a single value since Battle-Modus can have several concurrent
-// runs for the SAME chat.
+// The actual running run(s) for a chat (not just yes/no), used e.g. by
+// stopStreaming(). Normally 0-1 entries; an array because Battle-Modus can
+// have several concurrent runs for the same chat.
 function runsForChat(chatId) {
   return [...activeRuns.values()].filter(r => r.chatId === chatId && r.status === 'running');
 }
-// Reflects the composer's send/stop button to whichever chat is CURRENTLY
-// ON SCREEN — never "is anything streaming anywhere in the app", which is
-// what the old single global `isStreaming` amounted to. Call this after
-// anything that can change either: switchChat/newChat/deleteChat, and
-// whenever a run starts or finishes (paralleling the old inline
-// `setSendMode('stop'/'send')` calls, which used to be safe to do
-// unconditionally because there was only ever one stream in the whole app).
+// Reflects the composer's send/stop button for the chat currently on screen
+// (not "is anything streaming anywhere"). Call after switchChat/newChat/
+// deleteChat and whenever a run starts or finishes.
 function syncComposerStreamingUI() {
   setSendMode(isChatStreaming(currentChatId) ? 'stop' : 'send');
 }
 
-// ── Auto-scroll behaviour ───────────────────────────────────────────
+// Auto-scroll behaviour
 // The list stays pinned to the bottom while streaming unless the user scrolls
 // up (unpin → position kept when the stream ends); scrolling down re-pins.
 let AUTO_SCROLL_DURING_STREAM = false;
@@ -654,7 +589,7 @@ const WEB_SEARCH_RESULT_MAX = 30;
 let _selectedChatIds = new Set();
 let _multiSelectMode = false;
 
-// ── CRYPTO — PBKDF2 + full storage encryption ──────────────────
+// CRYPTO — PBKDF2 + full storage encryption
 
 let _cryptoKey = null;
 let _sessionPassphrase = null;
@@ -728,11 +663,10 @@ async function deriveKeyPBKDF2(passphrase, saltBytes) {
   );
 }
 
-// == CryptoKey derived only from password + account salt ========================
-// No seed anymore in localStorage. The PBKDF2 salt (16 bytes, randomly,
-// per account) lives in the account registry - it isn't a secret,
-// but prevents rainbow table attacks.
-// The password itself remains exclusively in RAM (_sessionPassphrase).
+// CryptoKey derived only from password + account salt
+// No seed in localStorage. The PBKDF2 salt (16 bytes, random, per account)
+// lives in the account registry — not secret, but prevents rainbow tables.
+// The password itself stays exclusively in RAM (_sessionPassphrase).
 async function getCryptoKey() {
   if (_cryptoKey) return _cryptoKey;
   const acc = getAccount(_activeAccountId);
@@ -758,7 +692,7 @@ async function getCryptoKey() {
   return _cryptoKey;
 }
 
-// == Session token: F5 reload without password storage ==============
+// Session token: F5 reload without password storage
 // Password is never stored; instead a token encrypted with the in-RAM
 // CryptoKey is kept in sessionStorage so a reload can restore the session.
 const _SESSION_TOKEN_KEY = 'kic_st';
@@ -871,11 +805,10 @@ async function decryptProvider(p) {
   return out;
 }
 
-// ── AGENT SESSION ─────────────────────────────────────────────────
-// Second, independent PBKDF2+AES-256 key so the local proxy can decrypt this
-// account's project registry (id → folder path) during a login. Kept in proxy
-// RAM only, never on disk (see /agent/session/unlock in kiconnect-proxy.py);
-// a leak of one key never exposes the other (config/chats vs. projects).
+// AGENT SESSION
+// Second, independent PBKDF2+AES-256 key so the proxy can decrypt this account's
+// project registry. Kept in proxy RAM only, never on disk — a leak of one key
+// never exposes the other (config/chats vs. projects).
 let _agentSessionToken = null;
 let _agentProjects = [];
 
@@ -930,11 +863,9 @@ async function _applyAgentSessionResponse(res) {
   _agentProjects = Array.isArray(data.projects) ? data.projects : [];
 }
 
-// Re-encrypts the agent registry under a new key after a password change.
-// Uses the still-valid OLD session token to authorize the swap — never
-// re-derives from scratch (which would fail to decrypt the old ciphertext).
-// Falls back to a fresh unlockAgentSession() if there was no old session
-// to rekey (e.g. agent feature was never unlocked this session).
+// Re-encrypts the agent registry under a new key after a password change,
+// authorized via the still-valid old session token. Falls back to a fresh
+// unlockAgentSession() if there was no old session to rekey.
 async function rekeyAgentSession() {
   const acc = getAccount(_activeAccountId);
   if (!_agentSessionToken || !acc?.agentSalt || !_sessionPassphrase) {
@@ -970,7 +901,7 @@ function agentSessionHeader() {
   return _agentSessionToken ? { 'X-Agent-Session': _agentSessionToken } : {};
 }
 
-// ── Login password hash (PBKDF2 v2, per-account) ─────────────────
+// Login password hash (PBKDF2 v2, per-account)
 async function hashPasswordPBKDF2(pw, saltBytes) {
   const key = await deriveKeyPBKDF2(pw + '|kic-login-v2', saltBytes);
   const iv = new Uint8Array(12);
@@ -1000,7 +931,7 @@ async function verifyAccountPassword(accountId, pw) {
   } catch { return false; }
 }
 
-// ── Multi-Account Registry ────────────────────────────────────────
+// Multi-Account Registry
 let _accounts = [];
 let _activeAccountId = null;
 // Looks up an account by ID in the in-memory account list.
@@ -1058,11 +989,9 @@ async function _storeDel(accountId, key) {
   localStorage.removeItem(`kic_${accountId}_${key}`);
 }
 
-// Lists the keys actually present on the server for an account (GET /store/<accountId>).
-// Used by deleteAccount() so it deletes everything that's really there instead of
-// relying on a hardcoded key list that's easy to forget to update (e.g. a new
-// section added to save() later) and would otherwise leave orphaned data behind.
-// Returns null (not []) on any failure, so callers can fall back to a hardcoded list.
+// Lists keys actually present on the server for an account, so deleteAccount()
+// removes everything real instead of relying on a hardcoded list. Returns null
+// (not []) on failure, so callers can fall back to a hardcoded list.
 async function _storeListKeys(accountId) {
   if (!_storeAvailable) return null;
   try {
@@ -1138,7 +1067,7 @@ function sanitizeMsgForStorage(msg) {
   const strippedFileNames = new Set();
 
   const safeContent = msg.content.map(p => {
-    // ── Images ────────────────────────────────────────────────────
+    // Images
     if (p.type === 'image_url') {
       const url = p.image_url?.url || '';
       if (url.startsWith('data:') && url.length > maxBytes) {
@@ -1146,7 +1075,7 @@ function sanitizeMsgForStorage(msg) {
       }
       return p;
     }
-    // ── PDF (base64) ──────────────────────────────────────────────
+    // PDF (base64)
     // Binary PDFs can be very large; strip the data, keep a sentinel so
     // the message is re-sendable after a "re-attach" by the user.
     if (p.type === 'pdf_base64') {
@@ -1154,12 +1083,12 @@ function sanitizeMsgForStorage(msg) {
       // Keep the block but without the binary payload to avoid RangeError.
       return { type: 'pdf_base64_ref', name: p.name };
     }
-    // ── PDF (extracted text) ──────────────────────────────────────
+    // PDF (extracted text)
     if (p.type === 'pdf_text') {
       if (p.name) strippedFileNames.add(p.name);
       return { type: 'pdf_text_ref', name: p.name };
     }
-    // ── Plain text-file content ───────────────────────────────────
+    // Plain text-file content
     // These are stored as a text block starting with '--- Content of "…" ---'
     if (p.type === 'text' && typeof p.text === 'string' && p.text.startsWith('--- ')) {
       const fname = p.text.match(/^--- Content of "(.+?)" ---/)?.[1];
@@ -1179,11 +1108,9 @@ function sanitizeMsgForStorage(msg) {
   return result;
 }
 
-// ── save() dirty-tracking cache ─────────────────────────────────────
-// Caches last-saved plaintext per section and skips encrypt+PUT for
-// unchanged sections, avoiding a full re-encrypt on every trivial change.
-// Must be reset on key change (password change, login, account switch);
-// see getCryptoKey()/load().
+// save() dirty-tracking cache
+// Caches last-saved plaintext per section, skips encrypt+PUT for unchanged
+// sections. Must be reset on key change (password change, login, account switch).
 let _saveCache = null;
 function resetSaveCache() { _saveCache = null; }
 
@@ -1329,7 +1256,7 @@ async function load() {
 // accountKey() bleibt fuer localStorage (kein Storage-Server: kic_lang, session-token usw.)
 function accountKey(key) { return `kic_${_activeAccountId}_${key}`; }
 
-// ── Sidebar Resize ────────────────────────────────────────────────
+// Sidebar Resize
 function toggleSidebar() {
   const sb = document.getElementById('sidebar');
   sidebarCollapsed = !sidebarCollapsed;
@@ -1365,7 +1292,7 @@ function toggleSidebar() {
   });
 })();
 
-// ── Provider Helpers ──────────────────────────────────────────────
+// Provider Helpers
 function splitModelId(fullId) {
   if (!fullId) return { providerId: null, modelId: '' };
   const sep = fullId.indexOf('::');
@@ -1380,10 +1307,9 @@ function providerForModel(fullModelId) {
   return providers.find(p => p.id === providerId) || null;
 }
 // Converts a copied OpenAI-compatible endpoint back to the API base URL.
-// The provider field is a *base* URL; all callers append /models,
-// /chat/completions, or /embeddings themselves.  Being tolerant here avoids
-// paths such as /v1/embeddings/models when users paste the endpoint from API
-// documentation or a curl example.
+// The provider field is a *base* URL; callers append /models,
+// /chat/completions, or /embeddings themselves — tolerant of users pasting
+// a full endpoint path from API docs or a curl example.
 function normalizeOpenAIBaseUrl(url) {
   return (url || '').trim().replace(/\/+$/, '').replace(/\/(?:models|embeddings|chat\/completions)$/i, '');
 }
@@ -1423,7 +1349,7 @@ function effectiveMaxTokens() {
   return modelMax;
 }
 
-// ── Proxy ─────────────────────────────────────────────────────────
+// Proxy
 const USE_PROXY = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const ALLOWED_API_DOMAINS = [
   'api.anthropic.com','api.openai.com','chat.kiconnect.nrw','openrouter.ai',
@@ -1461,14 +1387,12 @@ function _isLanConfirmedUrl(url) {
 }
 // Routes a request URL through the local dev proxy (if active) after checking it against isSafeApiUrl(); throws if the domain isn't allowed.
 function proxyUrl(url, allowProviderEditorUrl = false, lanConfirmed = false) {
-  // While a provider is being created it is not in `providers` yet, so the
-  // normal allow-list cannot know its host.  The local proxy still performs
-  // the actual URL/IP/SSRF validation; this exception merely lets the two
-  // "discover/test embedding" controls validate a server *before* saving it.
+  // A provider being created isn't in `providers` yet, so the allow-list
+  // can't know its host; this lets "discover/test" validate before saving.
   const validEditorUrl = allowProviderEditorUrl && (() => {
     try { return /^https?:$/i.test(new URL(url).protocol); } catch { return false; }
   })();
-  if (!isSafeApiUrl(url) && !validEditorUrl) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked') || 'API domain not allowed.'); }
+  if (!isSafeApiUrl(url) && !validEditorUrl) { console.error('[Security] Blocked:', url); throw new Error(t('js.apiDomainBlocked')); }
   if (!USE_PROXY) return url;
   let out = '/proxy/' + url;
   // Marker lives on the *outer* proxy request's query string, not on the
@@ -1477,23 +1401,20 @@ function proxyUrl(url, allowProviderEditorUrl = false, lanConfirmed = false) {
   if (_isLanConfirmedUrl(url) || lanConfirmed) out += (url.includes('?') ? '&' : '?') + 'kic_lan_confirm=1';
   return out;
 }
-// A newly entered custom provider has not been saved yet, so it cannot have
-// the normal stored LAN confirmation.  Ask for the same explicit consent as
-// saving the provider, then pass the one-request confirmation marker to the
-// local proxy.  This makes discovery/testing useful before the first save
-// without weakening the proxy's DNS/IP checks.
+// An unsaved custom provider has no stored LAN confirmation yet, so ask for
+// the same explicit consent and pass a one-request confirmation marker instead.
 function providerEditorProxyUrl(url, type) {
   if (type !== 'openai-compat' || _isLanConfirmedUrl(url)) return proxyUrl(url, true);
   try {
     const host = new URL(url).hostname.toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return proxyUrl(url, true);
     return confirmLanAddress(host) ? proxyUrl(url, true, true) : null;
-  } catch { throw new Error(t('js.invalidUrl') || 'Invalid server URL.'); }
+  } catch { throw new Error(t('js.invalidUrl')); }
 }
 // Routes a public (non-API-key) fetch such as page/search fetching through the local dev proxy; only checks the URL scheme, not a domain whitelist.
 function proxyPublicUrl(url) {
   const u = new URL(url);
-  if (!/^https?:$/i.test(u.protocol)) throw new Error(t('js.apiDomainBlocked') || 'URL not allowed.');
+  if (!/^https?:$/i.test(u.protocol)) throw new Error(t('js.apiDomainBlocked'));
   return USE_PROXY ? '/proxy/' + url : url;
 }
 
@@ -1530,18 +1451,17 @@ function updateActiveProviderInfo() {
   });
 }
 
-// ── Provider Panel ────────────────────────────────────────────────
+// Provider Panel
 function openProviderPanel() {
   renderProviderList();
   document.getElementById('providerPanel').classList.add('open');
   document.getElementById('overlay').classList.add('show');
   document.querySelector('[data-panel="providerPanel"]')?.classList.add('active');
 }
-// (Re)builds the list of configured providers in the Provider panel, with enable/disable, edit and delete controls.
-// Parks the (single, shared) editor form right after a given element - used
-// so editing happens next to the row you clicked instead of always at the
-// bottom of the panel. `null` means "home position" (right after the
-// add-new-provider button, its original static spot in the HTML).
+// (Re)builds the list of configured providers in the Provider panel.
+// Parks the shared editor form right after a given element, so editing
+// happens next to the clicked row. `null` means "home position" (right
+// after the add-new-provider button).
 function _placeProviderEditor(afterEl) {
   const editor = document.getElementById('providerEditor');
   const anchor = afterEl || document.getElementById('addProviderBtn');
@@ -1551,11 +1471,9 @@ function _placeProviderEditor(afterEl) {
 function renderProviderList() {
   const list = document.getElementById('providerList');
   const editor = document.getElementById('providerEditor');
-  // The editor can currently be parked inside this list (next to whichever
-  // provider is being edited - see editProvider()). Detach it before
-  // wiping the list with innerHTML='', or a re-render triggered by an
-  // unrelated action (toggling another provider, a background model
-  // fetch...) while editing would delete the open editor from the DOM.
+  // The editor may currently be parked inside this list (see editProvider()).
+  // Detach it before wiping the list with innerHTML='', or a re-render
+  // triggered elsewhere while editing would delete the open editor from the DOM.
   const wasInList = editor && list.contains(editor);
   if (wasInList) editor.remove();
   list.innerHTML = '';
@@ -1608,11 +1526,11 @@ function renderProviderList() {
     const reorderCol = document.createElement('div');
     reorderCol.className = 'provider-reorder-col';
     const upBtn = document.createElement('button');
-    upBtn.className = 'icon-btn provider-reorder-btn'; upBtn.textContent = '▲'; upBtn.title = t('js.moveUp') || 'Move up';
+    upBtn.className = 'icon-btn provider-reorder-btn'; upBtn.textContent = '▲'; upBtn.title = t('js.moveUp');
     upBtn.disabled = idx === 0;
     upBtn.addEventListener('click', (e) => { e.stopPropagation(); moveProvider(p.id, -1); });
     const downBtn = document.createElement('button');
-    downBtn.className = 'icon-btn provider-reorder-btn'; downBtn.textContent = '▼'; downBtn.title = t('js.moveDown') || 'Move down';
+    downBtn.className = 'icon-btn provider-reorder-btn'; downBtn.textContent = '▼'; downBtn.title = t('js.moveDown');
     downBtn.disabled = idx === providers.length - 1;
     downBtn.addEventListener('click', (e) => { e.stopPropagation(); moveProvider(p.id, 1); });
     reorderCol.appendChild(upBtn); reorderCol.appendChild(downBtn);
@@ -1620,7 +1538,7 @@ function renderProviderList() {
     const dragHandle = document.createElement('span');
     dragHandle.className = 'provider-drag-handle';
     dragHandle.textContent = '⠿';
-    dragHandle.title = t('js.dragToReorder') || 'Drag to reorder';
+    dragHandle.title = t('js.dragToReorder');
 
     const info = document.createElement('div');
     info.className = 'provider-item-info';
@@ -1719,14 +1637,12 @@ function resetEmbedModelPicker() {
   if (select) { select.innerHTML = ''; select.style.display = 'none'; }
   if (input) input.style.display = '';
 }
-// Fetches this server's /models list the same way fetchModels() does for the
-// chat-model dropdown, but keeps only entries that look like embedding
-// models (fetchModels() does the mirror-image filter to keep them OUT of
-// the chat list) - so picking an embedding model works exactly like picking
-// a chat model, instead of requiring the exact name typed from memory.
+// Fetches /models like fetchModels() does, but keeps only embedding-looking
+// entries (fetchModels() filters them OUT of the chat list) - so picking an
+// embedding model works like picking a chat model, not typed from memory.
 async function loadEmbeddingModelCandidates() {
   const type = getSelectedProviderType();
-  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider') || 'Anthropic has no embedding models.'); return; }
+  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider')); return; }
   const apiKey = document.getElementById('pvApiKey').value.trim();
   const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
@@ -1770,7 +1686,7 @@ async function loadEmbeddingModelCandidates() {
     });
     candidates.sort((a, b) => Number(b.likelyEmbedding) - Number(a.likelyEmbedding) || a.id.localeCompare(b.id));
     if (!candidates.length) {
-      toast(t('js.noEmbeddingModelsFound') || 'No embedding models found on this server — enter one manually.');
+      toast(t('js.noEmbeddingModelsFound'));
       return;
     }
     const select = document.getElementById('pvEmbedModelSelect');
@@ -1778,15 +1694,12 @@ async function loadEmbeddingModelCandidates() {
     const likely = candidates.filter(c => c.likelyEmbedding);
     const other = candidates.filter(c => !c.likelyEmbedding);
     const current = input.value.trim();
-    // Only the unverified list is ever this noisy (regular /models responses
-    // mix in every chat/vision/audio model the server hosts) - if we have at
-    // least one recognized embedding model, keep the picker to just those by
-    // default and let "Show other models" reveal the rest on demand instead
-    // of dumping the whole catalog in every time.
+    // If we have at least one recognized embedding model, keep the picker to
+    // just those by default; "Show other models" reveals the rest on demand.
     const showAllByDefault = likely.length === 0 || other.some(c => c.id === current);
     const renderOptions = includeOther => {
       select.innerHTML = '';
-      const ph = document.createElement('option'); ph.value = ''; ph.textContent = t('js.selectModel') || '– select –';
+      const ph = document.createElement('option'); ph.value = ''; ph.textContent = t('js.selectModel');
       select.appendChild(ph);
       likely.forEach(({ id }) => {
         const o = document.createElement('option'); o.value = id; o.textContent = id;
@@ -1804,7 +1717,7 @@ async function loadEmbeddingModelCandidates() {
         select.appendChild(showMore);
       }
       const customOpt = document.createElement('option'); customOpt.value = '__custom__';
-      customOpt.textContent = t('js.enterManually') || '✎ Enter manually…';
+      customOpt.textContent = t('js.enterManually');
       select.appendChild(customOpt);
       select.value = candidates.some(x => x.id === current) ? current : '';
     };
@@ -1820,14 +1733,13 @@ async function loadEmbeddingModelCandidates() {
     btn.textContent = prevLabel; btn.disabled = false;
   }
 }
-// Complements loadEmbeddingModelCandidates(): many self-hosted/gateway
-// OpenAI-compatible servers don't list embedding models under /models
-// even though /embeddings works fine. This sends one minimal request
-// straight to /embeddings with the typed model name and reports back
-// the real vector size or error - works regardless of what /models says.
+// Complements loadEmbeddingModelCandidates(): many servers don't list
+// embedding models under /models even though /embeddings works. This sends
+// a minimal request straight to /embeddings and reports back the vector
+// size or error, regardless of what /models says.
 async function testEmbeddingModel() {
   const type = getSelectedProviderType();
-  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider') || 'Anthropic has no embedding models.'); return; }
+  if (type === 'anthropic') { toast(t('js.noEmbeddingsForProvider')); return; }
   const apiKey = document.getElementById('pvApiKey').value.trim();
   const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
@@ -1933,13 +1845,13 @@ async function saveProviderEditor() {
   if (type === 'openai-compat' && serverUrl) {
     let hostname = '';
     try { hostname = new URL(serverUrl).hostname.toLowerCase(); }
-    catch { toast(t('js.invalidUrl') || 'Invalid server URL.'); return; }
+    catch { toast(t('js.invalidUrl')); return; }
     const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
     if (!isLocal) {
       const existing = editingProviderId ? providers.find(p => p.id === editingProviderId) : null;
       const alreadyConfirmed = !!(existing && existing.netConfirmed && existing.netConfirmedHost === hostname);
       if (!alreadyConfirmed && !confirmLanAddress(hostname)) {
-        toast(t('js.lanConfirmCancelled') || 'Cancelled - network address was not confirmed.');
+        toast(t('js.lanConfirmCancelled'));
         return;
       }
       netConfirmed = true; netConfirmedHost = hostname;
@@ -1969,11 +1881,9 @@ function deleteProvider(id) {
   delete _modelGroupsCache[id];
   save(); renderProviderList(); fetchModels();
 }
-// Reorders the providers array (used by both the ▲/▼ buttons and drag &
-// drop in the Provider panel) — providers only ever had their creation
-// order, with no way to permute that afterwards. `dir` is -1 (up) or +1
-// (down) for button moves; drag & drop instead passes an explicit
-// `toIndex`.
+// Reorders the providers array (used by the ▲/▼ buttons and drag & drop in
+// the Provider panel). `dir` is -1 (up) or +1 (down) for button moves;
+// drag & drop passes an explicit `toIndex` instead.
 function moveProvider(id, dir) {
   const idx = providers.findIndex(p => p.id === id);
   if (idx === -1) return;
@@ -1993,7 +1903,7 @@ function reorderProviderTo(draggedId, targetId) {
   save(); renderProviderList();
 }
 
-// ── Profiles ──────────────────────────────────────────────────────
+// Profiles
 function activeProfile() { return profiles.find(p => p.id === config.activeProfileId) || null; }
 // Applies a profile's system prompt, temperature and token settings to the active config and refreshes the badge/UI.
 function applyProfile(p) {
@@ -2247,7 +2157,7 @@ function buildProfileItem(p) {
   return item;
 }
 
-// ── Profile folders — with drag & drop, mirrors the chat-folder system ──
+// Profile folders — with drag & drop, mirrors the chat-folder system
 function newProfileFolder() {
   const id = Date.now().toString();
   profileFolders.push({ id, name: t('js.newFolder'), collapsed: false });
@@ -2435,7 +2345,7 @@ function deleteProfile(id) {
   save(); renderProfileList();
 }
 
-// ── Settings ──────────────────────────────────────────────────────
+// Settings
 function syncSettingsPanel() {
   document.getElementById('temperature').value   = config.temperature;
   document.getElementById('tempVal').textContent = config.temperature;
@@ -2499,7 +2409,7 @@ function applyChatWidth(val) {
   config.chatMaxWidth = val;
 }
 
-// ── Models ────────────────────────────────────────────────────────
+// Models
 let providerStatus = {};
 // Caches the last successfully fetched model list per provider (populated by
 // fetchModels()). Lets toggleProviderEnabled() rebuild the model dropdown
@@ -2527,7 +2437,7 @@ async function fetchModels() {
         const liveModels = data.data || [];
         const liveIds = new Set(liveModels.map(m => m.id));
 
-        // ── Populate capabilities cache from live API metadata ────────
+        // Populate capabilities cache from live API metadata
         let capsUpdated = false;
         liveModels.forEach(m => {
           if (!m.id) return;
@@ -2544,7 +2454,6 @@ async function fetchModels() {
           }
         });
         if (capsUpdated) _saveAnthropicCaps();
-        // ─────────────────────────────────────────────────────────────
 
         const modelsToShow = liveIds.size > 0
           ? [...liveIds].sort().reverse().map(id => ({ id, label: KNOWN_MODELS[id]?.label || id }))
@@ -2739,7 +2648,7 @@ function updateModelMaxInfo() {
   if (el) el.textContent = modelId ? tf('js.modelMax', {n: max.toLocaleString()}) : '';
 }
 
-// ── Thinking / Reasoning UI ───────────────────────────────────────
+// Thinking / Reasoning UI
 const OAI_EFFORT = { 1: 'low', 2: 'medium', 3: 'high' };
 const CLAUDE_BUDGET = { 1: 2000, 2: 8000, 3: 20000 };
 
@@ -2770,11 +2679,8 @@ function isMiniMaxThinkingModel(modelId) {
   const bare = (modelId || '').split('/').pop().toLowerCase();
   return /^minimax-(m\d|text-)/.test(bare) || /^minimaxai\/minimax-m\d/.test(bare);
 }
-// Returns whether a model ID is a Mistral "native" reasoning model (Magistral
-// family): these always reason, take no reasoning_effort parameter, and
-// return content as an array of {type:'thinking'|'text'} chunks — same as
-// the adjustable models below when reasoning_effort:'high' is used.
-// See https://docs.mistral.ai/studio-api/conversations/reasoning/native
+// True for Mistral "native" reasoning models (Magistral family): always
+// reason, no reasoning_effort param, return {type:'thinking'|'text'} chunks.
 function isMistralNativeThinkingModel(modelId) {
   const bare = (modelId || '').split('/').pop().toLowerCase();
   // magistral-small-latest now resolves to Mistral Small 4 (adjustable, see
@@ -2782,11 +2688,8 @@ function isMistralNativeThinkingModel(modelId) {
   // and dated magistral-small-YYMM snapshots are still "always reasons".
   return /^magistral-medium(-latest)?$/.test(bare) || /^magistral-small-\d+$/.test(bare);
 }
-// Returns whether a model ID is a Mistral "adjustable" reasoning model
-// (mistral-small-latest / mistral-medium-3-5 and its -latest alias): these
-// think only when reasoning_effort is explicitly set to 'high' (root-level
-// field), and are otherwise plain chat models.
-// See https://docs.mistral.ai/studio-api/conversations/reasoning/adjustable
+// True for Mistral "adjustable" reasoning models: think only when
+// reasoning_effort is explicitly set to 'high', otherwise plain chat models.
 function isMistralAdjustableThinkingModel(modelId) {
   const bare = (modelId || '').split('/').pop().toLowerCase();
   return /^mistral-small(-latest)?$/.test(bare) || /^mistral-medium(-3-5|-latest)?$/.test(bare) || /^magistral-small-latest$/.test(bare);
@@ -2909,7 +2812,7 @@ function setStatus(c) {
   d.style.animation = (c === 'yellow') ? 'pulse 1s infinite' : 'pulse 2s infinite';
 }
 
-// ── FOLDERS — drag & drop reordering ──────────────────────────────
+// FOLDERS — drag & drop reordering
 function newFolder() {
   const id = Date.now().toString();
   folders.push({id, name: t('js.newFolder'), collapsed:false});
@@ -2975,7 +2878,7 @@ function onFolderDrop(e, targetId) {
   save(); renderSidebar();
 }
 
-// ── Chats ─────────────────────────────────────────────────────────
+// Chats
 function currentChat() { return chats.find(c=>c.id===currentChatId); }
 // Returns the folder ID a newly created chat should be placed in, based on the currently active sidebar folder.
 function getSidebarTargetFolderId() {
@@ -3037,12 +2940,8 @@ function getMoveChatIds(chatId) {
   return [chatId];
 }
 // Moves one or more chats into a different folder (or out of all folders).
-// Reorders `chats` so draggedId sits right next to targetId — used when a
-// chat is dropped directly on another chat item in the sidebar. Only
-// actually changes visual order (folder membership already matches; if it
-// doesn't — dropped on a chat in a different folder — fall back to a plain
-// move so the chat lands in the right folder instead of just appearing
-// misplaced next to an unrelated chat).
+// Reorders `chats` so draggedId sits next to targetId, for drag-drop onto
+// another chat item. Falls back to a plain move if folder membership differs.
 function reorderChatTo(draggedId, targetId) {
   const dragged = chats.find(c => c.id === draggedId);
   const target = chats.find(c => c.id === targetId);
@@ -3093,13 +2992,13 @@ function showChatCtxMenu(e, chatId) {
   if (folders.length > 0) {
     const moveItem = document.createElement('div');
     moveItem.className = 'ctx-item ctx-item-submenu';
-    moveItem.textContent = '📂 ' + (t('js.moveToFolder') || 'Move to Folder') + ' ▶';
+    moveItem.textContent = '📂 ' + (t('js.moveToFolder')) + ' ▶';
     const submenu = document.createElement('div');
     submenu.className = 'ctx-submenu';
     // "No folder" option
     const noFolderOpt = document.createElement('div');
     noFolderOpt.className = 'ctx-item';
-    noFolderOpt.textContent = t('js.noFolder') || '— No Folder —';
+    noFolderOpt.textContent = t('js.noFolder');
     noFolderOpt.addEventListener('click', () => { moveChats(targetIds, null); hideCtx(); });
     submenu.appendChild(noFolderOpt);
     folders.forEach(f => {
@@ -3218,7 +3117,7 @@ function moveProfileFolder(id, dir) {
   save(); renderProfileList();
 }
 
-// ── Multi-select helpers ──────────────────────────────────────────
+// Multi-select helpers
 function toggleChatSelect(id) {
   if (_selectedChatIds.has(id)) _selectedChatIds.delete(id);
   else _selectedChatIds.add(id);
@@ -3279,7 +3178,7 @@ function onDropFolder(e, folderId) {
   }
 }
 
-// ── Sidebar Render ────────────────────────────────────────────────
+// Sidebar Render
 function renderSidebar() {
   const container = document.getElementById('folderContainer');
   container.innerHTML = '';
@@ -3300,18 +3199,18 @@ function renderSidebar() {
       // Cancel button
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'sidebar-action-btn';
-      cancelBtn.title = t('js.cancelSelection') || 'Cancel selection';
+      cancelBtn.title = t('js.cancelSelection');
       cancelBtn.textContent = '✕';
       cancelBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;';
       cancelBtn.addEventListener('click', exitMultiSelectMode);
       // Count label
       const countLbl = document.createElement('span');
       countLbl.style.cssText = 'flex:1;font-size:12.5px;color:var(--muted);font-family:"IBM Plex Mono",monospace;';
-      countLbl.textContent = _selectedChatIds.size > 0 ? tf('js.chosenChats', {n: _selectedChatIds.size}) : (t('js.selectedChats') || 'Selected chats');
+      countLbl.textContent = _selectedChatIds.size > 0 ? tf('js.chosenChats', {n: _selectedChatIds.size}) : (t('js.selectedChats'));
       // Select all
       const selAllBtn = document.createElement('button');
       selAllBtn.className = 'sidebar-action-btn';
-      selAllBtn.title = t('js.selectAll') || 'Select all';
+      selAllBtn.title = t('js.selectAll');
       selAllBtn.textContent = '☑';
       selAllBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;';
       selAllBtn.addEventListener('click', () => {
@@ -3321,7 +3220,7 @@ function renderSidebar() {
       // Delete selected
       const delBtn = document.createElement('button');
       delBtn.className = 'sidebar-action-btn';
-      delBtn.title = t('js.deleteSelectedItems') || 'Delete selected items';
+      delBtn.title = t('js.deleteSelectedItems');
       delBtn.textContent = '🗑';
       delBtn.style.cssText = 'flex:0 0 auto;min-width:38px;font-size:17px;padding:9px;line-height:1;color:var(--red);';
       delBtn.disabled = _selectedChatIds.size === 0;
@@ -3348,17 +3247,14 @@ function renderSidebar() {
 	}
       const existingMsBtn = document.getElementById('multiSelectEnterBtn');
       if (existingMsBtn) {
-        existingMsBtn.title = t('js.multiSelect') || 'Multi Select';
+        existingMsBtn.title = t('js.multiSelect');
         existingMsBtn.textContent = '☐';
 	}
     }
   }
 
-  // Build every folder/chat node off-DOM in a fragment and attach it once
-  // at the end, instead of appendChild-ing each folder directly onto the
-  // live (attached) container. With many folders/chats, appending one at a
-  // time onto a connected node can force a layout/reflow per append; a
-  // single fragment append triggers just one.
+  // Build every folder/chat node off-DOM in a fragment and attach it once,
+  // instead of appendChild-ing onto the live container (avoids a reflow per append).
   const frag = document.createDocumentFragment();
 
   const unfiled = chats.filter(c=>!c.folderId||!folders.find(f=>f.id===c.folderId));
@@ -3367,7 +3263,7 @@ function renderSidebar() {
   if (newChatBtn) {
     newChatBtn.classList.remove('primary');
     const targetName = targetFolderId === null
-      ? (t('js.noFolder') || 'No folder')
+      ? (t('js.noFolder'))
       : (folders.find(f=>f.id===targetFolderId)?.name || '');
     newChatBtn.title = targetName ? tf('js.newChatIn', { name: targetName }) : '';
   }
@@ -3426,7 +3322,7 @@ function renderSidebar() {
     const addBtn = document.createElement('button');
     addBtn.className = 'folder-btn'; addBtn.textContent = '＋';
     addBtn.dataset.id = f.id;
-    addBtn.title = t('sidebar.newChat') || 'New chat';
+    addBtn.title = t('sidebar.newChat');
     addBtn.addEventListener('click', e => { e.stopPropagation(); newChat(addBtn.dataset.id); });
     const renameBtn = document.createElement('button');
     renameBtn.className = 'folder-btn'; renameBtn.textContent = '✏️';
@@ -3512,11 +3408,8 @@ function buildChatItem(c) {
     if (_multiSelectMode && !isSelected) { e.preventDefault(); return; }
     e.stopPropagation(); onDragStart(e, div.dataset.id);
   });
-  // Dropping a chat directly onto another chat item reorders them (if
-  // they're in the same folder) instead of just moving between folders —
-  // previously chats could only be filed into a different folder; their
-  // order within a folder was fixed to array/creation order with no way
-  // to permute it.
+  // Dropping a chat directly onto another chat item reorders them within
+  // the same folder, instead of just moving between folders.
   div.addEventListener('dragover', e => {
     if (!draggedChatId || draggedChatId === c.id) return;
     e.preventDefault(); e.stopPropagation();
@@ -3556,14 +3449,14 @@ function buildChatItem(c) {
   if (isChatStreaming(c.id)) {
     const liveDot = document.createElement('span');
     liveDot.className = 'chat-item-live-dot';
-    liveDot.title = t('js.chatStreamingHint') || 'This chat is still generating a reply…';
+    liveDot.title = t('js.chatStreamingHint');
     titleSpan.insertAdjacentElement('afterend', liveDot);
   }
   div.appendChild(menuBtn);
   return div;
 }
 
-// ── Message Rendering: Tree-branch helpers ──────────────────────────
+// Message Rendering: Tree-branch helpers
 
 /**
  * getActivePath: Returns the flat message list for the currently active branch.
@@ -3610,7 +3503,7 @@ function getSiblingNodeAt(chat, pathIdx) {
 }
 
 
-// ── Public API for external modules (e.g. kiconnect-voice.js) ────────
+// Public API for external modules (e.g. kiconnect-voice.js)
 // The voice module (and any other add-on) must NEVER access chat.messages[idx]
 // directly — that is the raw sibling-tree, not the rendered flat path.
 // It must call window.kicGetMsgByIdx(idx) instead, which honours the active branch.
@@ -3625,33 +3518,24 @@ function renderMessages(messages, limitCount) {
   const container = document.getElementById('messages');
   const empty     = document.getElementById('emptyState');
 
-  // Any run belonging to a DIFFERENT chat than the one about to be rendered
-  // is about to lose its DOM node (we wipe #messages below) — null out its
-  // bubbleEl so nothing keeps trying to write into a detached node. (The
-  // isConnected check in _runBubbleEl() would catch this too, but doing it
-  // explicitly here is cleaner, and covers switchChat/newChat/deleteChat all
-  // in one place without touching each of them individually.)
+  // Any run belonging to a DIFFERENT chat is about to lose its DOM node (we
+  // wipe #messages below) — null out its bubbleEl so nothing writes into a
+  // detached node. Covers switchChat/newChat/deleteChat in one place.
   for (const run of activeRuns.values()) {
     if (!chat || run.chatId !== chat.id) run.bubbleEl = null;
   }
 
   let path = chat ? getActivePath(chat) : (Array.isArray(messages) ? messages : []);
   // limitCount: optionally render only the first N nodes of the active path.
-  // Used by regenerate() to render up to (and including) the user message only,
-  // leaving the about-to-be-replaced assistant bubble out of the DOM entirely
-  // instead of rendering it and relying on a later swap (which used to leave
-  // a stale duplicate bubble behind — see regenerate()).
+  // Used by regenerate() to stop at the user message, keeping the
+  // about-to-be-replaced assistant bubble out of the DOM entirely.
   if (typeof limitCount === 'number') path = path.slice(0, limitCount);
 
-  // Reattach mechanism (bugfix for "bubble disappears on chat switch"): any
-  // still-running run (chat stream OR agent turn — see kiconnect-agent.js)
-  // that belongs to THIS chat gets a fresh live bubble appended below,
-  // pre-filled with whatever the registry has accumulated so far — not an
-  // empty one. The registry (activeRuns) is the source of truth for an
-  // in-flight answer; the DOM is only ever a rebuildable projection of it.
-  // A run can supply its own `buildLiveEl()` (agent runs do, to render tool
-  // trace cards + token counter instead of plain streamed text) — falls
-  // back to the generic chat-bubble builder when it doesn't.
+  // Reattach mechanism: any still-running run belonging to THIS chat gets a
+  // fresh live bubble appended, pre-filled with what the registry has so far.
+  // activeRuns is the source of truth; the DOM is just a rebuildable
+  // projection. A run can supply its own buildLiveEl() (agent runs do, for
+  // tool-trace cards), else falls back to the generic bubble builder.
   const liveRuns = chat
     ? [...activeRuns.values()].filter(r => r.chatId === chat.id && r.status === 'running')
     : [];
@@ -3706,12 +3590,9 @@ function _buildLiveRunBubble(run) {
   return div;
 }
 
-// run.text is stored in the combined "<thinking>...</thinking>\n\nanswer"
-// format (see _streamStoredText) so it can be saved as-is if the stream
-// aborts — but renderStreamingBubble() wants the answer text and thinking
-// text as two separate arguments. Strip the stored <thinking> block back out
-// (run.thinkingText already holds it separately) before handing the answer
-// portion to renderStreamingBubble().
+// run.text is stored combined as "<thinking>...</thinking>\n\nanswer" (see
+// _streamStoredText), but renderStreamingBubble() wants answer and thinking
+// as two separate args — strip the stored <thinking> block back out first.
 function _stripStoredThinking(storedText) {
   const m = /^<thinking>\n[\s\S]*?\n<\/thinking>\n\n([\s\S]*)$/.exec(storedText || '');
   return m ? m[1] : (storedText || '');
@@ -3749,11 +3630,9 @@ function _buildBattleTileGridRow(msg, idx) {
 
   const allDone = msg._siblings.every(s => !s._pending);
   if (allDone && !msg._winnerChosen) {
-    // While no explicit winner has been picked, a default is already
-    // active behind the scenes (see _resolveBattleDefault) so the
-    // conversation can continue — but the grid stays visible and this
-    // banner makes the default explicit rather than silently swapping the
-    // view to a single bubble the user never chose.
+    // A default winner is already active behind the scenes (see
+    // _resolveBattleDefault) so the conversation can continue, but the grid
+    // stays visible and this banner makes the default explicit.
     const defIdx = msg._siblingIdx ?? 0;
     const defModel = splitModelId(msg._siblings[defIdx]?._model || '').modelId || msg._siblings[defIdx]?._model || '';
     const banner = document.createElement('div');
@@ -3851,14 +3730,10 @@ function chooseBattleWinner(idx, siblingIdx) {
 }
 
 function buildMsgEl(msg, idx) {
-  // Battle-Modus: an assistant message started via sendBattleMessage()
-  // renders as a side-by-side tile grid — one tile per model — for as long
-  // as no winner has been explicitly chosen (msg._winnerChosen). Once a
-  // winner IS chosen, msg._siblingIdx points at it and this falls through
-  // to the normal single-bubble path below (which already renders a
-  // sibling-nav since msg._siblings.length > 1 — Battle-Modus deliberately
-  // reuses that existing regenerate()/sibling infrastructure instead of
-  // inventing a second message shape).
+  // Battle-Modus: a message from sendBattleMessage() renders as a side-by-side
+  // tile grid until a winner is chosen (msg._winnerChosen). Once chosen,
+  // msg._siblingIdx points at it and it falls through to the normal
+  // single-bubble path, reusing the existing sibling-nav infrastructure.
   if (msg.role === 'assistant' && msg._battle && !msg._winnerChosen) {
     return _buildBattleTileGridRow(msg, idx);
   }
@@ -3872,7 +3747,7 @@ function buildMsgEl(msg, idx) {
   avatarCol.className = 'avatar-col';
   const avatar = document.createElement('div');
   avatar.className = 'avatar ' + cls;
-  avatar.textContent = isUser ? (t('js.userAvatar')||'Me') : t('js.aiAvatar');
+  avatar.textContent = isUser ? (t('js.userAvatar')) : t('js.aiAvatar');
   avatarCol.appendChild(avatar);
 
   if (!isUser) {
@@ -3895,7 +3770,7 @@ function buildMsgEl(msg, idx) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
 
-  // ── Build bubble content ──
+  // Build bubble content
   // For user messages: show text parts only, then file chips.
   // Files (text-file, pdf, images) are never expanded inline in the bubble.
   let contentHtml = '';
@@ -4092,11 +3967,8 @@ function _finalizeAIRowInPlace(rowEl, msg, idx) {
 }
 
 // Personal per-bubble notes (account-specific)
-// A private note attached to a single message. Stored directly on the message
-// object as msg._note / msg._noteOpen, so it rides along with the normal
-// chat-save cycle (encrypted, per-account, per-device via the server store).
-// Never sent to any AI provider — these are custom fields the API request
-// builder never reads.
+// Stored on the message as msg._note / msg._noteOpen, so it rides along with
+// the normal chat-save cycle. Never sent to any AI provider.
 const _noteSaveTimers = new WeakMap();
 
 // Builds the collapsible personal-note UI attached to a message bubble (edit/preview toggle, autosave, delete).
@@ -4239,7 +4111,7 @@ function buildNoteSection(msg) {
   return holder;
 }
 
-// ── Simple image lightbox ─────────────────────────────────────────
+// Simple image lightbox
 function openImageLightbox(url) {
   const lb = document.createElement('div');
   lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
@@ -4271,10 +4143,10 @@ function buildWebSourcesRow(webSources) {
   return sourceWrap;
 }
 
-// ── Bubble Edit / Delete / Branch ─────────────────────────────────
+// Bubble Edit / Delete / Branch
 function getBubbleRow(idx) { return document.querySelector(`.message-row[data-idx="${parseInt(idx,10)}"]`); }
 
-// ── Token Usage ────────────────────────────────────────────────────
+// Token Usage
 function buildTokenBadge(usage) {
   const badge = document.createElement('div');
   badge.className = 'token-badge';
@@ -4418,7 +4290,7 @@ function startEditBubble(idx) {
   fileArea.style.cssText = 'margin-top:8px;';
   const fileLabel = document.createElement('div');
   fileLabel.style.cssText = 'font-size:11px;font-family:"IBM Plex Mono",monospace;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;';
-  fileLabel.textContent = t('js.editFiles') || 'Attached files';
+  fileLabel.textContent = t('js.editFiles');
   const chipsRow = document.createElement('div');
   chipsRow.id = 'editFileChips';
   chipsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;';
@@ -4426,11 +4298,11 @@ function startEditBubble(idx) {
   addBtns.style.cssText = 'display:flex;gap:6px;';
   const addFileBtn = document.createElement('button');
   addFileBtn.className = 'bubble-act-btn';
-  addFileBtn.textContent = t('js.editAddFile') || '📎 File';
+  addFileBtn.textContent = t('js.editAddFile');
   addFileBtn.addEventListener('click', () => document.getElementById('editFileInput')?.click());
   const addImgBtn = document.createElement('button');
   addImgBtn.className = 'bubble-act-btn';
-  addImgBtn.textContent = t('js.editAddImage') || '🖼 Image';
+  addImgBtn.textContent = t('js.editAddImage');
   addImgBtn.addEventListener('click', () => document.getElementById('editImageInput')?.click());
   addBtns.appendChild(addFileBtn); addBtns.appendChild(addImgBtn);
   fileArea.appendChild(fileLabel); fileArea.appendChild(chipsRow); fileArea.appendChild(addBtns);
@@ -4460,7 +4332,7 @@ function renderEditFileChips() {
     const icon = a.type === 'image' ? '🖼️' : '📄';
     const nameSpan = document.createElement('span');
     nameSpan.textContent = icon + ' ' + a.name;
-    if (a._storedOnly) { nameSpan.style.opacity = '0.6'; nameSpan.title = t('js.originalReattach') || 'Original — re-attach to replace'; }
+    if (a._storedOnly) { nameSpan.style.opacity = '0.6'; nameSpan.title = t('js.originalReattach'); }
     const rem = document.createElement('button');
     rem.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0 2px;line-height:1;';
     rem.textContent = '\u2715';
@@ -4570,11 +4442,9 @@ function navigateSibling(idx, delta) {
   const newIdx = (msg._siblingIdx ?? 0) + delta;
   if (newIdx < 0 || newIdx >= msg._siblings.length) return;
 
-  // Notes are edited in place on msg._note (no explicit "commit" step), so before
-  // switching away from the currently active variant we must write its live note
-  // back into its own record — otherwise an edit made just before navigating
-  // away would be lost, and would then also incorrectly show up on the target
-  // variant since msg._note would still hold the old variant's value.
+  // Notes are edited in place on msg._note with no explicit commit step, so
+  // before switching variants we must write the live note back into its own
+  // record — otherwise an edit would be lost or leak onto the target variant.
   const oldVariant = msg._siblings[msg._siblingIdx ?? 0];
   if (oldVariant) { oldVariant._note = msg._note; oldVariant._noteOpen = msg._noteOpen; }
 
@@ -4608,7 +4478,7 @@ function branchFromHere(idx) {
   toast(tf('js.branchFrom', {n: idx+1}));
 }
 
-// ── Shared AI-Streaming-Helpers ──
+// Shared AI-Streaming-Helpers
 // _toAnthropicContent: Converts internal content array to Anthropic wire format.
 // handles pdf_text (text-mode PDF, language-independent storage type)
 function _toAnthropicContent(content) {
@@ -4659,12 +4529,10 @@ function _applyPromptCache(msgs) {
   }
 }
 
-// _splitStableTail: splits streamed text at the last line break that is NOT
-// inside an open ``` fence or an open $$...$$ / \[...\] display-math block.
-// Everything before that point is "stable" (a finished line/row — safe to
-// render once and never touch again). Everything after is "tail" (still
-// being written, gets re-rendered frequently). This is what lets already
-// -typeset formulas in e.g. a growing table stay put instead of flickering.
+// _splitStableTail: splits streamed text at the last line break outside an
+// open ``` fence or $$...$$/\[...\] math block. Before that point is "stable"
+// (finished, safe to render once); after is "tail" (still being written).
+// This keeps already-typeset formulas from flickering while a table grows.
 function _splitStableTail(text) {
   let fence = false, dollarBlock = false, bracketBlock = false, parenBlock = false, lastSafe = -1;
   const envStack = [];
@@ -4696,14 +4564,11 @@ function _splitStableTail(text) {
   return { stable: text.slice(0, lastSafe + 1), tail: text.slice(lastSafe + 1) };
 }
 
-// _pullBackForOpenBlock: given a candidate split point `safeEnd` (index of
-// a \n that's already safe w.r.t. fences/math), checks whether the line
-// right before it belongs to a table or list. If the block hasn't been
-// closed off by a blank line yet, moves the split point back to just
-// before that block started, so the *entire* still-growing block stays in
-// "tail" (re-rendered each tick, same as any other in-progress line) until
-// it's actually finished — at which point it gets committed to "stable" in
-// one piece and is never touched again.
+// _pullBackForOpenBlock: given a candidate split point `safeEnd`, checks
+// whether the line before it belongs to a table or list that hasn't been
+// closed by a blank line yet. If so, moves the split point back to before
+// that block started, so the whole still-growing block stays in "tail"
+// until finished, then commits to "stable" in one piece.
 function _pullBackForOpenBlock(text, safeEnd) {
   const candidate = text.slice(0, safeEnd + 1);
   const lines = candidate.split('\n');
@@ -4711,11 +4576,8 @@ function _pullBackForOpenBlock(text, safeEnd) {
   if (!lines.length) return safeEnd;
 
   const isBlank = (l) => l.trim() === '';
-  // Only lines that actually start/end with a pipe count as table rows.
-  // (Previously: "2+ pipe characters anywhere in the line" — which
-  // false-positived on ordinary prose containing pipes, e.g. bra-ket
-  // notation like "|0⟩ und |1⟩", misclassifying a list item as a table row
-  // and cutting the walk-back short at the wrong place.)
+  // Only lines that actually start/end with a pipe count as table rows —
+  // "2+ pipes anywhere" false-positived on prose like bra-ket notation "|0⟩".
   const isTableLine = (l) => {
     const t = l.trim();
     if (!t.includes('|')) return false;
@@ -4724,15 +4586,11 @@ function _pullBackForOpenBlock(text, safeEnd) {
   const isListLine = (l) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(l);
   const isListContinuation = (l) => isListLine(l) || (!isBlank(l) && /^[ \t]+\S/.test(l));
 
-  // Blank lines alone never close a list or table in CommonMark — a "loose"
-  // list (items separated by blank lines, which models commonly produce)
-  // still parses as one single list. So skip past any trailing blank lines
-  // and look at the last actual content line to decide whether we're still
-  // inside an open block. (Previously a single blank line after a finished
-  // item was treated as "block closed", so each item of a loose list got
-  // committed to "stable" as its own separate <ol start="N">, and marked's
-  // start attribute was then stripped by DOMPurify below — producing a
-  // "1., 1., 1." list until the message was fully re-rendered from scratch.)
+  // Blank lines alone never close a list/table in CommonMark — a "loose"
+  // list still parses as one list. Skip trailing blank lines and check the
+  // last actual content line to decide whether we're still inside an open
+  // block (otherwise each loose-list item got committed separately, producing
+  // a broken "1., 1., 1." numbering once DOMPurify stripped the start attr).
   let lastNonBlank = lines.length - 1;
   while (lastNonBlank >= 0 && isBlank(lines[lastNonBlank])) lastNonBlank--;
   if (lastNonBlank < 0) return safeEnd; // candidate is all blank lines
@@ -4762,14 +4620,11 @@ function _pullBackForOpenBlock(text, safeEnd) {
   return before.length; // index of the \n right before the open block starts
 }
 
-// _hasOpenMathBlock: true while `text` contains a math delimiter or LaTeX
-// environment that hasn't been closed yet (open \(, \[, $$, or \begin{..}
-// without a matching \end{..} — this is exactly the "\begin{vmatrix}...\\..."
-// case that renders as raw LaTeX mid-stream). While something is open,
-// MathJax can't render the formula anyway — repeatedly asking it to try
-// just produces flicker between raw text and a failed/partial attempt. We
-// skip the throttled typeset call until the closing delimiter has actually
-// arrived, then it renders once, cleanly, in a single pass.
+// _hasOpenMathBlock: true while `text` has a math delimiter or LaTeX
+// environment not yet closed (open \(, \[, $$, or \begin{..} without a
+// matching \end{..}). While open, MathJax can't render anyway — skip the
+// throttled typeset call until the closing delimiter arrives, so it renders
+// once, cleanly, instead of flickering between raw text and a failed attempt.
 function _hasOpenMathBlock(text) {
   let dollar = false, bracket = false, paren = false, envDepth = 0;
   for (let i = 0; i < text.length; i++) {
@@ -4835,11 +4690,9 @@ function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
     // Re-scanning the live container instead always typesets current content.
     typesetMathThrottled(tailEl, 400);
   }
-  // If still mid-formula (e.g. inside \begin{vmatrix}...\end{vmatrix}) —
-  // leave it as raw text for now rather than making MathJax repeatedly choke
-  // on a half-written block. It gets typeset correctly as soon as the
-  // closing delimiter arrives (next call above), or at the latest by
-  // _finalizeStreamingBubble once the whole response is done.
+  // If still mid-formula, leave it as raw text rather than making MathJax
+  // repeatedly choke on a half-written block; it typesets correctly once the
+  // closing delimiter arrives, or at the latest at _finalizeStreamingBubble.
 }
 
 // _finalizeStreamingBubble: called once the stream is done. Formats and
@@ -4889,10 +4742,9 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
   // same trick already used below for the <thinking> block.
   let assistantText = (opts && opts.prefixText) ? (opts.prefixText + '\n\n') : '', usageData = null;
   // runId: caller (_runStreamAndAttach) generates and passes one via
-  // opts.runId so it's known even if this function throws before returning
-  // (registration below happens synchronously, before any await, so the
-  // run is always in the registry by the time an AbortError/network error
-  // can occur). Falls back to self-generating for any other caller.
+  // opts.runId, so it's known even if this function throws before returning
+  // (registration happens synchronously, before any await). Falls back to
+  // self-generating for any other caller.
   const runId = (opts && opts.runId) || _makeRunId(currentChatId);
   // Every run gets its OWN AbortController instead of sharing a single
   // global one — this is what lets stopStreaming(chatId) cancel exactly
@@ -4916,14 +4768,11 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
     targetContainer: null,       // unused outside Battle-Modus
   };
   activeRuns.set(runId, run);
-  // This is the single choke point where a chat-stream run becomes
-  // "visible" as in-flight — update the sidebar's live-indicator dot and
-  // (if this run's chat happens to be the one on screen) the composer's
-  // send/stop button right away, before the first network await below.
-  // syncComposerStreamingUI() reads currentChatId itself, so this is always
-  // correct even if the user switched chats during sendMessageCore's
-  // earlier awaits (upload/link-fetch/web-search/KB) and is now looking at
-  // a completely different chat than the one this run belongs to.
+  // Single choke point where a chat-stream run becomes "visible" as
+  // in-flight — updates the sidebar's live-indicator dot and (if this run's
+  // chat is on screen) the composer's send/stop button, before the first
+  // network await. syncComposerStreamingUI() reads currentChatId itself, so
+  // this stays correct even if the user switched chats during earlier awaits.
   renderSidebar();
   syncComposerStreamingUI();
 
@@ -4962,11 +4811,9 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
         'Content-Type': 'application/json',
         'x-api-key': provider.apiKey,
         'anthropic-version': '2023-06-01',
-        // No anthropic-beta header needed here anymore: prompt caching is
-        // GA and ttl:'1h' works without it (was prompt-caching-2024-07-31,
-        // now redundant). See kiconnect-agent.js for the agent path, which
-        // does still send a beta header — for the separate, newer
-        // context-management feature, not for caching.
+        // No anthropic-beta header needed here: prompt caching is GA and
+        // ttl:'1h' works without it. See kiconnect-agent.js for the agent
+        // path, which still sends a beta header for context-management.
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(body),
@@ -5019,16 +4866,12 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
     const { modelId } = splitModelId(config.model);
     const apiMsgs = [];
     if (config.systemPrompt) apiMsgs.push({ role: 'system', content: config.systemPrompt });
-    // messages are already expanded by caller (_toOpenAIContent) — pass through.
-    // Also forward tool_calls (on assistant messages) and role:'tool' messages
-    // unchanged — these appear here whenever 'agentic' web-search mode ran a
-    // web_search/fetch_url round trip first (see runAgenticWebToolLoop):
-    // dropping them left a dangling assistant tool_calls message with no
-    // matching tool results, which most OpenAI-compatible APIs reject with a
-    // 400 ("messages with role 'tool' must be a response to a preceding
-    // message with 'tool_calls'"), breaking every non-Anthropic provider in
-    // that mode. The Anthropic branch above never hit this since it sends
-    // `messages` straight through instead of rebuilding it.
+    // messages are already expanded by caller — pass through. Also forward
+    // tool_calls and role:'tool' messages unchanged (from an 'agentic'
+    // web-search round trip) — dropping them left a dangling tool_calls
+    // message with no matching result, which most OpenAI-compatible APIs
+    // reject with a 400. The Anthropic branch above doesn't hit this since
+    // it sends `messages` straight through.
     messages.forEach(m => {
       if (m.role === 'user' || m.role === 'assistant') {
         const msg = { role: m.role, content: m.content };
@@ -5063,11 +4906,10 @@ async function _streamAIResponse(messages, provider, typingId, documentIds, opts
       reqBody.thinking = { type: config.thinkingEnabled ? 'enabled' : 'disabled' };
       delete reqBody.reasoning_effort;
     }
-    // MiniMax (M-series) has no reasoning_effort levels — it thinks by default
-    // (M2.x can't even be turned off) — so instead of an effort value we send
-    // an on/off `thinking.type` plus `reasoning_split: true`, which asks the
-    // API to return the trace via delta.reasoning_details instead of inline
-    // <think>...</think> tags in the content field.
+    // MiniMax (M-series) has no reasoning_effort levels — it thinks by
+    // default (M2.x can't be turned off) — so we send an on/off
+    // `thinking.type` plus `reasoning_split: true`, returning the trace via
+    // delta.reasoning_details instead of inline <think> tags.
     if (provider.type === 'minimax' && isThinkingCapable(modelId)) {
       reqBody.thinking = { type: config.thinkingEnabled ? 'adaptive' : 'disabled' };
       reqBody.reasoning_split = true;
@@ -5201,9 +5043,7 @@ async function _runStreamAndAttach(chat, messages, provider, typingId, documentI
   let assistantText = '', usageData = null, streamEl = null;
   // Generated here (not inside _streamAIResponse) so it's known even if that
   // call throws before returning — _streamAIResponse registers the run in
-  // activeRuns synchronously before its first await, so by the time an
-  // AbortError/network error can happen the run is already in the registry
-  // and reachable via this runId.
+  // activeRuns synchronously before its first await.
   const runId = _makeRunId(chat && chat.id);
   try {
     const result = await _streamAIResponse(messages, provider, typingId, documentIds, { ...(opts || {}), runId });
@@ -5226,7 +5066,7 @@ async function _runStreamAndAttach(chat, messages, provider, typingId, documentI
 
   // Model actually used to generate this answer, frozen at run start — read
   // from the registry (not live config.model), so a header model-switch
-  // mid-stream can never mislabel a finished answer (see TODO.md, Abschnitt 0).
+  // mid-stream can never mislabel a finished answer.
   const modelUsed = activeRuns.get(runId)?.model ?? config.model;
   if (assistantText) _attachAIActions(chat, assistantText, usageData, streamEl, modelUsed);
   activeRuns.delete(runId);
@@ -5239,21 +5079,16 @@ async function _runStreamAndAttach(chat, messages, provider, typingId, documentI
   if (chat === currentChat()) setStatus('green');
 }
 
-// ── Battle-Modus ────────────────────────────────────────────
-// Battle-Modus reuses the existing sibling/tail tree (see getActivePath/
-// getActiveContainer/regenerate above) instead of inventing a new message
-// shape: one assistant message node is created with msg._siblings already
-// populated (one entry per chosen model) and msg._siblingIdx left unset
-// until a winner is picked. Each variant streams via its own activeRuns
-// entry (kind: 'battle-variant'), fully independent — this reuses the same
-// per-chat parallel-run infrastructure, just for several concurrent runs on
-// the SAME chat/message instead of different chats.
+// Battle-Modus
+// Reuses the existing sibling/tail tree instead of inventing a new message
+// shape: one assistant node with msg._siblings populated (one per chosen
+// model), msg._siblingIdx unset until a winner is picked. Each variant
+// streams via its own activeRuns entry (kind: 'battle-variant'), reusing the
+// per-chat parallel-run infrastructure for several runs on the same message.
 
-// Finds the live tile bubble element for one battle variant in the DOM (if
-// the owning chat happens to be the one on screen right now) — same idea as
-// _runBubbleEl(), just addressed by battleId+siblingIdx instead of a
-// captured closure reference, since a battle tile grid can be torn down and
-// rebuilt by renderMessages() (chat switch, regular re-render) at any time.
+// Finds the live tile bubble for one battle variant (if its chat is on
+// screen) — like _runBubbleEl() but addressed by battleId+siblingIdx, since
+// a tile grid can be torn down and rebuilt by renderMessages() at any time.
 function _findBattleTileBubble(battleId, siblingIdx) {
   if (!battleId) return null;
   const row = document.querySelector(`.battle-row[data-battle-id="${battleId}"]`);
@@ -5262,12 +5097,10 @@ function _findBattleTileBubble(battleId, siblingIdx) {
   return tile ? tile.querySelector('.battle-tile-bubble') : null;
 }
 
-// Resolves a not-yet-explicitly-chosen battle message to a sensible default
-// once every variant has finished — picks whichever variant finished FIRST
-// (msg._battleDoneOrder, appended to by _runBattleVariant as each one
-// completes), falling back to index 0 if that's somehow empty. Does NOT set
-// _winnerChosen, so the tile grid keeps rendering (with the "default in
-// use" banner) until the user explicitly picks one via chooseBattleWinner().
+// Resolves an unpicked battle message to a sensible default once every
+// variant has finished — the one that finished FIRST (msg._battleDoneOrder),
+// falling back to index 0. Doesn't set _winnerChosen, so the tile grid keeps
+// rendering (with the "default in use" banner) until the user picks one.
 function _resolveBattleDefault(chat, msg) {
   if (msg._winnerChosen) return; // user already picked explicitly
   const defIdx = (msg._battleDoneOrder && msg._battleDoneOrder.length) ? msg._battleDoneOrder[0] : 0;
@@ -5280,13 +5113,10 @@ function _resolveBattleDefault(chat, msg) {
 }
 
 // Streams a single model's variant into msg._siblings[i], writing chunks
-// into both the RunState (registry — survives a chat switch) and, when
-// connected, straight into the tile bubble via renderStreamingBubble(),
-// mirroring _streamAIResponse's Anthropic/OpenAI-compat branches but scoped
-// to one tile instead of the single main bubble, and parameterized by
-// `provider`/`modelId` explicitly (never reads the shared global
-// config.model) so N variants can run concurrently without racing each
-// other over which model's request is "currently" being built.
+// into the RunState registry and, when connected, into the tile bubble.
+// Mirrors _streamAIResponse but scoped to one tile, parameterized by
+// `provider`/`modelId` explicitly (never the shared config.model) so N
+// variants can run concurrently without racing each other.
 async function _streamBattleVariant(chat, msg, i, provider, modelId, messages) {
   const sibling = msg._siblings[i];
   const runId = _makeRunId(chat.id);
@@ -5419,11 +5249,8 @@ async function _streamBattleVariant(chat, msg, i, provider, modelId, messages) {
     msg._battleDoneOrder.push(i);
     activeRuns.delete(runId);
     renderSidebar();
-    // Re-render the tile grid in place (this variant's status dot / final
-    // content) if the owning chat is still the one on screen — a variant
-    // finishing while the user is elsewhere doesn't need to touch the DOM;
-    // it'll render correctly (as a normal, non-running tile) the next time
-    // this chat is opened.
+    // Re-render the tile grid in place if the owning chat is still on
+    // screen; otherwise it'll render correctly next time the chat is opened.
     if (chat === currentChat()) renderMessages(chat.messages);
     syncComposerStreamingUI();
   }
@@ -5542,31 +5369,24 @@ function _attachAIActions(chat, assistantText, usageData, streamEl, modelUsed) {
   }
 
   // Upgrade the just-finished bubble in place (action buttons, sibling nav,
-  // token badge, ...) instead of tearing down and rebuilding the whole chat
-  // history via renderMessages() or re-running formatText()/typesetMath()
-  // on content that renderStreamingBubble() already rendered and typeset
-  // incrementally during streaming. _finalizeAIRowInPlace() reuses `streamEl`
-  // as-is and only attaches what's missing — the chrome around it
-  // (actions/badge/nav/note) — leaving the rendered answer itself untouched.
+  // token badge, ...) instead of rebuilding the whole chat history or
+  // re-running formatText()/typesetMath() on content already rendered
+  // incrementally during streaming. Reuses `streamEl` as-is, only attaches
+  // the missing chrome around it.
   const path = getActivePath(chat);
   const idx = path.length - 1;
   const messagesEl = document.getElementById('messages');
   const emptyState = document.getElementById('emptyState');
 
-  // Only touch #messages at all if `chat` is actually the chat on screen
-  // right now — if the stream finished while the user was on a DIFFERENT
-  // chat, #messages holds THAT chat's rows, and neither finalizing in place
-  // nor the "build a fresh row" fallback below may write into it. The
-  // finished answer is already saved into chat.messages/container above, so
-  // it'll render correctly (as a normal, non-streaming bubble) the next time
-  // this chat is opened via renderMessages() — nothing further to do here.
+  // Only touch #messages if `chat` is the one on screen right now — if the
+  // stream finished while the user was elsewhere, #messages holds that other
+  // chat's rows. The finished answer is already saved into chat.messages, so
+  // it renders correctly next time this chat is opened via renderMessages().
   if (chat === currentChat()) {
     if (!_finalizeAIRowInPlace(streamEl, path[idx], idx)) {
-      // Fallback: streamEl is missing/detached (e.g. reattach never
-      // happened, or the row was otherwise lost) — build a fresh row the
-      // old way. We still avoid replacing an unrelated node: fall back to
-      // the last message row, never the #chatTokenTotal footer div
-      // appendToMessages() always keeps last.
+      // Fallback: streamEl is missing/detached — build a fresh row the old
+      // way. Still avoid replacing an unrelated node: fall back to the last
+      // message row, never the #chatTokenTotal footer div.
       const newRow = buildMsgEl(path[idx], idx);
       const oldRow = (streamEl && streamEl.parentNode === messagesEl) ? streamEl : messagesEl.lastElementChild;
       if (oldRow && oldRow !== emptyState) oldRow.replaceWith(newRow);
@@ -5615,11 +5435,9 @@ async function regenerate(idx) {
   chat._pendingRegenMsg = msg;
 
   save();
-  // Render only up through the user message (idx nodes), NOT the assistant
-  // bubble we're about to regenerate. Previously this rendered the full path
-  // (including the old assistant bubble), and after the stream finished only
-  // the newly streamed bubble got swapped in — leaving the stale old bubble
-  // behind as a visible duplicate. See _attachAIActions() below.
+  // Render only up through the user message (idx nodes), not the assistant
+  // bubble about to be regenerated — otherwise the stale old bubble stays
+  // visible as a duplicate once the new one streams in. See _attachAIActions().
   renderMessages(chat.messages, idx);
   await rerunFromUserMsg(userMsg);
 }
@@ -5681,18 +5499,16 @@ async function rerunFromUserMsg(userMsg) {
 }
 
 
-// ── Send / Stop ───────────────────────────────────────────────────
+// Send / Stop
 // Reflects the chat CURRENTLY ON SCREEN (see isChatStreaming) — pressing
 // the button always acts on what the user is looking at, never on whatever
 // other chat might also happen to be streaming in the background.
 function handleSendStop() { isChatStreaming(currentChatId) ? stopStreaming(currentChatId) : sendMessage(); }
-// Aborts the in-progress AI response stream(s) for one chat (defaults to
-// whichever chat is on screen). Each run carries its own AbortController
-// (see _streamAIResponse), so this only ever cancels runs belonging to
-// `chatId` — a stream running for a different chat in the background is
-// completely unaffected. Accepts an explicit chatId so a future per-chat
-// stop control in the sidebar (see the live-indicator dot) can target a
-// background chat without switching to it first.
+// Aborts the in-progress AI response stream(s) for one chat (default: the
+// chat on screen). Each run has its own AbortController, so this only
+// cancels runs belonging to `chatId` — a background stream for a different
+// chat is unaffected. Accepts an explicit chatId for a future per-chat stop
+// control that can target a background chat without switching to it.
 function stopStreaming(chatId) {
   chatId = chatId || currentChatId;
   runsForChat(chatId).forEach(run => { if (run.abortController) run.abortController.abort(); });
@@ -5827,20 +5643,16 @@ function shouldUseWebSearch(text) {
 }
 
 // 'agentic' mode: instead of guessing from the message text and pre-fetching
-// results (like manual/auto/always above), the model itself gets web_search
-// and fetch_url as real tools on the request and decides mid-conversation
-// whether it needs them — the same way the coding agent (kiconnect-agent.js)
-// decides for itself whether to search. See runAgenticWebToolLoop() below.
+// results, the model gets web_search and fetch_url as real tools and decides
+// mid-conversation whether it needs them — see runAgenticWebToolLoop() below.
 function isAgenticWebMode() {
   return (config.webSearchMode || 'manual') === 'agentic';
 }
 
-// ── Agentic web search: tool definitions, execution, and the tool loop ──
-// Same two tools kiconnect-agent.js offers its coding agent (web_search,
-// fetch_url), just offered on the NORMAL chat request too when 'agentic'
-// mode is on, so the model can decide for itself whether to look something
-// up — instead of the manual/auto/always modes above, which decide BEFORE
-// the model ever sees the message (a regex guess or a manual toggle).
+// Agentic web search: tool definitions, execution, and the tool loop
+// Same two tools kiconnect-agent.js offers its coding agent, offered on the
+// normal chat request too when 'agentic' mode is on, so the model decides
+// for itself whether to look something up.
 const AGENTIC_WEB_TOOLS_ANTHROPIC = [
   {
     name: 'web_search',
@@ -5890,10 +5702,10 @@ function buildAgenticTraceHtml(calls) {
   if (!calls || !calls.length) return '';
   return calls.map(c => {
     const icon = c.name === 'fetch_url' ? '🔗' : '🌐';
-    const label = c.name === 'fetch_url' ? t('agent.tool.fetchUrl', 'Fetch webpage') : t('agent.tool.webSearch', 'Web search');
+    const label = c.name === 'fetch_url' ? t('agent.tool.fetchUrl') : t('agent.tool.webSearch');
     const subject = c.name === 'fetch_url' ? (c.args?.url || '') : (c.args?.query || '');
     const isError = !!(c.result && c.result.error);
-    const status = isError ? `${t('agent.errorShort', 'error')}: ${c.result.error}` : t('agent.done', 'done.');
+    const status = isError ? `${t('agent.errorShort')}: ${c.result.error}` : t('agent.done');
     let body = '';
     if (c.name === 'web_search' && Array.isArray(c.result?.results) && c.result.results.length) {
       body = c.result.results.map(r => `- [${escHtml(r.title || r.url)}](${escHtml(r.url)})${r.snippet ? ' — ' + escHtml(r.snippet) : ''}`).join('\n');
@@ -5902,16 +5714,14 @@ function buildAgenticTraceHtml(calls) {
     } else if (isError) {
       body = escHtml(c.result.error);
     }
-    return `<details class="agent-trace" data-status="${isError ? 'error' : 'ok'}"><summary>${icon} <b>${escHtml(label)}</b>${subject ? ` <code>${escHtml(subject)}</code>` : ''} — <em>${escHtml(status)}</em></summary>\n\n${body || `_${t('js.empty', '(empty)')}_`}\n\n</details>`;
+    return `<details class="agent-trace" data-status="${isError ? 'error' : 'ok'}"><summary>${icon} <b>${escHtml(label)}</b>${subject ? ` <code>${escHtml(subject)}</code>` : ''} — <em>${escHtml(status)}</em></summary>\n\n${body || `_${t('js.empty')}_`}\n\n</details>`;
   }).join('\n\n');
 }
 
 // One non-streaming model turn with only the two web tools attached — a
-// trimmed-down twin of kiconnect-agent.js's callModel(): same request
-// shapes, but no file/shell tools and no confirmation UI, since this only
-// ever runs the brief "does it need to search? / here are the results"
-// back-and-forth. The reply the person actually sees is produced afterwards
-// by the ordinary streaming call, once no more tool calls come back.
+// trimmed-down twin of kiconnect-agent.js's callModel() for the brief "does
+// it need to search?" back-and-forth. The visible reply is produced
+// afterwards by the ordinary streaming call.
 async function callModelForAgenticWebTurn(msgs, provider) {
   const { modelId } = splitModelId(config.model);
   if (provider.type === 'anthropic') {
@@ -5967,13 +5777,11 @@ async function callModelForAgenticWebTurn(msgs, provider) {
 }
 
 // Resolves the model↔tool back-and-forth for 'agentic' web-search mode
-// before the visible reply is generated: repeatedly asks the model (non-
-// streaming, silently) whether it wants to call web_search/fetch_url,
-// executes whatever it calls, feeds the result back, and stops as soon as
-// it answers with plain text instead of a tool call (or the iteration cap
-// is hit). Returns the tool-augmented message history — ready to hand to
-// the normal streaming call for the actual reply — plus an HTML trace of
-// what was looked up, to prepend to that reply.
+// before the visible reply: repeatedly asks the model (non-streaming,
+// silently) whether it wants to call web_search/fetch_url, executes it,
+// feeds the result back, stops once it answers with plain text (or the
+// iteration cap is hit). Returns the tool-augmented history for the normal
+// streaming call, plus an HTML trace of what was looked up.
 async function runAgenticWebToolLoop(initialMsgs, provider) {
   let msgs = initialMsgs.slice();
   const allCalls = [];
@@ -5985,7 +5793,7 @@ async function runAgenticWebToolLoop(initialMsgs, provider) {
     const results = [];
     for (const call of turn.toolCalls) {
       const subject = call.name === 'fetch_url' ? (call.arguments.url || '') : (call.arguments.query || '');
-      toast(`🌐 ${call.name === 'fetch_url' ? t('agent.tool.fetchUrl', 'Fetch webpage') : t('agent.tool.webSearch', 'Web search')}: "${subject}"`);
+      toast(`🌐 ${call.name === 'fetch_url' ? t('agent.tool.fetchUrl') : t('agent.tool.webSearch')}: "${subject}"`);
       const result = await runAgenticWebTool(call.name, call.arguments);
       results.push(result);
       allCalls.push({ name: call.name, args: call.arguments, result });
@@ -6058,19 +5866,19 @@ function sttProviderNeedsKey(p) { return p === 'groq' || p === 'gemini'; }
 function ta(key, fallback) { const v = t(key); return v === key ? fallback : v; }
 
 const AUDIO_PROVIDER_KEY_INFO = {
-  openai:     { label: () => ta('audio.ttsKeyLabelOpenAI', 'OpenAI API key'),     hint: () => ta('audio.ttsHintOpenAI', 'tts-1 / tts-1-hd / gpt-4o-mini-tts. Usage-based pricing. Stored encrypted with your account data.'),     ph: 'sk-...' },
-  elevenlabs: { label: () => ta('audio.ttsKeyLabelElevenLabs', 'ElevenLabs API key'), hint: () => ta('audio.ttsHintElevenLabs', 'Very natural voices, more expensive. Requires your own ElevenLabs account. Stored encrypted with your account data.'), ph: 'el_...' },
-  groq:       { label: () => ta('audio.ttsKeyLabelGroq', 'Groq API key'),       hint: () => ta('audio.ttsHintGroq', 'Cheap, OpenAI-compatible. Stored encrypted with your account data.'),       ph: 'gsk_...' },
-  gemini:     { label: () => ta('audio.ttsKeyLabelGemini', 'Google Gemini API key'), hint: () => ta('audio.ttsHintGemini', 'Free tier via Google AI Studio (rate-limited). Same key type as a Gemini chat provider. Stored encrypted with your account data.'), ph: 'AIza...' },
-  gcloud:     { label: () => ta('audio.ttsKeyLabelGcloud', 'Google Cloud API key (Text-to-Speech)'), hint: () => ta('audio.ttsHintGcloud', 'Chirp 3: HD voices. Different from the Gemini key above — needs a Google Cloud project with the Text-to-Speech API enabled and a billing account attached (usage still free within the monthly quota). Stored encrypted with your account data.'), ph: 'AIza...' },
+  openai:     { label: () => ta('audio.ttsKeyLabelOpenAI'),     hint: () => ta('audio.ttsHintOpenAI'),     ph: 'sk-...' },
+  elevenlabs: { label: () => ta('audio.ttsKeyLabelElevenLabs'), hint: () => ta('audio.ttsHintElevenLabs'), ph: 'el_...' },
+  groq:       { label: () => ta('audio.ttsKeyLabelGroq'),       hint: () => ta('audio.ttsHintGroq'),       ph: 'gsk_...' },
+  gemini:     { label: () => ta('audio.ttsKeyLabelGemini'), hint: () => ta('audio.ttsHintGemini'), ph: 'AIza...' },
+  gcloud:     { label: () => ta('audio.ttsKeyLabelGcloud'), hint: () => ta('audio.ttsHintGcloud'), ph: 'AIza...' },
 };
 
 // STT-side equivalent of AUDIO_PROVIDER_KEY_INFO — kept separate because the
 // STT key field previously had Groq's label/hint hardcoded inline; this map
 // lets updateAudioProviderKeyUI() below treat STT providers generically too.
 const AUDIO_STT_PROVIDER_KEY_INFO = {
-  groq:   { label: () => ta('audio.sttKeyLabelGroq', 'Groq API key'),   hint: () => ta('audio.sttHintGroq', 'Cheap, good with dialects. No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.'),   ph: 'gsk_...' },
-  gemini: { label: () => ta('audio.sttKeyLabelGemini', 'Google Gemini API key'), hint: () => ta('audio.sttHintGemini', 'Free tier via Google AI Studio (rate-limited). No live interim text (no streaming) — a spinner is shown while recognizing instead. Stored encrypted with your account data.'), ph: 'AIza...' },
+  groq:   { label: () => ta('audio.sttKeyLabelGroq'),   hint: () => ta('audio.sttHintGroq'),   ph: 'gsk_...' },
+  gemini: { label: () => ta('audio.sttKeyLabelGemini'), hint: () => ta('audio.sttHintGemini'), ph: 'AIza...' },
 };
 
 // Shows/hides + relabels the TTS and STT API-key fields in the Audio tuning-panel
@@ -6079,7 +5887,7 @@ const AUDIO_STT_PROVIDER_KEY_INFO = {
 function updateAudioProviderKeyUI() {
   config.audioProviders = config.audioProviders || {};
 
-  // ── TTS ──
+  // TTS
   const ttsProvider  = document.getElementById('ttsProviderSelect')?.value || 'browser';
   const ttsGroup      = document.getElementById('ttsApiKeyGroup');
   const ttsLabel      = document.getElementById('ttsApiKeyLabel');
@@ -6103,7 +5911,7 @@ function updateAudioProviderKeyUI() {
     if (voiceIdInput && ttsProvider === 'elevenlabs') voiceIdInput.value = config.audioProviders.elevenlabs?.voiceId || '';
   }
 
-  // ── STT ──
+  // STT
   const sttProvider = document.getElementById('sttProviderSelect')?.value || 'browser';
   const sttGroup     = document.getElementById('sttApiKeyGroup');
   const sttLabel     = document.getElementById('sttApiKeyLabel');
@@ -6122,12 +5930,10 @@ function updateAudioProviderKeyUI() {
   }
 }
 
-// ── Tuning panel: generic collapse/expand for every top-level section ──
-// Wraps each section (from .section-header to the next header or <hr
-// class="divider">, divider left outside so it stays visible) into a
-// .tuning-section div, adds a clickable arrow, and persists open/closed
-// state in localStorage. Idempotent per panel. Works on any panel with
-// this "section-header + hr.divider" structure via panelId+storagePrefix.
+// Tuning panel: generic collapse/expand for every top-level section
+// Wraps each section (.section-header to the next header or hr.divider)
+// into a .tuning-section div, adds a clickable arrow, and persists open/
+// closed state in localStorage. Works on any panel with this structure.
 function initPanelSectionCollapse(panelId, storagePrefix) {
   const panel = document.getElementById(panelId);
   if (!panel || panel.dataset.collapseInit) return;
@@ -6314,11 +6120,9 @@ async function searchDuckDuckGo(q, count) {
   return [];
 }
 
-// Runs a web search against a SearXNG instance. Uses fetchPublicWithTimeout (scheme-only
-// check) rather than fetchWithTimeout (fixed ALLOWED_API_DOMAINS check), since this is the
-// one engine where the "key" field is actually a free-form self-hosted instance URL - a
-// fixed domain allowlist would silently block any instance that isn't one of the built-in
-// public ones below.
+// Runs a web search against a SearXNG instance. Uses fetchPublicWithTimeout
+// (scheme-only check) since the "key" field here is a free-form self-hosted
+// instance URL — a fixed domain allowlist would block non-built-in instances.
 async function searchSearxng(q, count, instanceUrl = '') {
   const locale = getWebSearchLocale();
   const instances = instanceUrl ? [instanceUrl.replace(/\/$/, '')] : SEARXNG_PUBLIC_INSTANCES;
@@ -6472,13 +6276,9 @@ async function performWebSearch(query) {
   const cached = webSearchCache.get(cacheKey);
   if (cached && Date.now() - cached.time < 30 * 60 * 1000) return cached.value;
 
-  // The button's "searching…" state is reset here, in a finally around the
-  // ENTIRE search (not just by whichever caller happens to await this) —
-  // previously only the normal chat send path reset it after catching an
-  // error; the agent mode's web_search tool calls performWebSearch()
-  // directly with no equivalent reset, so an agent web search (or any
-  // engine throwing before returning) left the Web button stuck showing
-  // "..." until the next unrelated call happened to reset it.
+  // Reset "searching…" in a finally around the ENTIRE search, not just per
+  // caller — agent mode's web_search tool calls performWebSearch() directly
+  // with no reset, previously leaving the Web button stuck on "...".
   updateWebSearchButton(true);
   try {
     return await performWebSearchInner(engine, key, locale, count, q, cacheKey);
@@ -6785,11 +6585,9 @@ async function sendMessage() {
   await sendMessageCore(text, att);
 }
 
-// Turns pending attachments (+ typed text) into the internal storage/wire content-block
-// format (image_url / pdf_base64 / pdf_text / text-file text blocks), and the flat list of
-// file names shown as chips. Shared by normal chat (sendMessageCore) and the project/agent
-// module (kiconnect-agent.js's runAgentChatTurn) so attaching files works identically in both —
-// see buildAttachmentContent() call sites for the two places this feeds into.
+// Turns pending attachments (+ typed text) into the internal content-block
+// format (image_url / pdf_base64 / pdf_text / text-file blocks) and the flat
+// list of file names shown as chips. Shared by normal chat and kiconnect-agent.js.
 function buildAttachmentContent(text, att) {
   let userContent;
   const fileNames = [];
@@ -6832,14 +6630,12 @@ async function sendMessageCore(text, att) {
   let linkedPages = [];
   const fileNames0 = att.map(a=>a.name);
 
-  // ── Instant render: show the user's bubble immediately, before any
-  // network round-trip (uploads / link fetch / web search). Those steps
-  // can take a second or more and used to leave the chat looking "stuck"
-  // until they finished. We build a minimal preview (text + images, files
-  // as chips) and push it into the chat tree right away; the full, possibly
-  // web-augmented content is written into this same message object afterwards
-  // — it never needs to touch the DOM again, since the bubble only ever
-  // displayed the text/image parts anyway.
+  // Instant render: show the user's bubble immediately, before any network
+  // round-trip (uploads / link fetch / web search) — those can take a
+  // second or more and used to leave the chat looking "stuck". Build a
+  // minimal preview (text + images, files as chips) and push it into the
+  // chat tree right away; the full content is written into this same
+  // message object afterwards without touching the DOM again.
   const previewContent = (() => {
     if (att.length) {
       const arr=[];
@@ -6910,11 +6706,9 @@ async function sendMessageCore(text, att) {
     }
   }
 
-  // Knowledge-base retrieval ("Wissensbasis" / RAG) — kiconnect-db.js
-  // exposes window.kbRetrieveForQuery() only when at least one knowledge
-  // base is toggled on in the composer; everything else here is a no-op
-  // for chats that don't use it, same defer-to-optional-global pattern as
-  // the agent module. See kiconnect-rag-spec.md section 5.4.
+  // Knowledge-base retrieval (RAG) — kiconnect-db.js exposes
+  // window.kbRetrieveForQuery() only when a KB is toggled on in the
+  // composer; a no-op otherwise, same defer-to-optional-global pattern as the agent module.
   let kbResult = null;
   let kbWasRequested = false;
   if (text && typeof window.kbRetrieveForQuery === 'function') {
@@ -6925,7 +6719,7 @@ async function sendMessageCore(text, att) {
         userContent = window.buildKbAugmentedContent(userContent, kbResult);
       }
     } catch (err) {
-      toast(tf('js.kbSearchFailed', { e: err.message || err }) || `⚠️ Wissensbasis-Suche fehlgeschlagen: ${err.message || err}`);
+      toast(tf('kb.searchFailed', { e: err.message || err }));
       kbResult = null;
     }
   }
@@ -6937,11 +6731,10 @@ async function sendMessageCore(text, att) {
     ...(linkedPages || []).map((p, i) => ({ index:`L${i + 1}`, title:p.title || p.url, url:p.url, snippet:p.text?.slice(0, 280) || '' })),
     ...(webSearch?.results || [])
   ];
-  // The user's bubble is already on screen (instant preview from above).
-  // Now backfill the SAME message object with the fully augmented content
-  // (web search results, linked pages, resolved file blocks) — this is what
-  // actually gets sent to the model and saved, but it doesn't need to touch
-  // the DOM again for the text/image parts, since those already rendered.
+  // The user's bubble is already on screen (instant preview above). Now
+  // backfill the SAME message object with the fully augmented content (web
+  // results, linked pages, resolved files) — sent to the model and saved,
+  // without touching the DOM again since the text/image parts already rendered.
   userMsgForStorage.content = Array.isArray(userContent)
     ? userContent.map(p=>{
         if(p._webSearch) return p;
@@ -6981,15 +6774,12 @@ async function sendMessageCore(text, att) {
   renderDetectedLinks();
 
   const typingId=showTyping();
-  // No global isStreaming/abortController to set here. The run
-  // _streamAIResponse creates below (via _runStreamAndAttach) IS this chat's
-  // streaming state (see isChatStreaming/runsForChat); the composer
-  // button/sidebar dot update themselves the moment that run registers
-  // (_streamAIResponse calls syncComposerStreamingUI()+renderSidebar() right
-  // after adding itself to activeRuns) — correctly reflecting whichever chat
-  // is actually on screen at that point, even if the user switched away
-  // during one of the awaits above (attachment upload, link fetch, web
-  // search, KB retrieval).
+  // No global isStreaming/abortController to set here — the run
+  // _streamAIResponse creates below IS this chat's streaming state (see
+  // isChatStreaming/runsForChat); the composer button/sidebar dot update
+  // themselves the moment that run registers, correctly reflecting
+  // whichever chat is on screen even if the user switched away during an
+  // earlier await (upload, link fetch, web search, KB retrieval).
 
   // build wire-format message list, then delegate to shared _streamAIResponse
   let messages;
@@ -7025,7 +6815,7 @@ async function sendMessageCore(text, att) {
   }
 }
 
-// ── Auto-Title Generation ─────────────────────────────────────────
+// Auto-Title Generation
 // Called immediately when the first user message is sent (parallel to the main stream).
 // Uses userText as a fast seed; once the AI response arrives it will have updated already.
 async function autoGenerateChatTitle(chat, userText) {
@@ -7095,7 +6885,7 @@ async function autoGenerateChatTitle(chat, userText) {
   }
 }
 
-// ── Message UI ─────────────────────────────────────────────────────
+// Message UI
 function appendToMessages(el) {
   const c=document.getElementById('messages');
   const total=c.querySelector('#chatTokenTotal');
@@ -7134,11 +6924,9 @@ function showTyping() {
 function removeTyping(id){document.getElementById(id)?.remove();}
 // Scrolls the message list to the bottom.
 function scrollToBottom(){const c=document.getElementById('messages');c.scrollTop=c.scrollHeight;pinnedToBottom=true;}
-// Keep pinnedToBottom in sync with whatever the user actually does with
-// the scrollbar (mouse wheel, drag, keyboard, ...) — independent of which
-// chat's run (chat stream or agent turn, tracked per-chat in activeRuns —
-// see isChatStreaming) is currently active, so both share the same "did
-// the user scroll away from the bottom?" signal.
+// Keep pinnedToBottom in sync with what the user does with the scrollbar,
+// independent of which chat's run is currently active, so both share the
+// same "did the user scroll away from the bottom?" signal.
 document.addEventListener('DOMContentLoaded', () => {
   const messagesEl = document.getElementById('messages');
   if (messagesEl) messagesEl.addEventListener('scroll', () => { pinnedToBottom = isMessagesNearBottom(); });
@@ -7146,7 +6934,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Fills the message input with a suggestion chip's text and sends it immediately.
 function sendSuggestion(txt){document.getElementById('messageInput').value=txt;sendMessage();}
 
-// ── Copy ──────────────────────────────────────────────────────────
+// Copy
 function copyCodeFromBtn(btn) {
   const b64=btn.dataset.b64; if(!b64) return;
   let text;
@@ -7163,7 +6951,7 @@ function toggleCodeBlockCollapse(btn) {
   const block = btn.closest('.code-block'); if (!block) return;
   const collapsed = block.classList.toggle('collapsed');
   btn.textContent = collapsed ? '▶' : '▼';
-  btn.title = collapsed ? (t('js.codeExpand')||'Expand') : (t('js.codeCollapse')||'Collapse');
+  btn.title = collapsed ? (t('js.codeExpand')) : (t('js.codeCollapse'));
 }
 
 // Copies a message bubble's plain-text content to the clipboard.
@@ -7333,12 +7121,9 @@ function copyFullChat() {
   navigator.clipboard.writeText(text).then(()=>toast(t('js.chatCopied'))).catch(()=>toast(t('js.copyFailed')));
 }
 
-// ── Text Formatting ────────────────────────────────────────────────
-// Safe UTF-8 -> base64 encoder. Replaces the classic
-// btoa(unescape(encodeURIComponent(str))) trick, which throws
-// "URIError: malformed URI sequence" if str contains an unpaired
-// TextEncoder replaces invalid surrogates with U+FFFD instead of throwing,
-// so a stray bad character (e.g. a truncated emoji) degrades gracefully.
+// Text Formatting
+// Safe UTF-8 -> base64 encoder. Replaces btoa(unescape(encodeURIComponent(str))),
+// which throws on an unpaired surrogate; TextEncoder degrades gracefully instead.
 function toBase64Utf8(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = '';
@@ -7381,11 +7166,11 @@ function formatText(raw) {
     const i = blocks.length;
     const b64 = toBase64Utf8(code.replace(/\n$/, ''));
     const ll = escHtml((lang || '').trim() || 'code');
-    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
+    blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse'))}" aria-label="Collapse code block">▼</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(code.replace(/\n$/, ''))}</code></pre></div></div>`);
     return i;
   }
 
-  // ── Step 1: Code and LaTeX blocks VOR protect from marked ────────
+  // Step 1: Code and LaTeX blocks VOR protect from marked
 
   // 4+-Backtick-Fences
   s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => PH(pushCodeBlock(lang, code)));
@@ -7436,15 +7221,11 @@ function formatText(raw) {
     return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
-  // ── Step 1b: ensure a blank line precedes list blocks ──────────
-  // CommonMark/marked (with breaks:false) only starts a list at the
-  // beginning of the text or after a blank line. Without that blank
-  // line, "-"/"*"/"1." lines typed right after a text line get pulled
-  // into the previous paragraph as literal characters instead of
-  // becoming an indented <ul>/<ol> — this is what caused notes (which
-  // are usually typed without blank lines) to render list markers as
-  // flat, non-indented text while the same markdown worked fine in the
-  // chat composer where paragraph breaks are more commonly used.
+  // Step 1b: ensure a blank line precedes list blocks
+  // CommonMark/marked only starts a list at the start of the text or after
+  // a blank line — without it, "-"/"*"/"1." lines get pulled into the
+  // previous paragraph as literal text instead of becoming a list. This is
+  // why notes (usually typed without blank lines) rendered flat text.
   {
     const isListLine = (line) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(line);
     const lines = s.split('\n');
@@ -7462,7 +7243,7 @@ function formatText(raw) {
     s = fixed.join('\n');
   }
 
-  // ── Step 2: marked.js rendern ─────────────────────────────────
+  // Step 2: marked.js rendern
   if (typeof marked !== 'undefined') {
     // Custom renderer for code blocks (in case marked does encounter one)
     const renderer = new marked.Renderer();
@@ -7472,7 +7253,7 @@ function formatText(raw) {
       const i = blocks.length;
       const b64 = toBase64Utf8(text);
       const ll = escHtml(lang || 'code');
-      blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse')||'Collapse')}" aria-label="Collapse code block">▾</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(text)}</code></pre></div></div>`);
+      blocks.push(`<div class="code-block"><div class="code-block-header"><span class="code-lang">${ll}</span><button class="code-collapse-btn" type="button" title="${escHtml(t('js.codeCollapse'))}" aria-label="Collapse code block">▾</button><button class="code-copy-btn" data-b64="${escHtml(b64)}">${escHtml(t('js.codeCopy'))}</button></div><div class="code-block-body"><pre><code>${escHtml(text)}</code></pre></div></div>`);
       return PH(i);
     };
     try {
@@ -7492,10 +7273,10 @@ function formatText(raw) {
     }).filter(Boolean).join('');
   }
 
-  // ── Step 3: Platzhalter wiederherstellen ───────────────────────
+  // Step 3: Platzhalter wiederherstellen
   s = s.replace(PH_RE, (_, i) => blocks[+i] || '');
 
-  // ── Step 4: DOMPurify ─────────────────────────────────────────
+  // Step 4: DOMPurify
   if (typeof DOMPurify !== 'undefined') {
     ensureDompurifyNoopenerHook();
     s = DOMPurify.sanitize(s, {
@@ -7528,11 +7309,9 @@ function wireCodeCopyButtons(container) {
   retranslateCodeBlockButtons(container);
 }
 
-// ── Math ──────────────────────────────────────────────────────────
-// `el` can be a single element (typeset everything inside it) or an array
-// of nodes (typeset exactly those, e.g. only the nodes just appended to a
-// stable container — lets a caller avoid re-scanning content that's
-// already settled).
+// Math
+// `el` can be a single element (typeset everything inside) or an array of
+// nodes (typeset exactly those, avoiding a re-scan of already-settled content).
 function typesetMath(el) {
   const target = el || document.getElementById('messages');
   const targets = Array.isArray(target) ? target : [target];
@@ -7590,7 +7369,7 @@ function typesetMathThrottled(el, delay = 400) {
   }, wait);
 }
 
-// ── PDF Helpers ───────────────────────────────────────────────────
+// PDF Helpers
 async function extractPdfText(arrayBuffer) {
   const lib=window._pdfjsLib||window.pdfjsLib; if(!lib) throw new Error('PDF.js not loaded');
   const pdf=await lib.getDocument({data:arrayBuffer}).promise;
@@ -7603,7 +7382,7 @@ function arrayBufferToBase64(buf){const bytes=new Uint8Array(buf);let bin='';for
 // Returns whether a model ID supports receiving raw PDF bytes (as opposed to extracted text only).
 function modelSupportsPdfBase64(mid){return /claude|gemini|gpt-4o/i.test(mid||'');}
 
-// ── FILE / IMAGE HANDLING (incl. Ctrl+V paste) ──────────────────
+// FILE / IMAGE HANDLING (incl. Ctrl+V paste)
 
 // Reads a dropped/selected file (image, PDF, or text) and adds it to the pending attachments.
 async function processFile(file) {
@@ -7716,7 +7495,7 @@ function removeAttachment(i){attachments.splice(i,1);renderAttachments();}
 // Clears all pending attachments.
 function clearAttachments(){attachments=[];renderAttachments();}
 
-// ── UI Helpers ────────────────────────────────────────────────────
+// UI Helpers
 function closePanels(){
   ['settingsPanel','tuningPanel','providerPanel','profilePanel','modelMaxPanel'].forEach(id=>document.getElementById(id).classList.remove('open'));
   document.querySelectorAll('.panel-toolbar-btn').forEach(b=>b.classList.remove('active'));
@@ -8005,7 +7784,7 @@ async function handleDrop(e){
   for(const file of files)await processFile(file);
 }
 
-// ── Modell-Limits Panel ───────────────────────────────────────────
+// Modell-Limits Panel
 function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="modelMaxPanel"]')?.classList.add('active');}
 
 // (Re)builds the list of models with editable max-output-token limits.
@@ -8053,7 +7832,7 @@ function resetModelMax(modelId){
 // Clears all user max-output-token overrides.
 function resetAllModelMax(){config.userModelMaxOverrides={};save();renderModelMaxList();updateModelMaxInfo();toast(t('js.allLimitsReset'));}
 
-// ── LOGIN / MULTI-ACCOUNT / SESSION ─────────────────────────────
+// LOGIN / MULTI-ACCOUNT / SESSION
 
 const ACCOUNT_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35','#00bcd4','#9c27b0'];
 let _selectedLoginAccountId = null; // account selected on grid before pw entry
@@ -8265,16 +8044,12 @@ async function doSetupPassword() {
   const selSw = colorRow?.querySelector('[data-selected]');
   const color = selSw?.dataset.color || ACCOUNT_COLORS[_accounts.length % ACCOUNT_COLORS.length];
   // Create account
-  // Random part uses crypto.getRandomValues (not Math.random(), which is
-  // neither cryptographically strong nor high-entropy) — 16 random bytes,
-  // hex-encoded. Matters because /store/<accountId>/... on the local
-  // server has no separate password check of its own (see kiconnect-proxy.py);
-  // the account ID itself is the only thing standing between "just this
-  // account's encrypted blob" and "any account's encrypted blob" for
-  // anyone/anything else reaching localhost:5000 (e.g. another OS user on
-  // a shared machine). Content stays confidential either way (it's
-  // encrypted with a password-derived key), but a guessable ID would still
-  // let someone overwrite/delete another account's data.
+  // Random part uses crypto.getRandomValues (not Math.random(), too weak) —
+  // 16 random bytes, hex-encoded. Matters because /store/<accountId>/... has
+  // no separate password check of its own; the account ID is the only thing
+  // stopping "just this account's blob" from becoming "any account's blob"
+  // for anyone else reaching localhost:5000. Content stays encrypted either
+  // way, but a guessable ID would let someone overwrite/delete another account.
   const _idBytes = new Uint8Array(16);
   crypto.getRandomValues(_idBytes);
   const accountId = Date.now().toString() + '_' + Array.from(_idBytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -8298,7 +8073,7 @@ async function doSetupPassword() {
   localStorage.setItem(accountKey('guided_intro_pending'), '1');
   hideLoginScreen();
   await bootApp();
-  toast(t('js.pwdSetupDone') || '🔐 Account created — welcome!');
+  toast(t('js.pwdSetupDone'));
 }
 
 // Explains (or triggers) the recovery flow for a forgotten account password.
@@ -8324,11 +8099,9 @@ async function forgotPassword() {
 // Permanently deletes an account and its stored data after confirmation.
 async function deleteAccount(accountId) {
   // Remove all data from server store and localStorage.
-  // Ask the server which keys actually exist for this account rather than
-  // deleting a hardcoded list — a previous hardcoded list here was missing
-  // 'profileFolders' (added later as its own save() section), which meant
-  // "delete account" silently left that key's encrypted data behind on the
-  // server. Falls back to a hardcoded list only if the listing call fails.
+  // Ask the server which keys exist rather than deleting a hardcoded list —
+  // a previous hardcoded list was missing 'profileFolders', silently leaving
+  // it behind. Falls back to a hardcoded list only if the listing call fails.
   if (_storeAvailable) {
     const serverKeys = await _storeListKeys(accountId);
     const keysToDelete = (serverKeys && serverKeys.length) ? serverKeys : [
@@ -8346,11 +8119,9 @@ async function deleteAccount(accountId) {
   const keys = Object.keys(localStorage).filter(k => k.startsWith(prefix));
   keys.forEach(k => localStorage.removeItem(k));
   _accounts = _accounts.filter(a => a.id !== accountId);
-  // Must AWAIT the registry write here (not the usual fire-and-forget
-  // saveAccountRegistry()) — the caller calls logoutNow() right after this
-  // returns, which re-fetches the account registry from the server for the
-  // login screen. Without awaiting, that re-fetch could race the pending
-  // PUT and still see the deleted account until the next reload/F5.
+  // Must AWAIT the registry write here (not fire-and-forget) — the caller
+  // calls logoutNow() right after, which re-fetches the registry for the
+  // login screen. Without awaiting, that could race the pending PUT.
   await _registryPut(_accounts);
   if (_activeAccountId === accountId) {
     _activeAccountId = null;
@@ -8446,7 +8217,7 @@ function applySessionDuration() {
   const durMs = getSessionDurationMs();
   localStorage.setItem('kic_session_duration_ms', String(durMs));
   if (durMs > 0 && _activeAccountId) localStorage.setItem(`kic_${_activeAccountId}_session_expiry`, String(Date.now() + durMs));
-  startSessionCountdown(); toast(t('settings.sessionApply') || '⏱ Applied');
+  startSessionCountdown(); toast(t('settings.sessionApply'));
 }
 // Resets the session inactivity timer, postponing auto-logout.
 function resetSessionNow() {
@@ -8456,11 +8227,9 @@ function resetSessionNow() {
   setTimeout(() => logoutNow(), 1200);
 }
 
-// Reset MathJax's own right-click menu settings (renderer, zoom, font
-// size, accessibility options, …) back to the app defaults. MathJax stores these itself,
-// separately from anything KiConnect controls, under a fixed localStorage key that is the
-// same across MathJax versions. A reload is required because the output renderer is only
-// picked up at startup.
+// Reset MathJax's own right-click menu settings back to app defaults.
+// MathJax stores these under a fixed localStorage key. A reload is required
+// since the output renderer is only picked up at startup.
 function resetMathJaxSettings() {
   try { localStorage.removeItem('MathJax-Menu-Settings'); } catch (e) {}
   toast(t('js.mathResetDone'));
@@ -8503,10 +8272,9 @@ async function checkLogin() {
     return;
   }
   // F5/reload: session token check (no password in sessionStorage)
-  // The token was encrypted with the CryptoKey - no decrypting without the password.
-  // Approach: read account ID from localStorage, load salt, check passphrase in RAM.
-  // Since RAM is empty after F5, the user must briefly re-authenticate -
-  // UNLESS the token is still valid AND the CryptoKey is still in RAM (same tab session).
+  // The token was encrypted with the CryptoKey, so it can't be decrypted
+  // without the password. Since RAM is empty after F5, the user must
+  // re-authenticate unless the token is still valid AND the key is still in RAM.
   const lastAccountId = localStorage.getItem('kic_active_account');
   if (lastAccountId && getAccount(lastAccountId)) {
     // Check whether a session token is present in sessionStorage (only then is it worth trying)
@@ -8532,7 +8300,7 @@ async function checkLogin() {
   showLoginScreen();
 }
 
-// ── EVENT LISTENER SETUP ────────────────────────────────────────
+// EVENT LISTENER SETUP
 function setupEventListeners(){
   document.getElementById('sidebarToggleBtn').addEventListener('click', toggleSidebar);
   document.getElementById('openProviderHeaderBtn').addEventListener('click', ()=>{closePanels();openProviderPanel();});
@@ -8852,7 +8620,7 @@ function setupEventListeners(){
   observer.observe(messagesContainer,{childList:true,subtree:true});
 }
 
-// ── PRINT — Full chat & single bubble ───────────────────────────
+// PRINT — Full chat & single bubble
 
 // Opens the browser print dialog for the entire active chat.
 function printFullChat() {
@@ -8879,11 +8647,10 @@ function printFullChat() {
 
 let _printSingleIdx = null; // index of the bubble currently being printed
 
-// Opens the single-message print preview overlay by cloning the message's
-// already-rendered .bubble (and its .note-print) live out of the chat,
-// instead of re-formatting msg.content from scratch. Keeps preview/print in
-// sync with current collapse/expand state, needs no MathJax re-typeset, and
-// keeps note styling consistent with the full-chat print.
+// Opens the single-message print preview by cloning the message's
+// already-rendered .bubble live out of the chat, instead of re-formatting
+// msg.content from scratch — stays in sync with collapse/expand state,
+// needs no MathJax re-typeset.
 function openPrintSingleOverlay(idx) {
   idx = safeIdx(idx); if (idx === null) return;
   const chat = currentChat(); if (!chat) return;
@@ -8928,13 +8695,10 @@ function closePrintSingleOverlay() {
 }
 
 // Opens the browser print dialog for a single message.
-// Prints the MAIN window (via body.printing-single-bubble - see
-// kiconnect.css @media print), not a popup with its own MathJax instance
-// like before - that had to re-typeset/re-fetch fonts from scratch, and if
-// a chunk wasn't ready in time, printed a wrong-but-plausible-looking
-// glyph instead of a tofu box (e.g. "ox" -> "ax", "2" -> "m"). Printing the
-// main window reuses fonts already loaded and typeset, same as
-// printFullChat() above.
+// Prints the MAIN window (via body.printing-single-bubble), not a popup
+// with its own MathJax instance — that had to re-typeset from scratch and
+// could print a wrong-but-plausible glyph if a chunk wasn't ready in time
+// (e.g. "ox" -> "ax"). Reuses fonts already loaded, same as printFullChat().
 function printSingleBubble() {
   if (_printSingleIdx === null) return;
 
@@ -8951,7 +8715,7 @@ function printSingleBubble() {
     .catch(doPrint);
 }
 
-// ── INIT ────────────────────────────────────────────────────────
+// INIT
 (async()=>{
   // Hide main UI immediately — show only after successful login
   document.querySelector('.main')?.style.setProperty('display','none');
@@ -9004,7 +8768,7 @@ async function bootApp() {
   }
 }
 
-// ── Custom Model Dropdown ─────────────────────────────────────────
+// Custom Model Dropdown
 (function(){
   const trigger=document.getElementById('cmTrigger');
   const panel=document.getElementById('cmPanel');
@@ -9092,7 +8856,7 @@ async function bootApp() {
   };
 })();
 
-// ── Battle-Modus composer popover ──────────────────────────
+// Battle-Modus composer popover
 // Multi-select checkbox list for picking the 2-4 models a battle runs
 // against, built from the same window._cmData the custom model dropdown
 // above already maintains — no separate data source to keep in sync.

@@ -26,39 +26,36 @@ port = 5000
 
 app = Flask(__name__)
 
-# ── Directories ───────────────────────────────────────────────────
+# Directories
 STATIC_DIR = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR   = os.path.join(STATIC_DIR, 'datas')
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Projects (coding-agent feature) point at real, user-chosen folders anywhere
-# on the local filesystem, re-confined to that folder on every call (see
-# _project_root_for_id / _safe_rel_path). A folder can never be registered
-# if it equals or encloses STATIC_DIR/DATA_DIR.
-#
-# The project-id -> path mapping lives per-account, encrypted at rest, in
-# datas/<accountId>/agent_projects.json. The AES key is derived client-side
-# from the account password and held in RAM only during an unlocked session.
+# on the filesystem, re-confined to that folder on every call (see
+# _project_root_for_id / _safe_rel_path). Can't be registered if it equals or
+# encloses STATIC_DIR/DATA_DIR. The project-id -> path mapping lives
+# per-account, encrypted at rest, in datas/<accountId>/agent_projects.json;
+# the AES key is derived client-side from the password, held in RAM only.
 
-# ── Strict Origin / Host Check ────────────────────────────────────
+# Strict Origin / Host Check
 ALLOWED_ORIGINS = {
     f'http://localhost:{port}',
     f'http://127.0.0.1:{port}',
 }
 
-# ── Max Size (DoS-Protection) ─────────────────────────────────────
+# Max Size (DoS-Protection)
 MAX_BODY_SIZE  = 50  * 1024 * 1024   # 50 MB for proxy requests
 MAX_STORE_SIZE = 100 * 1024 * 1024   # 100 MB pro Storage-entry
 app.config['MAX_CONTENT_LENGTH'] = MAX_STORE_SIZE
 
-# ── Storage lock (thread-safe file I/O) ──────────────────────────
-# RLock, not Lock: endpoints wrap "load, check, save" as one nested acquire
-# by the same thread - a plain Lock would deadlock there.
+# Storage lock (thread-safe file I/O). RLock, not Lock: endpoints wrap
+# "load, check, save" as one nested acquire by the same thread - a plain
+# Lock would deadlock there.
 _store_lock = threading.RLock()
 
-# ── Input-Validating ─────────────────────────────────────────────
-# accountId: Timestamp + random-part, z.B. "1718000000000_ab3f7"
-# key: config, providers, profiles, folders, chats, current_chat, ...
+# Input validation. accountId: timestamp + random part, e.g.
+# "1718000000000_ab3f7". key: config, providers, profiles, folders, chats, ...
 _SAFE_ID_RE  = re.compile(r'^[A-Za-z0-9_\-]{1,128}$')
 _SAFE_KEY_RE = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
 
@@ -82,7 +79,7 @@ def _key_path(account_id, key):
 def _registry_path():
     return os.path.join(DATA_DIR, '_registry.json')
 
-# ── Atomarer Schreibvorgang ───────────────────────────────────────
+# Atomarer Schreibvorgang
 def _atomic_write(target_path, data_bytes):
     """Write atomically via temp file + os.replace(). Falls back to a direct
     write if os.replace() keeps failing due to file locking (AV scanners,
@@ -105,7 +102,7 @@ def _atomic_write(target_path, data_bytes):
         pass
 
 
-# ── /store/ - Account registry ───────────────────────────────────
+# /store/ - Account registry
 @app.route('/store/', methods=['GET', 'PUT', 'OPTIONS'])
 @app.route('/store',  methods=['GET', 'PUT', 'OPTIONS'])
 def store_registry():
@@ -134,7 +131,7 @@ def store_registry():
     
 
 
-# ── /store/<accountId> - Keys auflisten / ganzes Konto-Verzeichnis löschen ──
+# /store/<accountId> - Keys auflisten / ganzes Konto-Verzeichnis löschen
 @app.route('/store/<account_id>', methods=['GET', 'DELETE', 'OPTIONS'])
 def store_list(account_id):
     if request.method == 'OPTIONS':
@@ -144,10 +141,9 @@ def store_list(account_id):
         return Response('{"error":"Invalid account ID."}', 400, content_type='application/json')
 
     if request.method == 'DELETE':
-        # Removes the account's entire directory (all its .json key files,
-        # including agent_projects.json etc.) in one go, so no empty leftover
-        # folder remains after an account is deleted. Individual /store/<id>/<key>
-        # DELETE calls only ever removed files, never the directory itself.
+        # Removes the account's entire directory in one go, so no empty
+        # leftover folder remains after deletion (individual /store/<id>/<key>
+        # DELETE calls only ever removed files, never the directory).
         with _store_lock:
             if os.path.isdir(adir):
                 shutil.rmtree(adir, ignore_errors=True)
@@ -161,7 +157,7 @@ def store_list(account_id):
     return Response(json.dumps(keys), 200, content_type='application/json')
 
 
-# ── /store/<accountId>/<key> - Lesen / Schreiben / Loeschen ──────
+# /store/<accountId>/<key> - Lesen / Schreiben / Loeschen
 @app.route('/store/<account_id>/<key>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
 def store_key(account_id, key):
     if request.method == 'OPTIONS':
@@ -202,11 +198,9 @@ def store_key(account_id, key):
         return Response('{"ok":true}', 200, content_type='application/json')
 
 
-# ════════════════════════════════════════════════════════════════
-#  Agent-API - file operations for the coding-agent feature.
-#  Every path is re-resolved and re-confined to its project's registered
-#  root on every call - never trust a previously-checked path.
-# ════════════════════════════════════════════════════════════════
+#  Agent API - file operations for the coding-agent feature. Every path is
+#  re-resolved and re-confined to its project root on every call - never
+#  trust a previously-checked path.
 MAX_AGENT_FILE_SIZE = 5 * 1024 * 1024          # 5 MB per file (read + write)
 MAX_AGENT_TREE_ENTRIES = 4000                  # safety cap for huge folders
 AGENT_IGNORE_DIRS = {
@@ -219,10 +213,10 @@ AGENT_BLOCKED_SUFFIXES = ('.env', '.key', '.pem', '.pfx', '.p12', '.crt')
 AGENT_BLOCKED_NAMES = {'.env', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
 _SAFE_PROJECT_ID_RE = re.compile(r'^p_[A-Za-z0-9]{1,64}$')
 
-# ── Agent Session (per-account, in-RAM only) ──────────────────────
-# The AES-256 key for a project registry is derived client-side from the
-# account password and handed to the server once at unlock. Kept only in
-# this in-memory dict, keyed by a random session token - never persisted.
+# Agent Session (per-account, in-RAM only). The AES-256 key for a project
+# registry is derived client-side from the password and handed to the
+# server once at unlock, kept only in this in-memory dict, keyed by a
+# random session token - never persisted.
 _agent_sessions = {}          # token(str) -> {'accountId': str, 'key': bytes, 'ts': float}
 _AGENT_SESSION_TTL = 24 * 3600
 _agent_session_lock = threading.Lock()
@@ -346,9 +340,9 @@ def _agent_ok(payload=None, status=200):
     return Response(json.dumps(payload if payload is not None else {'ok': True}),
                     status, content_type='application/json')
 
-# Shared OPTIONS-preflight + unlocked-session check used by both
-# _agent_authed and _kb_route below. Returns (sess, None) on success or
-# (None, error_response) - callers just return the error_response as-is.
+# Shared OPTIONS-preflight + unlocked-session check for _agent_authed and
+# _kb_route below. Returns (sess, None) or (None, error_response) - callers
+# just return the error_response as-is.
 def _require_unlocked_session(error_fn):
     if request.method == 'OPTIONS':
         return None, Response('', 204, headers={**CORS_HEADERS, **SECURITY_HEADERS})
@@ -368,8 +362,8 @@ def _agent_authed(fn):
         return fn(sess, *args, **kwargs)
     return wrapper
 
-# ── /agent/session/unlock - hand the server a per-account agent key ──
-# Called once after a normal password login (see kiconnect.js
+# /agent/session/unlock - hand the server a per-account agent key. Called
+# once after a normal password login (see kiconnect.js
 # unlockAgentSession()). Key is derived client-side from the password + a
 # dedicated salt, independent of the config/providers/chats key - a leak of
 # one doesn't expose the other.
@@ -400,7 +394,7 @@ def agent_session_unlock():
         _agent_sessions[token] = sess
     return _agent_ok({'token': token, 'projects': data['projects']})
 
-# ── /agent/session/rekey - password change: re-encrypt under new key ─
+# /agent/session/rekey - password change: re-encrypt under new key.
 # Requires a still-valid OLD session. Re-encrypts the server's own
 # already-decrypted registry, never a client-supplied one, so a password
 # change can't smuggle in unvalidated project entries.
@@ -429,7 +423,7 @@ def agent_session_rekey(old_sess):
         _agent_sessions[new_token] = new_sess
     return _agent_ok({'token': new_token, 'projects': registry['projects']})
 
-# ── /agent/session/lock - explicit logout for the agent session ──────
+# /agent/session/lock - explicit logout for the agent session
 @app.route('/agent/session/lock', methods=['POST', 'OPTIONS'])
 def agent_session_lock():
     if request.method == 'OPTIONS':
@@ -439,7 +433,7 @@ def agent_session_lock():
         _agent_sessions.pop(token, None)
     return _agent_ok()
 
-# ── /agent/browse - list real OS folders, for the project folder picker ──
+# /agent/browse - list real OS folders, for the project folder picker
 def _list_subdirs(path):
     names = []
     try:
@@ -518,8 +512,8 @@ def agent_browse():
     return _agent_ok(out)
 
 # Resolves+validates a raw folder path for project registration/re-pointing:
-# realpath it, optionally create it, then check it exists and isn't a
-# blocked root. Returns (target, None) on success or (None, error_response).
+# realpath it, optionally create it, check it exists and isn't a blocked
+# root. Returns (target, None) or (None, error_response).
 def _resolve_project_folder(raw_path, create):
     if not raw_path:
         return None, _agent_error('Please provide a folder path.')
@@ -535,7 +529,7 @@ def _resolve_project_folder(raw_path, create):
         return None, _agent_error('This folder is not allowed for security reasons (drive/system root or the app\'s own folder).', 403)
     return target, None
 
-# ── /agent/projects - list / register project folders ────────────
+# /agent/projects - list / register project folders
 @app.route('/agent/projects', methods=['GET', 'POST', 'OPTIONS'])
 @_agent_authed
 def agent_projects(sess):
@@ -573,21 +567,16 @@ def agent_projects(sess):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'name': name, 'path': target})
 
-# ── Git checkpointing ────────────────────────────────────────────
-# Best-effort safety net for destructive agent operations (write_file,
-# delete_file(s), edit_file, replace_in_files, move/copy overwrites, ...).
-# When a project has 'checkpoints' enabled, the frontend calls
-# POST /agent/checkpoint/<id> exactly once before each mutating tool call
-# (see apiCheckpoint()/executeTool() in kiconnect-agent.js) — this stages
-# and commits whatever changed on disk SINCE THE LAST CHECKPOINT, using the
-# project folder's own (possibly pre-existing) git repo, or a fresh one
-# created on first use. This is NOT a replacement for the user's own git
-# workflow: it never touches branches, remotes, or existing history, only
-# ever commits to whatever branch is currently checked out, and a failed
-# git operation (not installed, folder not writable, mid-rebase, ...) is
-# swallowed and reported back as {ok:false} rather than blocking the tool
-# call that triggered it — a missing safety net should never itself become
-# a reason the agent can't do its job.
+# Git checkpointing: best-effort safety net for destructive agent operations
+# (write_file, delete_file(s), edit_file, replace_in_files, move/copy
+# overwrites, ...). When a project has 'checkpoints' enabled, the frontend
+# calls POST /agent/checkpoint/<id> once before each mutating tool call (see
+# apiCheckpoint()/executeTool() in kiconnect-agent.js) - stages and commits
+# whatever changed since the last checkpoint, using the project's own (or a
+# fresh) git repo. Not a replacement for the user's own git workflow: never
+# touches branches/remotes/history, only commits to the checked-out branch.
+# A failed git operation is swallowed and reported as {ok:false} rather than
+# blocking the tool call - a missing safety net shouldn't stop the agent.
 _git_available_cache = None
 
 def _git_available():
@@ -624,10 +613,10 @@ def _git_checkpoint(pdir, message):
     except Exception as e:
         return {'ok': False, 'reason': str(e)[:200]}
 
-# ── /agent/projects/<id>/checkpoints - enable/disable git checkpoints ────
-# Off by default, same opt-in pattern as shell execution below. Enabling it
-# does not immediately create a commit - the first checkpoint happens right
-# before the next mutating tool call.
+# /agent/projects/<id>/checkpoints - enable/disable git checkpoints. Off by
+# default, same opt-in pattern as shell execution below. Enabling it doesn't
+# immediately create a commit - the first checkpoint happens before the
+# next mutating tool call.
 @app.route('/agent/projects/<pid>/checkpoints', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_checkpoints(sess, pid):
@@ -643,11 +632,10 @@ def agent_set_checkpoints(sess, pid):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'checkpoints': enabled, 'gitAvailable': _git_available()})
 
-# ── /agent/checkpoint/<id> - stage+commit current changes ────────────────
-# Called by the frontend right before a mutating tool call is actually
-# executed (not during simulate mode, and not if checkpoints are off for
-# this project). Re-checks the 'checkpoints' flag server-side rather than
-# trusting the caller, same pattern as the shell 'enabled' re-check below.
+# /agent/checkpoint/<id> - stage+commit current changes. Called by the
+# frontend right before a mutating tool call executes (not in simulate mode,
+# not if checkpoints are off). Re-checks the 'checkpoints' flag server-side
+# rather than trusting the caller, same as the shell 'enabled' re-check below.
 @app.route('/agent/checkpoint/<pid>', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_checkpoint(sess, pid):
@@ -665,11 +653,10 @@ def agent_checkpoint(sess, pid):
     message = (body.get('message') or 'Agent checkpoint').strip()[:200] or 'Agent checkpoint'
     return _agent_ok(_git_checkpoint(pdir, message))
 
-# ── /agent/projects/<id>/shell - enable/disable shell command execution ──
-# Kept as its own explicit endpoint (rather than folded into general project
-# settings) so turning this on is always a distinct, deliberate action, and
-# so /agent/exec below can independently double-check it server-side rather
-# than trusting whatever the frontend currently displays.
+# /agent/projects/<id>/shell - enable/disable shell command execution. Its
+# own explicit endpoint (not folded into general project settings) so
+# turning it on is a distinct, deliberate action, and /agent/exec below can
+# independently double-check it server-side.
 @app.route('/agent/projects/<pid>/shell', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_shell(sess, pid):
@@ -685,10 +672,9 @@ def agent_set_shell(sess, pid):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'shell': enabled})
 
-# ── /agent/projects/<id>/path - change a project's target folder ─────
-# Re-points an already-registered project without deleting/recreating it.
-# Runs through the same validation as creating a new project (existence,
-# 'create' opt-in, blocked-root check, no duplicate-path collision).
+# /agent/projects/<id>/path - change a project's target folder without
+# deleting/recreating it. Runs through the same validation as creating a
+# new project (existence, 'create' opt-in, blocked-root, no path collision).
 @app.route('/agent/projects/<pid>/path', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_project_path(sess, pid):
@@ -709,20 +695,19 @@ def agent_set_project_path(sess, pid):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'path': target})
 
-# ── /agent/exec/<id> - run a shell command inside the project folder ──
-# Off by default, gated behind the per-project 'shell' flag above.
+# /agent/exec/<id> - run a shell command inside the project folder. Off by
+# default, gated behind the per-project 'shell' flag above.
 #
 # NOT a hard security boundary (no container/VM) - the command runs as the
 # same OS user as the proxy, confined to the project folder only by
 # convention (cwd); `cd ..` or an absolute path can still escape. Best-effort
-# hardening applied instead:
+# hardening instead:
 #   1. Minimal, secret-free environment (doesn't inherit the proxy's env).
-#   2. POSIX resource limits (CPU, memory, proc count, open files, no core
-#      dumps) via preexec_fn, guarding against fork bombs/runaway loops.
-#      Linux/macOS only.
+#   2. POSIX resource limits (CPU, memory, proc/file counts, no core dumps)
+#      via preexec_fn, against fork bombs/runaway loops. Linux/macOS only.
 #   3. Own process group (os.setsid) so a timeout can kill the whole subtree.
 #   4. Best-effort network isolation via `unshare --net` (Linux only, needs
-#      unprivileged user namespaces; probed once, reported back via
+#      unprivileged user namespaces; probed once, reported via
 #      `networkIsolated` rather than assumed on).
 MAX_EXEC_OUTPUT = 200_000  # chars, per stream
 EXEC_TIMEOUT_SECONDS = 45
@@ -866,7 +851,7 @@ def agent_delete_project(sess, pid):
         _save_agent_registry(sess, registry)
     return _agent_ok()
 
-# ── /agent/search/<id> - grep-style text search across a project ──
+# /agent/search/<id> - grep-style text search across a project
 @app.route('/agent/search/<pid>', methods=['GET', 'OPTIONS'])
 @_agent_authed
 def agent_search(sess, pid):
@@ -886,13 +871,13 @@ def agent_search(sess, pid):
         resolved = _safe_rel_path(pdir, scope)
         if not resolved:
             # Most common cause: model prefixes the project's own folder
-            # name onto an already-relative path (paths are always relative
-            # to the project root, never including the root's own name).
+            # name onto an already-relative path (paths never include the
+            # root's own name).
             return _agent_error(f'Invalid search path "{scope}" - must be a relative path inside the project (no ".." or a leading "/", and not duplicating the project folder\'s own name).')
         if os.path.isfile(resolved):
             # `path` is documented as folder-only, but weaker models
-            # sometimes pass a filename instead of calling read_file.
-            # Degrade gracefully and just search that one file.
+            # sometimes pass a filename instead - degrade gracefully and
+            # just search that one file.
             single_file = resolved
             note = f'"{scope}" is a file, not a folder - `path` normally scopes the search to a subfolder. Searched just that one file. Use read_file to read a specific file directly, or omit `path` to search the whole project.'
         elif not os.path.isdir(resolved):
@@ -940,7 +925,7 @@ def agent_search(sess, pid):
         result['note'] = note
     return _agent_ok(result)
 
-# ── /agent/tree/<id> - recursive file listing ─────────────────────
+# /agent/tree/<id> - recursive file listing
 @app.route('/agent/tree/<pid>', methods=['GET', 'OPTIONS'])
 @_agent_authed
 def agent_tree(sess, pid):
@@ -966,7 +951,7 @@ def agent_tree(sess, pid):
             break
     return _agent_ok({'project': pid, 'files': entries, 'truncated': count >= MAX_AGENT_TREE_ENTRIES})
 
-# ── /agent/file/<id>/<path> - read / write / delete a file ────────
+# /agent/file/<id>/<path> - read / write / delete a file
 @app.route('/agent/file/<pid>/<path:rel_path>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
 @_agent_authed
 def agent_file(sess, pid, rel_path):
@@ -987,12 +972,10 @@ def agent_file(sess, pid, rel_path):
         try:
             return _agent_ok({'path': rel_path, 'content': raw.decode('utf-8'), 'binary': False})
         except UnicodeDecodeError:
-            # Not UTF-8 text (PDF, image, zip, ...). Still return the raw
-            # bytes as base64 — the frontend can then do format-specific
-            # extraction (e.g. pdf.js text extraction for .pdf) instead of
-            # just reporting "binary file, can't read it". `content` stays
-            # None for backward compatibility with anything that only
-            # checks `binary` and expects a plain-text `content` field.
+            # Not UTF-8 text (PDF, image, zip, ...). Return raw bytes as
+            # base64 so the frontend can do format-specific extraction
+            # (e.g. pdf.js for .pdf) instead of just "can't read it". `content`
+            # stays None for compat with callers only checking `binary`.
             return _agent_ok({'path': rel_path, 'content': None, 'binary': True, 'content_b64': base64.b64encode(raw).decode('ascii')})
 
     if request.method == 'PUT':
@@ -1019,7 +1002,7 @@ def agent_file(sess, pid, rel_path):
                 return _agent_error('File not found.', 404)
         return _agent_ok({'path': rel_path})
 
-# ── /agent/dir/<id>/<path> - create / delete a directory ──────────
+# /agent/dir/<id>/<path> - create / delete a directory
 @app.route('/agent/dir/<pid>/<path:rel_path>', methods=['POST', 'DELETE', 'OPTIONS'])
 @_agent_authed
 def agent_dir(sess, pid, rel_path):
@@ -1045,8 +1028,8 @@ def agent_dir(sess, pid, rel_path):
 
 
 # Shared by agent_move/agent_copy: resolves+validates the from/to body
-# fields against the project root. Returns (src, dst, rel_from, rel_to, None)
-# or (None, None, None, None, error_response).
+# fields against the project root. Returns (src, dst, rel_from, rel_to,
+# None) or (None, None, None, None, error_response).
 def _resolve_move_copy_paths(pdir, body):
     rel_from = body.get('from')
     rel_to = body.get('to')
@@ -1072,7 +1055,7 @@ def _clear_destination_if_exists(dst, overwrite):
             os.remove(dst)
     return None
 
-# ── /agent/move/<id> - move/rename a file or folder ────────────────
+# /agent/move/<id> - move/rename a file or folder
 # shutil.move (not os.rename) so it also works across directories/filesystems.
 @app.route('/agent/move/<pid>', methods=['POST', 'OPTIONS'])
 @_agent_authed
@@ -1092,10 +1075,9 @@ def agent_move(sess, pid):
     return _agent_ok({'from': rel_from, 'to': rel_to})
 
 
-# ── /agent/copy/<id> - copy a file or folder, leaving the original ────
-# Mirrors agent_move above, but copies instead of renaming, leaving the
-# source untouched. Folder copies are size-capped so a single "copy" call
-# can't balloon disk usage with an unbounded recursive copy.
+# /agent/copy/<id> - copy a file or folder, leaving the original. Mirrors
+# agent_move above, but copies instead of renaming. Folder copies are
+# size-capped so a single call can't balloon disk usage.
 MAX_AGENT_COPY_DIR_BYTES = 200 * 1024 * 1024   # 200 MB cap for a folder copy
 
 def _dir_size(path):
@@ -1143,46 +1125,35 @@ def agent_copy(sess, pid):
             shutil.copy2(src, dst)
     return _agent_ok({'from': rel_from, 'to': rel_to})
 
-# ════════════════════════════════════════════════════════════════
-#  Knowledge-Base API ("Wissensbasis" / RAG) - reuses the Agent
-#  session above (_agent_session_or_401 / _agent_encrypt / _agent_decrypt
-#  / _atomic_write) instead of opening a third independent one, per
-#  kiconnect-rag-spec.md section 2: unlocking the project feature also
-#  unlocks this one, no extra password round trip for the user.
+#  Knowledge-Base API (RAG) - reuses the Agent session above
+#  (_agent_session_or_401 / _agent_encrypt / _agent_decrypt / _atomic_write)
+#  instead of a third independent one: unlocking the project feature also
+#  unlocks this, no extra password round trip.
 #
-#  Registry: datas/<accountId>/kb_registry.json, encrypted at rest with
-#  the SAME key as agent_projects.json (same session, same reasoning:
-#  paths/names/config, small, rewritten whole on every change - exactly
-#  like the project registry).
+#  Registry: datas/<accountId>/kb_registry.json, encrypted with the SAME key
+#  as agent_projects.json - small, rewritten whole on every change, like the
+#  project registry.
 #
-#  Vector storage per KB: datas/<accountId>/kb/<kbId>.sqlite - handled
-#  OUTSIDE the JSON registry encryption (too large/hot to decrypt+
-#  re-encrypt whole on every search). Only the chunk TEXT column is
-#  encrypted (AES-GCM, same per-account key); embeddings stay in
-#  plaintext floats - raw numbers alone aren't meaningfully readable
-#  without the chunk text next to them. This is the "(b)" option from
-#  kiconnect-rag-spec.md section 2, not full SQLCipher - communicated
-#  to the user as-is in the UI, no overstated security guarantee.
+#  Vector storage per KB: datas/<accountId>/kb/<kbId>.sqlite, handled OUTSIDE
+#  the JSON registry encryption (too large/hot to decrypt+re-encrypt on
+#  every search). Only the chunk TEXT column is encrypted (AES-GCM);
+#  embeddings stay plaintext - raw numbers alone aren't meaningfully
+#  readable without the chunk text. Not full SQLCipher - communicated to the
+#  user as-is, no overstated security guarantee.
 #
-#  Embedding provider: deliberately generic OpenAI-compatible
-#  /embeddings (baseUrl + model + optional apiKey) - NOT hardcoded to
-#  any single local tool. Works with LM Studio, Ollama, vLLM,
-#  text-generation-webui, AnythingLLM's built-in server, or any hosted
-#  embeddings API that speaks this format (OpenAI, Mistral, DeepInfra,
-#  Together, ...). Goes through the same is_allowed()/_pin_dns() SSRF
-#  protection as the existing chat proxy, since the URL is user-supplied
-#  and could point anywhere (localhost, LAN, or the public internet).
+#  Embedding provider: generic OpenAI-compatible /embeddings (baseUrl +
+#  model + optional apiKey), not hardcoded to any tool - works with LM
+#  Studio, Ollama, vLLM, or any hosted embeddings API. Goes through the same
+#  is_allowed()/_pin_dns() SSRF protection as the chat proxy, since the URL
+#  is user-supplied.
 #
 #  Vector search: plain SQLite + brute-force cosine similarity (numpy if
-#  available, pure Python otherwise) rather than a sqlite-vec extension
-#  dependency - a personal knowledge base's chunk count (typically
-#  hundreds to low tens-of-thousands) makes a full scan fast enough
-#  locally, and this way the feature works out of the box on every
-#  platform without a native-extension build/install step that could
-#  fail silently for some users. Swappable for sqlite-vec later
-#  (Ausbaustufe 2/3) without changing the registry format or API shape -
-#  only _kb_open_db()/_kb_cosine_search() would need to change.
-# ════════════════════════════════════════════════════════════════
+#  available, else pure Python) rather than a sqlite-vec dependency - a
+#  personal KB's chunk count (hundreds to low tens-of-thousands) makes a
+#  full scan fast enough, and it works out of the box on every platform
+#  without a native-extension build step. Swappable for sqlite-vec later
+#  without changing the registry format - only _kb_open_db()/
+#  _kb_cosine_search() would need to change.
 MAX_KB_FILE_SIZE = 25 * 1024 * 1024            # 25 MB/file - PDFs/DOCX are bigger than agent's 5MB text files
 MAX_KB_FILES = 5000                            # safety cap per knowledge base
 KB_IGNORE_DIRS = AGENT_IGNORE_DIRS             # reuse the agent's ignore list (.git, node_modules, ...)
@@ -1205,9 +1176,8 @@ def _kb_clamp_top_k(value):
         return KB_TOP_K_DEFAULT
 
 
-# ── Optional dependencies ─────────────────────────────────────────
-# The KB feature degrades gracefully rather than crashing the whole
-# proxy at import time if one of these isn't installed - each code path
+# Optional dependencies. The KB feature degrades gracefully rather than
+# crashing the proxy at import time if one isn't installed - each code path
 # that needs one checks first and returns a clear error instead.
 try:
     import sqlite3
@@ -1236,7 +1206,7 @@ except ImportError:
 import struct as _struct
 import hashlib as _hashlib
 
-# ── Agent-session-backed registry (own key: 'kb_registry') ───────
+# Agent-session-backed registry (own key: 'kb_registry')
 def _load_kb_registry(sess):
     """Read+decrypt this account's knowledge-base registry. Same shape/
     pattern as _load_agent_registry() above."""
@@ -1260,10 +1230,9 @@ def _kb_validate_file_list(raw_paths):
             continue
         try:
             fpath = os.path.realpath(raw)
-            # A folder source must not be a filesystem root, but an
-            # individual file directly in a drive root is safe: the indexer
-            # only receives that one file, not the complete drive.  Continue
-            # protecting the application's own static/data directories.
+            # A folder source must not be a filesystem root, but a single
+            # file directly in a drive root is safe (the indexer only gets
+            # that file). Still protect the app's own static/data dirs.
             app_data_path = os.path.realpath(DATA_DIR)
             app_static_path = os.path.realpath(STATIC_DIR)
             in_app_storage = (
@@ -1293,7 +1262,7 @@ def _kb_db_path(account_id, kb_id):
     os.makedirs(kb_dir, exist_ok=True)
     return os.path.join(kb_dir, kb_id + '.sqlite')
 
-# ── Per-file text extraction ──────────────────────────────────────
+# Per-file text extraction
 def _kb_extract_pages(fpath, ext):
     """Returns (pages, error). `pages` is a list of (page_num_or_None,
     text) tuples - PDFs/PPTX get one entry per page/slide (so search
@@ -1335,8 +1304,8 @@ def _kb_extract_pages(fpath, ext):
             if not _openpyxl:
                 return None, 'openpyxl not installed (pip install openpyxl)'
             # read_only+data_only: streams rows instead of loading the whole
-            # workbook, and reads cached formula RESULTS rather than formula
-            # strings (so "=SUM(A1:A9)" becomes "142", not the formula text).
+            # workbook, reads cached formula RESULTS not formula strings
+            # (so "=SUM(A1:A9)" becomes "142").
             wb = _openpyxl.load_workbook(fpath, read_only=True, data_only=True)
             pages = []
             try:
@@ -1359,13 +1328,13 @@ def _kb_extract_pages(fpath, ext):
     except Exception as e:
         return None, str(e)
 
-# ── Chunking ───────────────────────────────────────────────────────
+# Chunking
 def _kb_chunk_text(text, chunk_tokens, overlap_tokens):
     """Word-based sliding-window chunking - word count as a simple,
-    model-independent proxy for token count (see kiconnect-rag-spec.md
-    5.2; exact token counting isn't critical for retrieval quality).
-    Tries to end each chunk on a paragraph/sentence boundary within its
-    last ~15% rather than a hard mid-sentence cut, when one is nearby."""
+    model-independent proxy for token count (exact token counting isn't
+    critical for retrieval quality). Tries to end each chunk on a
+    paragraph/sentence boundary within its last ~15% rather than a hard
+    mid-sentence cut, when one is nearby."""
     words = text.split()
     if not words:
         return []
@@ -1395,7 +1364,7 @@ def _kb_chunk_text(text, chunk_tokens, overlap_tokens):
         i += step
     return chunks
 
-# ── Embedding call: generic OpenAI-compatible /embeddings ─────────
+# Embedding call: generic OpenAI-compatible /embeddings
 def _kb_get_embeddings(texts, embedding_cfg):
     """embedding_cfg: {baseUrl, model, apiKey?, lanConfirmed?}. Not tied
     to any single tool - works with anything speaking the OpenAI
@@ -1408,9 +1377,8 @@ def _kb_get_embeddings(texts, embedding_cfg):
         raise ValueError('No embedding server URL configured (see knowledge base settings).')
     if not texts:
         return []
-    # Provider discovery uses /models and users sometimes paste the full
-    # /embeddings URL from a curl example. Embeddings are a sibling endpoint,
-    # so normalize either form back to the OpenAI-compatible base URL.
+    # Users sometimes paste the full /embeddings URL from a curl example;
+    # normalize either form back to the OpenAI-compatible base URL.
     base_url = re.sub(r'/(?:models|embeddings)$', '', base_url, flags=re.IGNORECASE)
     url = base_url + '/embeddings'
     ok, reason, needs_confirm, pinned_ip = is_allowed(url, 'POST', confirmed=bool(embedding_cfg.get('lanConfirmed')))
@@ -1430,7 +1398,7 @@ def _kb_get_embeddings(texts, embedding_cfg):
     data.sort(key=lambda d: d.get('index', 0))
     return [d['embedding'] for d in data]
 
-# ── Vector store (plain SQLite, brute-force cosine search) ────────
+# Vector store (plain SQLite, brute-force cosine search)
 _kb_locks = defaultdict(threading.Lock)   # kbId -> Lock, guards that KB's sqlite file
 _kb_progress = {}                         # kbId -> {'status','done','total','error'} (in-RAM only)
 
@@ -1476,7 +1444,7 @@ def _kb_cosine_search(conn, query_vec, top_k):
     scored.sort(key=lambda t: t[0], reverse=True)
     return scored[:top_k]
 
-# ── Background indexing ────────────────────────────────────────────
+# Background indexing
 def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
     """Runs in a background thread (started from /kb/create and
     /kb/reindex) - walks the KB's folder, extracts+chunks+embeds+stores
@@ -1501,12 +1469,10 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
         chunk_tokens = settings.get('chunkTokens') or CHUNK_SIZE_TOKENS_DEFAULT
         chunk_overlap = settings.get('chunkOverlap') or CHUNK_OVERLAP_DEFAULT
 
-        # `files` maps every indexed path to the label used for citations
-        # and dedup ("source"): for the folder root, that's the path
-        # relative to the root (so "sub/dir/file.md"); for individually
-        # added files (any folder, including ones added on top of a
-        # folder-based KB via /kb/<id>/add-files) it's "parentDir/file.ext"
-        # so files with the same name from different folders stay distinct.
+        # `files` maps every indexed path to the citation/dedup "source"
+        # label: relative path for a folder root ("sub/dir/file.md"), or
+        # "parentDir/file.ext" for individually added files, so same-named
+        # files from different folders stay distinct.
         files = []      # list of (abs_path, label)
         seen_abs = set()
         excluded_abs = {os.path.realpath(p) for p in (entry.get('excludedFiles') or [])}
@@ -1555,9 +1521,8 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
                 conn.close()
         else:
             # Incremental run (e.g. /kb/<id>/add-files): only embed files not
-            # already represented in the index - v1 has no change detection
-            # (see kb_reindex()'s comment), so a file already indexed once is
-            # assumed unchanged and is skipped here rather than duplicated.
+            # already indexed - v1 has no change detection, so an already
+            # indexed file is assumed unchanged and skipped, not duplicated.
             with lock:
                 conn = _kb_open_db(db_path)
                 already = {row[0] for row in conn.execute('SELECT DISTINCT source_file FROM chunks')}
@@ -1634,11 +1599,10 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
 _kb_error = _agent_error
 _kb_ok = _agent_ok
 
-# Every /kb/* view used to repeat the same five lines by hand (OPTIONS
-# preflight, session check, kb_id format check). This decorator does it
-# once: it handles OPTIONS, requires a valid agent session and passes it
-# in as the view's first argument, and - if the route has a <kb_id> - checks
-# its format before the view ever sees it.
+# Every /kb/* view used to repeat the same OPTIONS preflight/session
+# check/kb_id format check by hand. This decorator does it once: handles
+# OPTIONS, requires a valid agent session (passed as first arg), and checks
+# <kb_id> format before the view sees it.
 def _kb_route(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -1651,9 +1615,8 @@ def _kb_route(f):
     return wrapper
 
 # Looks up a knowledge base by id in an already-loaded registry. Returns
-# (entry, None) on success or (None, error_response) - callers just do
-# `entry, err = _kb_require_entry(...); if err: return err`, replacing the
-# four-line "find or 404" block every entry-scoped route used to repeat.
+# (entry, None) or (None, error_response) - replaces the "find or 404" block
+# every entry-scoped route used to repeat.
 def _kb_require_entry(registry, kb_id):
     entry = next((k for k in registry['knowledgeBases'] if k.get('id') == kb_id), None)
     if not entry:
@@ -1688,11 +1651,9 @@ def kb_create(sess):
         if _is_blocked_root(target):
             return _kb_error('This folder is not allowed for security reasons.', 403)
     else:
-        # "Individual files" mode: any number of files, from any number of
-        # folders - no single common root required (kiconnect-rag-spec.md
-        # section 9 Phase 2). Silently skips paths that don't validate
-        # rather than failing the whole create; the skipped ones are
-        # reported back in `filesRejected` so the UI can show them.
+        # "Individual files" mode: any files from any folders, no common
+        # root required. Silently skips invalid paths rather than failing
+        # the whole create; skipped ones are reported in `filesRejected`.
         raw_list = body.get('fileList') or []
         allow_empty_upload = bool(body.get('allowEmptyFileList'))
         if not isinstance(raw_list, list) or (not raw_list and not allow_empty_upload):
@@ -1728,8 +1689,8 @@ def kb_create(sess):
         registry['knowledgeBases'].append(entry)
         _save_kb_registry(sess, registry)
     # A drag-and-drop-only KB is intentionally created empty and receives
-    # its browser files in the following /upload-files request.  Starting an
-    # empty index job here races that request and makes it fail with 409.
+    # its files in the following /upload-files request; starting an empty
+    # index job here would race that request and fail with 409.
     if source_type == 'folder' or file_list:
         threading.Thread(target=_kb_run_index, args=(sess['accountId'], kb_id, sess['key'], True), daemon=True).start()
     resp = {'id': kb_id, 'name': name, 'path': target}
@@ -1739,7 +1700,7 @@ def kb_create(sess):
             resp['filesRejected'] = rejected
     return _kb_ok(resp)
 
-# ── /kb/list ──
+# /kb/list
 @app.route('/kb/list', methods=['GET', 'OPTIONS'])
 @_kb_route
 def kb_list(sess):
@@ -1752,8 +1713,8 @@ def kb_list(sess):
         folder_missing = bool(target) and not (os.path.isdir(target) and not _is_blocked_root(target))
         existing_files = [f for f in file_list if os.path.isfile(f)]
         # "missing" means nothing this KB points at is reachable any more -
-        # a folder-based KB with a few extra individually-added files that
-        # went away isn't "missing", only fully empty/unreachable ones are.
+        # a folder-based KB with a few gone extra files isn't "missing",
+        # only fully empty/unreachable ones are.
         missing = folder_missing and not existing_files if target else (bool(file_list) and not existing_files)
         settings = dict(kb.get('settings') or {})
         emb = dict(settings.get('embedding') or {})
@@ -1769,7 +1730,7 @@ def kb_list(sess):
         })
     return _kb_ok({'knowledgeBases': out})
 
-# ── /kb/<id>/status - polling target while indexing runs in the background ──
+# /kb/<id>/status - polling target while indexing runs in the background
 @app.route('/kb/<kb_id>/status', methods=['GET', 'OPTIONS'])
 @_kb_route
 def kb_status(sess, kb_id):
@@ -1784,7 +1745,7 @@ def kb_status(sess, kb_id):
     fc = state.get('fileCount', 0)
     return _kb_ok({'status': state.get('status', 'pending'), 'done': fc, 'total': fc, 'error': None})
 
-# ── /kb/<id>/sources - list and remove individual indexed sources ──────
+# /kb/<id>/sources - list and remove individual indexed sources
 @app.route('/kb/<kb_id>/sources', methods=['GET', 'DELETE', 'OPTIONS'])
 @_kb_route
 def kb_sources(sess, kb_id):
@@ -1845,7 +1806,7 @@ def kb_sources(sess, kb_id):
             _save_kb_registry(sess, registry)
     return _kb_ok({'removed': len(removable)})
 
-# ── /kb/<id>/reindex - full re-index (no change detection in v1, see spec 9/Phase2) ──
+# /kb/<id>/reindex - full re-index (no change detection in v1, see spec 9/Phase2)
 @app.route('/kb/<kb_id>/reindex', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_reindex(sess, kb_id):
@@ -1855,23 +1816,21 @@ def kb_reindex(sess, kb_id):
         if err: return err
         if _kb_progress.get(kb_id, {}).get('status') in ('pending', 'indexing'):
             return _kb_error('Already indexing.', 409)
-        # Persist the transition before starting the background thread. The
-        # list endpoint drives the browser's progress polling, so leaving a
-        # stale "ready" state here made re-indexing appear to do nothing.
+        # Persist the transition before starting the background thread, or
+        # the list endpoint's progress polling sees a stale "ready" state
+        # and re-indexing appears to do nothing.
         entry['indexState'] = {'status': 'pending', 'fileCount': 0, 'chunkCount': 0, 'lastIndexed': None}
         _save_kb_registry(sess, registry)
         _kb_progress[kb_id] = {'status': 'pending', 'done': 0, 'total': 0, 'error': None}
     threading.Thread(target=_kb_run_index, args=(sess['accountId'], kb_id, sess['key'], True), daemon=True).start()
     return _kb_ok({'ok': True})
 
-# ── GET /kb/<id>/export - decrypt every chunk and hand back a plain-JSON
-#    dump the browser turns into a download. Deliberately NOT encrypted:
-#    the whole point is portability to a *different* account/password, and
-#    that account's key can't decrypt bytes sealed with this one's. The
-#    frontend must show a clear "this file is unencrypted, store it
-#    somewhere safe" notice before/at the actual download (kiconnect.js).
-#    The embedding apiKey is never included - it's a per-account credential,
-#    not knowledge-base data, and has no business leaving the account. ──
+# GET /kb/<id>/export - decrypt every chunk and return a plain-JSON dump the
+# browser turns into a download. Deliberately NOT encrypted: the point is
+# portability to a *different* account/password, whose key can't decrypt
+# this one's bytes. Frontend must warn "this file is unencrypted" before
+# download (kiconnect.js). Embedding apiKey is never included - it's a
+# per-account credential, not KB data.
 EXPORT_FORMAT_VERSION = 1
 
 @app.route('/kb/<kb_id>/export', methods=['GET', 'OPTIONS'])
@@ -1925,15 +1884,12 @@ def kb_export(sess, kb_id):
         'chunks': chunks_out,
     })
 
-# ── POST /kb/import - opposite direction: takes a kb/v1 export (this
-#    account's password, whatever it is, was never involved in producing
-#    that plaintext) and re-encrypts every chunk under *this* session's key
-#    before it ever touches disk. Existing embeddings are reused as-is
-#    (no re-embedding call, no embedding server needed) provided the
-#    importing account intends to search with the same embedding model -
-#    mixing models in one KB would make cosine scores meaningless, so a
-#    mismatched model name is flagged as a warning, not a hard error, since
-#    we can't verify dimensions until something is actually indexed. ──
+# POST /kb/import - opposite direction: takes a kb/v1 export and
+# re-encrypts every chunk under *this* session's key before it touches disk.
+# Existing embeddings are reused as-is (no re-embedding), provided the
+# importing account uses the same embedding model - mixing models would
+# make cosine scores meaningless, so a mismatched model name is a warning,
+# not a hard error, since dimensions can't be verified until re-indexed.
 @app.route('/kb/import', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_import(sess):
@@ -2033,7 +1989,7 @@ def kb_import(sess):
         resp['warning'] = 'Embedding model differs from the source KB - re-index for consistent search results.'
     return _kb_ok(resp)
 
-# ── DELETE /kb/<id> - unregister + remove its vector DB (source folder untouched) ──
+# DELETE /kb/<id> - unregister + remove its vector DB (source folder untouched)
 @app.route('/kb/<kb_id>', methods=['DELETE', 'OPTIONS'])
 @_kb_route
 def kb_delete(sess, kb_id):
@@ -2053,7 +2009,7 @@ def kb_delete(sess, kb_id):
         pass
     return _kb_ok({'ok': True})
 
-# ── /kb/<id>/search - embed the query, top-k cosine search, decrypt+return chunks ──
+# /kb/<id>/search - embed the query, top-k cosine search, decrypt+return chunks
 @app.route('/kb/<kb_id>/search', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_search(sess, kb_id):
@@ -2065,9 +2021,9 @@ def kb_search(sess, kb_id):
     registry = _load_kb_registry(sess)
     entry, err = _kb_require_entry(registry, kb_id)
     if err: return err
-    # An explicit topK in the request wins (e.g. the composer merging several
-    # active KBs); otherwise fall back to this KB's own configured topK
-    # (Settings ▸ this knowledge base ▸ Advanced), not a single hardcoded value.
+    # An explicit topK in the request wins (e.g. merging several active
+    # KBs); otherwise falls back to this KB's own configured topK, not a
+    # hardcoded value.
     stored_top_k = (entry.get('settings') or {}).get('topK', KB_TOP_K_DEFAULT)
     top_k = _kb_clamp_top_k(body.get('topK')) if 'topK' in body else _kb_clamp_top_k(stored_top_k)
     embedding_cfg = (entry.get('settings') or {}).get('embedding') or {}
@@ -2096,7 +2052,7 @@ def kb_search(sess, kb_id):
         results.append({'text': text, 'source': src, 'page': page, 'chunkIndex': cidx, 'score': round(score, 4)})
     return _kb_ok({'results': results})
 
-# ── PATCH /kb/<id>/settings - name/embedding provider/chunking/reranker/topK ──
+# PATCH /kb/<id>/settings - name/embedding provider/chunking/reranker/topK
 @app.route('/kb/<kb_id>/settings', methods=['PATCH', 'OPTIONS'])
 @_kb_route
 def kb_update_settings(sess, kb_id):
@@ -2129,10 +2085,9 @@ def kb_update_settings(sess, kb_id):
         _save_kb_registry(sess, registry)
     return _kb_ok({'ok': True})
 
-# ── POST /kb/<id>/add-files - append individual files (from any folder(s))
-#    to an existing knowledge base, works for both "folder" and "files"
-#    KBs. Only embeds+indexes the newly added files (full_reindex=False),
-#    not a full re-index. (kiconnect-rag-spec.md section 9 Phase 2) ──────
+# POST /kb/<id>/add-files - append individual files (from any folders) to
+# an existing KB, works for both "folder" and "files" KBs. Only
+# embeds+indexes the newly added files (full_reindex=False).
 @app.route('/kb/<kb_id>/add-files', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_add_files(sess, kb_id):
@@ -2159,9 +2114,8 @@ def kb_add_files(sess, kb_id):
             entry['indexState'] = {'status': 'pending', 'fileCount': 0, 'chunkCount': 0, 'lastIndexed': None}
         _save_kb_registry(sess, registry)
     if new_files:
-        # Incremental: re-embeds/inserts only the newly added files, leaves
-        # the rest of the index untouched (full_reindex=False keeps the
-        # existing chunk rows instead of wiping the whole KB first).
+        # Incremental: re-embeds/inserts only the newly added files, leaving
+        # the rest of the index untouched (full_reindex=False).
         _kb_progress[kb_id] = {'status': 'pending', 'done': 0, 'total': 0, 'error': None}
         threading.Thread(target=_kb_run_index, args=(sess['accountId'], kb_id, sess['key'], False), daemon=True).start()
     resp = {'added': len(new_files)}
@@ -2170,7 +2124,7 @@ def kb_add_files(sess, kb_id):
     return _kb_ok(resp)
 
 
-# ── POST /kb/<id>/upload-files - receive browser drag & drop files ──────
+# POST /kb/<id>/upload-files - receive browser drag & drop files
 @app.route('/kb/<kb_id>/upload-files', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_upload_files(sess, kb_id):
@@ -2250,18 +2204,15 @@ def check_origin():
             return Response('{"error":"Host not allowed."}',
                             403, content_type='application/json')
 
-# ── Private IP ranges (SSRF protection) ──────────────────────────
-# Three tiers:
-#  - LOOPBACK_NETWORKS: same machine only. Always allowed (this is the mode
-#    that already worked - local LM Studio/Ollama/vLLM on 'localhost').
-#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy. Cloud metadata
-#    endpoints and reserved/documentation/broadcast ranges - no legitimate
-#    "my own LAN device" use case, only an SSRF one.
-#  - LAN_NETWORKS: private/local-network ranges (RFC1918, link-local, IPv6
-#    ULA, CGNAT). Blocked by default, unlockable per-provider via the
-#    "kic_lan_confirm" marker after the user double-confirms the address
-#    in the Provider editor - what makes an LM Studio/Ollama instance on
-#    another PC on the network reachable.
+# Private IP ranges (SSRF protection), three tiers:
+#  - LOOPBACK_NETWORKS: same machine only, always allowed (local LM
+#    Studio/Ollama/vLLM on 'localhost').
+#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy - cloud metadata
+#    endpoints and reserved/broadcast ranges, no legitimate LAN use case.
+#  - LAN_NETWORKS: private/local ranges (RFC1918, link-local, IPv6 ULA,
+#    CGNAT), blocked by default, unlockable per-provider via the
+#    "kic_lan_confirm" marker after the user double-confirms the address in
+#    the Provider editor.
 LOOPBACK_NETWORKS = [
     ipaddress.ip_network('127.0.0.0/8'), ipaddress.ip_network('::1/128'),
 ]
@@ -2325,23 +2276,21 @@ def classify_host(host):
     return 'public', pin
 
 def is_allowed(target_url, method='GET', confirmed=False):
-    # No domain allowlist here - users can point POST at any custom
-    # OpenAI-compatible endpoint. SSRF protection: http/https only, and a
-    # tiered check on where the address actually points (see above).
-    # Returns (ok, reason, needs_confirm, pinned_ip). pinned_ip is the exact
-    # address this decision was based on - the caller MUST connect to that
-    # same address (see _pin_dns below) rather than letting requests/urllib3
-    # re-resolve the hostname a second time, or a DNS answer that changes
-    # between this check and the real connect (DNS rebinding) could steer
-    # the actual request at a target this check never saw/approved.
+    # No domain allowlist - users can point POST at any custom
+    # OpenAI-compatible endpoint. SSRF protection: http/https only, tiered
+    # check on where the address points (see above). Returns (ok, reason,
+    # needs_confirm, pinned_ip); pinned_ip is the exact address this
+    # decision was based on - the caller MUST connect to that same address
+    # (see _pin_dns below), or a changed DNS answer (rebinding) could steer
+    # the request at an unapproved target.
     try: parsed = urlparse(target_url)
     except Exception: return False, 'Invalid URL', False, None
     if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only', False, None
     host = parsed.hostname or ''
     if not host: return False, 'No hostname', False, None
     # Fast-path for the exact strings the app has always used for "this
-    # machine" - keeps behaving exactly as before even if DNS is weird.
-    # No pinning needed: these always resolve locally, nothing to rebind to.
+    # machine" - keeps prior behavior even if DNS is weird; no pinning
+    # needed since these always resolve locally.
     if host in ('localhost', '127.0.0.1', '::1'):
         return True, '', False, None
 
@@ -2358,18 +2307,16 @@ def is_allowed(target_url, method='GET', confirmed=False):
         return True, '', False, pin
     return True, '', False, pin  # public
 
-# ── DNS pinning (closes the SSRF check's DNS-rebinding gap) ──────
-# is_allowed()/classify_host() resolve and vet the hostname's IP, but the
-# actual connection resolves it again - a low-TTL DNS answer could then
-# point somewhere the check never saw. This pins socket.getaddrinfo() to
-# the already-vetted address for that one hostname, for the request's
-# duration.
+# DNS pinning (closes the SSRF check's DNS-rebinding gap). is_allowed()/
+# classify_host() vet the hostname's IP, but the real connection resolves it
+# again - a low-TTL DNS answer could point somewhere the check never saw.
+# This pins socket.getaddrinfo() to the already-vetted address for the
+# request's duration.
 #
 # Uses thread-local state rather than a global save/restore swap: waitress
-# serves multiple worker threads, and two concurrent "swap in, ..., swap
-# back" calls on the same global `socket.getaddrinfo` would race. A single
-# patched function that only special-cases the current thread's pin avoids
-# that - unrelated hostnames/threads fall through to the real resolver.
+# serves multiple worker threads, and concurrent swap-in/swap-back calls on
+# the same global getaddrinfo would race. A patched function that only
+# special-cases the current thread's pin avoids that.
 _dns_pin = threading.local()
 _real_getaddrinfo = socket.getaddrinfo
 
@@ -2397,7 +2344,7 @@ def _pin_dns(host, ip):
     finally:
         _dns_pin.host, _dns_pin.ip = prev_host, prev_ip
 
-# ── Rate-Limiting ─────────────────────────────────────────────────
+# Rate-Limiting
 _rate_data = defaultdict(lambda: {'count': 0, 'reset': 0.0})
 _rate_lock = threading.Lock()
 RATE_LIMIT = 120; RATE_WINDOW = 60.0
@@ -2416,7 +2363,7 @@ def check_rate_limit(ip):
         d['count'] += 1
         return d['count'] <= RATE_LIMIT
 
-# ── CORS + Security Headers ───────────────────────────────────────
+# CORS + Security Headers
 CORS_HEADERS = {
     'Access-Control-Allow-Origin':  f'http://localhost:{port}',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
@@ -2443,9 +2390,8 @@ SECURITY_HEADERS = {
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     'Content-Security-Policy': (
         # Actual enforced policy - the <meta> CSP in kiconnect.html is kept
-        # in sync but this header wins if the two ever disagree. No
-        # 'unsafe-inline' needed since former inline scripts now live in
-        # kiconnect-mathjax-config.js / kiconnect.js.
+        # in sync but this header wins if they disagree. No 'unsafe-inline'
+        # needed since former inline scripts now live in separate files.
         "default-src 'self'; "
         "script-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
@@ -2466,10 +2412,9 @@ SECURITY_HEADERS = {
         "https://searx.tiekoetter.com https://search.sapti.me https://searx.prvcy.eu "
         "https://searx.fmac.xyz https://search.ononoki.org; "
         "img-src 'self' data: blob:; "
-        # TTS providers (OpenAI/ElevenLabs/Groq) return audio bytes that get
-        # played back via `new Audio(URL.createObjectURL(blob))` — needs
-        # media-src to allow blob:, otherwise it silently falls back to
-        # default-src 'self' and playback is blocked.
+        # TTS providers return audio bytes played back via
+        # `new Audio(URL.createObjectURL(blob))` — needs media-src to allow
+        # blob:, or playback is silently blocked by default-src 'self'.
         "media-src 'self' blob:; "
         "font-src 'self'; "
         "worker-src 'self' blob:; "
@@ -2487,7 +2432,7 @@ def add_security_headers(response):
     for k, v in SECURITY_HEADERS.items(): response.headers[k] = v
     return response
 
-# ── Statische Dateien ─────────────────────────────────────────────
+# Statische Dateien
 @app.route('/')
 def index():
     return send_from_directory(STATIC_DIR, 'kiconnect.html')
@@ -2507,7 +2452,7 @@ def static_files(filename):
         return send_from_directory(STATIC_DIR, filename)
     abort(404)
 
-# ── Proxy ─────────────────────────────────────────────────────────
+# Proxy
 @app.route('/proxy/<path:target>', methods=['GET', 'POST', 'OPTIONS'])
 def proxy(target):
     if request.method == 'OPTIONS':
@@ -2523,10 +2468,9 @@ def _proxy_request(target_url):
     except Exception: pass
 
     # "kic_lan_confirm=1" is a marker the frontend appends to the proxy URL
-    # (never to the upstream one) only for a provider address the user has
-    # explicitly double-confirmed in the Provider editor - see
-    # confirmLanAddress() in kiconnect.js. Strip it before forwarding so it
-    # never reaches the upstream API as a stray query parameter.
+    # (never the upstream one) for an address double-confirmed in the
+    # Provider editor (see confirmLanAddress() in kiconnect.js). Strip it
+    # before forwarding so it never reaches the upstream API.
     fwd_params = request.args.copy()
     lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'
 

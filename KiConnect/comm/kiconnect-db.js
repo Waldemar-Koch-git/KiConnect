@@ -1,23 +1,17 @@
-// kiconnect-db.js – Knowledge base / RAG module. Self-contained bolt-on
-// (like kiconnect-agent.js/kiconnect-voice.js): API client for /kb/*
-// on the local proxy plus its own composer UI, exposing only
-// window.kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow
-// to kiconnect.js (same pattern as web search's buildWebAugmentedContent).
+// kiconnect-db.js - Knowledge base / RAG module. Self-contained bolt-on
+// (like kiconnect-agent.js/kiconnect-voice.js): API client for /kb/* on the
+// local proxy plus its own composer UI, exposing only
+// window.kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow.
 //
 // Auth reuses the Agent session (agentSessionHeader()) instead of a
 // separate unlock. Embedding provider is any OpenAI-compatible base
-// URL + model name - no tool-specific defaults assumed.
-//
-// UI: composer button sits next to the agent context chip
-// (#agentContextBar), falling back to the action row's end if
-// kiconnect-agent.js isn't loaded (module still works standalone).
+// URL + model name.
 
 (function () {
   'use strict';
 
-  // ── i18n helper (same fallback approach as kiconnect-agent.js: falls
-  // back to the given English text if no TRANSLATIONS entry exists, so
-  // this module doesn't require editing the i18n files to work) ──────
+  // i18n helper: falls back to the given English text if no TRANSLATIONS
+  // entry exists.
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
@@ -29,73 +23,14 @@
     } catch (e) {}
     return fallback || key;
   }
-  const TF_FALLBACKS = {
-    'kb.button.title': 'Knowledge base (RAG)',
-    'kb.empty': 'No knowledge base yet.',
-    'kb.createBtn': '＋ Create knowledge base',
-    'kb.indexing': 'Indexing … {done}/{total}',
-    'kb.pending': 'Preparing …',
-    'kb.awaitingUpload': 'Waiting for dropped files …',
-    'kb.ready': '{files} files · {chunks} chunks',
-    'kb.readyWithErrors': '{files} files · {chunks} chunks · {failed} skipped',
-    'kb.error': 'Error: {msg}',
-    'kb.missing': 'Folder not found',
-    'kb.deleteConfirm': 'Really remove knowledge base "{name}"? The files on disk stay untouched — only the local search index is deleted.',
-    'kb.searchFailed': '⚠️ Knowledge base search failed: {e}',
-    'kb.createFailed': 'Create failed: {e}',
-    'kb.reindexStarted': '🔄 Re-indexing started.',
-    'kb.reindexFailed': 'Re-indexing failed: {e}',
-    'kb.deleteFailed': 'Delete failed: {e}',
-    'kb.settingsSaved': '✅ Settings saved.',
-    'kb.settingsFailed': 'Save failed: {e}',
-    'kb.nameRequired': 'Please enter a name.',
-    'kb.pathRequired': 'Please choose a folder.',
-    'kb.modeFolder': '📁 Folder',
-    'kb.modeFiles': '📄 Individual files',
-    'kb.filesRequired': 'Please add at least one file.',
-    'kb.selectedFiles': '{n} file(s) selected',
-    'kb.addFile': '+ add',
-    'kb.added': 'added',
-    'kb.noFilesHere': '– no matching files here –',
-    'kb.embedSource': 'Embedding model',
-    'kb.embedSourceCustom': 'Custom / advanced (enter below) …',
-    'kb.embedSourceNone': 'No embedding-capable API configured yet — add one under Settings ▸ APIs, or enter a server manually below.',
-    'kb.editSettings': '⚙ Settings',
-    'kb.editSettingsTitle': 'Knowledge base settings',
-    'kb.addFilesBtn': '📄+ Add files',
-    'kb.sourcesBtn': '🗂 Sources',
-    'kb.sourcesTitle': 'Sources: {name}',
-    'kb.noSources': 'No usable sources found.',
-    'kb.removeSource': 'Remove',
-    'kb.removeSourcesConfirm': 'Remove the selected source files from this knowledge base? The original files stay on disk.',
-    'kb.sourcesFailed': 'Could not load sources: {e}',
-    'kb.addFilesTitle': 'Add files to "{name}"',
-    'kb.addFilesConfirm': 'Add',
-    'kb.addFilesDone': '✅ {n} file(s) added, indexing started.',
-    'kb.addFilesRejected': '⚠️ {n} file(s) could not be added: {list}',
-    'kb.addFilesFailed': 'Adding files failed: {e}',
-    'kb.rerankerLabel': 'Reranker (better ranking, one extra call per search)',
-    'kb.topK': 'Results per search',
-    'kb.topKHint': 'How many chunks this knowledge base contributes per question (max 30). With several active at once, each contributes up to its own number.',
-    'kb.save': 'Save',
-    'kb.filesFromFolders': '{n} file(s) from {folders} folder(s)',
-    'kb.export': 'Export',
-    'kb.exportWarning': 'This will download {n} chunk(s) as an UNENCRYPTED file — anyone with the file can read its content. Continue?',
-    'kb.exportDone': '✅ Export downloaded.',
-    'kb.exportFailed': 'Export failed: {e}',
-    'kb.importBtn': 'Import…',
-    'kb.importNamePrompt': 'Name for the imported knowledge base:',
-    'kb.importDone': '✅ {n} chunk(s) imported.',
-    'kb.importFailed': 'Import failed: {e}',
-    'js.kbImportInvalidJson': 'This file is not a valid knowledge-base export (invalid JSON).',
-    'js.kbImportBadFile': 'This file is not a recognized knowledge-base export.',
-  };
+  // All English text lives in _lang/<code>.js — t()'s own key-fallback (see
+  // above) covers the case where a key is somehow missing there.
   function tf(key, vars) {
     if (typeof window.tf === 'function' && window.tf !== tf) {
       const v = window.tf(key, vars);
       if (v && v !== key) return v;
     }
-    let s = t(key, TF_FALLBACKS[key] || key);
+    let s = t(key);
     if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
     return s;
   }
@@ -109,25 +44,20 @@
     }[c]));
   }
 
-  // ── Backend calls: /kb/* on the local proxy ─────────────────────
-  // Every call goes through kbFetch() so it always carries the current
-  // agent-session token (kiconnect.js: unlockAgentSession()/
-  // agentSessionHeader()) — the KB registry only exists encrypted at
-  // rest, without this token the proxy answers 401. Same handling as
-  // kiconnect-agent.js's agentFetch(): treat 401 as "session gone",
-  // send the user back to the login screen.
+  // Every call goes through kbFetch() so it carries the current agent-session
+  // token (see agentSessionHeader()) - without it the proxy answers 401.
+  // Same handling as kiconnect-agent.js's agentFetch(): treat 401 as
+  // "session gone" and send the user back to the login screen.
   /* global agentSessionHeader, logoutNow, currentChat */
   async function kbFetch(url, opts) {
     opts = opts || {};
     const sessionHeaders = typeof agentSessionHeader === 'function' ? agentSessionHeader() : {};
     const headers = { ...(opts.headers || {}), ...sessionHeaders };
     const res = await fetch(url, { ...opts, headers });
-    // A 401 while we never had a session token to send just means "not
-    // logged in yet" (e.g. this module's own boot-time refresh racing the
-    // login screen on page load) - not an actual expired session, so it
-    // shouldn't force a logout or scare the user with a toast.
+    // A 401 while we never had a session token just means "not logged in
+    // yet", not an expired session - shouldn't force a logout.
     if (res.status === 401 && Object.keys(sessionHeaders).length) {
-      showToast(t('agent.err.sessionExpired', '🔒 Session expired — please log in again.'));
+      showToast(t('agent.err.sessionExpired'));
       if (typeof logoutNow === 'function') logoutNow();
     }
     return res;
@@ -177,8 +107,7 @@
     return data;
   }
   // topK is optional - when omitted the server uses this KB's own
-  // configured topK (Settings ▸ this knowledge base ▸ Advanced) instead of
-  // a single hardcoded value for every knowledge base.
+  // configured topK instead of a single hardcoded value.
   async function searchKnowledgeBase(kbId, query, topK) {
     const body = { query };
     if (topK) body.topK = topK;
@@ -205,8 +134,7 @@
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
-  // Reads a browser File object into a base64 string (no data: prefix) for
-  // JSON transport - used by uploadFilesToKnowledgeBase() below.
+  // Reads a browser File into a base64 string (no data: prefix) for JSON transport.
   function _fileToBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -215,10 +143,9 @@
       reader.readAsDataURL(file);
     });
   }
-  // Uploads dropped browser File objects (drag & drop) straight into the KB's
-  // own storage, since a browser page - unlike Electron - never gets a
-  // dropped file's real OS path to add "by reference" the way the folder
-  // picker does. See /kb/<id>/upload-files in kiconnect-proxy.py.
+  // Uploads dropped browser Files straight into the KB's own storage, since
+  // a browser page never gets a dropped file's real OS path to add "by
+  // reference" the way the folder picker does.
   async function uploadFilesToKnowledgeBase(kbId, fileObjs) {
     const files = await Promise.all(fileObjs.map(async f => ({ name: f.name, dataBase64: await _fileToBase64(f) })));
     const res = await kbFetch(`/kb/${encodeURIComponent(kbId)}/upload-files`, {
@@ -228,13 +155,11 @@
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
-  // ── Export / Import ─────────────────────────────────────────────
-  // Export decrypts every chunk server-side and hands back plain JSON -
-  // there is no way around that: the point is moving the KB to a
-  // *different* account/password, and that account's key can never
-  // decrypt bytes sealed with this one's (see kiconnect-proxy.py
-  // kb_export()). The caller MUST warn the user before saving the
-  // file that it is unencrypted plaintext on disk.
+  // Export / Import
+  // Export decrypts every chunk server-side and hands back plain JSON - the
+  // point is moving the KB to a different account/password, whose key can
+  // never decrypt bytes sealed with this one's. Caller MUST warn the user
+  // the saved file is unencrypted plaintext.
   async function exportKnowledgeBase(kbId) {
     const res = await kbFetch(`/kb/${encodeURIComponent(kbId)}/export`);
     const data = await res.json().catch(() => ({}));
@@ -242,8 +167,7 @@
     return data; // { kiconnectExport:'kb/v1', name, settings, chunkCount, chunks:[...] }
   }
   // Triggers the browser "Save As" for an already-fetched export object.
-  // Kept separate from exportKnowledgeBase() so callers can show their
-  // own confirmation dialog with the chunk count in between fetch and save.
+  // Kept separate from exportKnowledgeBase() so callers can confirm first.
   function downloadKnowledgeBaseExport(exportData, kbName) {
     const safeName = String(kbName || 'knowledge-base').replace(/[^A-Za-z0-9._ -]/g, '_').trim() || 'knowledge-base';
     const blob = new Blob([JSON.stringify(exportData)], { type: 'application/json' });
@@ -256,12 +180,10 @@
     a.remove();
     URL.revokeObjectURL(url);
   }
-  // Reads a picked .kbexport.json File, validates it's actually a KB
-  // export, and imports it as a brand-new knowledge base under the
-  // currently unlocked account. `embedding` ({baseUrl, model, apiKey}) is
-  // optional — omit it to keep just the source KB's baseUrl/model hint
-  // (no apiKey ever survives export) and add credentials later via
-  // Settings ▸ this knowledge base.
+  // Reads a picked .kbexport.json File, validates it, and imports it as a
+  // new knowledge base under the current account. `embedding` is optional -
+  // omit it to keep just the source KB's baseUrl/model hint (no apiKey ever
+  // survives export).
   async function importKnowledgeBase(file, name, embedding) {
     const text = await file.text();
     let parsed;
@@ -279,12 +201,9 @@
     return data; // { id, name, imported, skipped, warning? }
   }
   async function apiBrowse(path, opts) {
-    // Reuses the coding-agent's folder browser (/agent/browse) — same
-    // capability ("pick any real local folder"), no need for a second
-    // implementation. See kiconnect-rag-spec.md section 0.
-    // `opts.files: true` also asks it to list files in the current folder
-    // (see the `files=1` param added to /agent/browse in kiconnect-proxy.py),
-    // used by the "add individual files" picker below.
+    // Reuses the coding-agent's folder browser (/agent/browse) instead of a
+    // second implementation. `opts.files: true` also lists files in the
+    // current folder, used by the "add individual files" picker below.
     const params = new URLSearchParams();
     if (path) params.set('path', path);
     if (opts && opts.files) params.set('files', '1');
@@ -295,7 +214,7 @@
     return data;
   }
 
-  // ── Local state ─────────────────────────────────────────────────
+  // Local state
   const ACTIVE_KEY = 'kic_kb_active';
   let _kbList = [];                 // cached from listKnowledgeBases()
   let _activeKbIds = new Set();     // which KBs are toggled "on" for the composer
@@ -332,21 +251,16 @@
       syncComposerButton();
       ensurePolling();
     } catch (e) {
-      // No agent session yet (not logged in / not unlocked) — quietly no-op,
-      // same as the agent module's silent-fail-until-unlock behavior.
+      // No agent session yet - quietly no-op, same as the agent module.
     }
     return _kbList;
   }
 
-  // ══════════════════════════════════════════════════════════════
-  //  Retrieval + prompt augmentation — the extension points
-  //  kiconnect.js's sendMessageCore() calls (see its RAG hook, added
-  //  right after the existing web-search block).
-  // ══════════════════════════════════════════════════════════════
+  // Retrieval + prompt augmentation - extension points kiconnect.js's
+  // sendMessageCore() calls (RAG hook, after the web-search block).
   const KB_TOP_K_FALLBACK = 8; // only used if a KB predates the topK setting
 
-  // Fences each chunk so text copied from a file can't be mistaken for a
-  // delimiter/closing tag and break out of its own block.
+  // Fences each chunk so copied text can't be mistaken for a delimiter/closing tag.
   function _fenceKbChunk(text) {
     let fence = '~~~~';
     while (text.includes(fence)) fence += '~';
@@ -375,11 +289,9 @@
     return lines.join('\n').trim();
   }
 
-  // Called by sendMessageCore() before the request is sent, only when
-  // at least one knowledge base is toggled on in the composer. Each active
-  // KB is searched for its own configured topK (Settings ▸ that knowledge
-  // base ▸ Advanced) - so with e.g. two KBs set to 8 and 15, up to 23
-  // results come back total, not a single fixed number shared by all of them.
+  // Called by sendMessageCore() before the request is sent, when at least
+  // one KB is toggled on. Each active KB is searched for its own configured
+  // topK, so results are additive across KBs, not a single shared number.
   window.kbRetrieveForQuery = async function (query) {
     const activeIds = [..._activeKbIds];
     if (!activeIds.length) return null;
@@ -395,8 +307,7 @@
       }
     }));
     // Different KBs can use different embedding models, so raw cosine scores
-    // aren't comparable across them. Min-max normalize per KB before merging,
-    // so one KB's model doesn't silently dominate every result.
+    // aren't comparable. Min-max normalize per KB before merging.
     perKb.forEach(results => {
       if (results.length < 2) return;
       const scores = results.map(r => r.score);
@@ -422,11 +333,9 @@
     renderComposerPopover();
   };
 
-  // Prepends the formatted KB context block to the outgoing message
-  // content — same shape as kiconnect.js's own buildWebAugmentedContent/
-  // buildLinkedPageAugmentedContent, marked `_kbAugment` so it's skipped
-  // when the user bubble is rendered/re-rendered (see kiconnect.js
-  // buildMsgEl()) and when the message is re-serialized for storage.
+  // Prepends the formatted KB context block to the outgoing message - same
+  // shape as buildWebAugmentedContent/buildLinkedPageAugmentedContent,
+  // marked `_kbAugment` so it's skipped on render/re-serialization.
   window.buildKbAugmentedContent = function (originalContent, kbResult) {
     const block = formatKbBlock(kbResult);
     if (!block) return originalContent;
@@ -436,9 +345,8 @@
   };
 
   // Builds the row of clickable "[1] file.pdf, p. 4" source chips shown
-  // under a message that used a knowledge base — same idea as
-  // kiconnect.js's buildWebSourcesRow(), but a click expands the chunk
-  // text inline (there's no URL to link to for a local file).
+  // under a message that used a knowledge base; click expands the chunk
+  // text inline (no URL to link to for a local file).
   window.buildKbSourcesRow = function (kbSources) {
     const wrap = document.createElement('div');
     wrap.className = 'kb-sources';
@@ -446,7 +354,7 @@
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'kb-source-chip';
-      const loc = src.page ? `, ${t('kb.page', 'p.')} ${src.page}` : '';
+      const loc = src.page ? `, ${t('kb.page')} ${src.page}` : '';
       chip.title = `${src.kbName || ''}\n\n${src.snippet || ''}`;
       chip.textContent = `[${src.index}] ${src.source}${loc}`;
       chip.addEventListener('click', () => {
@@ -463,12 +371,9 @@
     return wrap;
   };
 
-  // ══════════════════════════════════════════════════════════════
-  //  UI — composer button + popover (list/toggle/manage), create modal,
-  //  folder picker. Built at runtime like kiconnect-agent.js's
-  //  injectComposerUI()/injectFolderPicker(), own "kb-*" class names so
-  //  this module works standalone even without kiconnect-agent.js.
-  // ══════════════════════════════════════════════════════════════
+  // UI - composer button + popover (list/toggle/manage), create modal,
+  // folder picker. Own "kb-*" class names so this module works standalone
+  // without kiconnect-agent.js.
   function injectStyles() {
     const s = document.createElement('style');
     s.id = 'kiconnect-db-styles';
@@ -550,12 +455,10 @@
     document.head.appendChild(s);
   }
 
-  // ── Composer button + popover ─────────────────────────────────────
-  // Placed right next to the project/agent context chip (#agentContextBar,
-  // injected by kiconnect-agent.js) — a knowledge base is a per-chat
-  // "which context" choice, same category as "which project", not an
-  // attachment. Falls back to the end of the composer's action row when
-  // kiconnect-agent.js isn't loaded, so this module still works standalone.
+  // Composer button + popover, placed next to the project/agent context
+  // chip (#agentContextBar) - a knowledge base is a per-chat "which
+  // context" choice, same category as "which project". Falls back to the
+  // end of the action row when kiconnect-agent.js isn't loaded.
   function injectComposerUI() {
     if (document.getElementById('kbBtn')) return;
     const actions = document.querySelector('.input-actions');
@@ -620,7 +523,7 @@
 
     const title = document.createElement('div');
     title.className = 'kb-popover-title';
-    title.innerHTML = `<span>${esc(t('kb.title', 'Knowledge base'))}</span>`;
+    title.innerHTML = `<span>${esc(t('kb.title'))}</span>`;
     pop.appendChild(title);
 
     const list = document.createElement('div');
@@ -670,10 +573,8 @@
     });
     row.appendChild(top);
 
-    // Where the KB's content comes from: the folder path (folder mode, or
-    // folder mode with a few individually-added extra files on top), or
-    // "N file(s) from M folder(s)" when it's individual-files-only (no
-    // folder path at all).
+    // Where the KB's content comes from: the folder path, or
+    // "N file(s) from M folder(s)" for individual-files-only KBs.
     const src = document.createElement('div');
     src.className = 'kb-row-status';
     src.style.cssText = 'opacity:0.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
@@ -730,15 +631,14 @@
     settingsBtn.type = 'button'; settingsBtn.textContent = tf('kb.editSettings');
     settingsBtn.addEventListener('click', ev => { ev.stopPropagation(); closeComposerPopover(); openEditSettingsModal(kb); });
     const reindexBtn = document.createElement('button');
-    reindexBtn.type = 'button'; reindexBtn.textContent = '🔄 ' + t('kb.reindex', 'Re-index');
+    reindexBtn.type = 'button'; reindexBtn.textContent = '🔄 ' + t('kb.reindex');
     reindexBtn.addEventListener('click', async ev => {
       ev.stopPropagation();
       try { await reindexKnowledgeBase(kb.id); showToast(tf('kb.reindexStarted')); await refreshKbList(); }
       catch (e) { showToast(tf('kb.reindexFailed', { e: e.message || e })); }
     });
-    // Export: fetches the plaintext dump, warns clearly it's unencrypted
-    // (see exportKnowledgeBase() above for why that's unavoidable), then
-    // only actually triggers the download once the user confirms.
+    // Export: fetches the plaintext dump, warns it's unencrypted, then only
+    // triggers the download once the user confirms.
     const exportBtn = document.createElement('button');
     exportBtn.type = 'button'; exportBtn.textContent = '⬇ ' + tf('kb.export');
     exportBtn.addEventListener('click', async ev => {
@@ -752,7 +652,7 @@
       } catch (e) { showToast(tf('kb.exportFailed', { e: e.message || e })); }
     });
     const delBtn = document.createElement('button');
-    delBtn.type = 'button'; delBtn.className = 'danger'; delBtn.textContent = '🗑 ' + t('kb.delete', 'Remove');
+    delBtn.type = 'button'; delBtn.className = 'danger'; delBtn.textContent = '🗑 ' + t('kb.delete');
     delBtn.addEventListener('click', async ev => {
       ev.stopPropagation();
       if (!confirm(tf('kb.deleteConfirm', { name: kb.name }))) return;
@@ -768,9 +668,8 @@
     return row;
   }
 
-  // Hidden <input type=file>, reused for every "Import" click - only
-  // .json is accepted, the real validation (kiconnectExport === 'kb/v1')
-  // happens in importKnowledgeBase() once the file is actually read.
+  // Hidden <input type=file>, reused for every "Import" click - only .json
+  // is accepted; real validation happens in importKnowledgeBase().
   let _kbImportInput = null;
   function triggerImportPicker() {
     if (!_kbImportInput) {
@@ -797,15 +696,10 @@
     _kbImportInput.click();
   }
 
-  // ── Create modal (folder picker + name + collapsed "Advanced") ──
-  /* global providers, getProviderEndpoint, listEmbeddingProviders */
-  // Renders the embedding-source <select> options: one per configured
-  // embedding-capable API provider (Settings ▸ APIs, see kiconnect.js
-  // listEmbeddingProviders()), plus a "Custom / advanced" option that
-  // reveals the manual baseUrl/model/key fields below it. Lets people
-  // pick a knowledge-base embedding model the same way they pick a chat
-  // model, instead of retyping a server URL every time (kiconnect-rag-spec.md
-  // section 4/9).
+  // Create modal (folder picker + name + collapsed "Advanced")
+  // Renders the embedding-source <select>: one per configured
+  // embedding-capable API provider, plus a "Custom / advanced" option that
+  // reveals manual baseUrl/model/key fields.
   function renderEmbedProviderSelect(selectEl, selectedValue) {
     const embProviders = typeof listEmbeddingProviders === 'function' ? listEmbeddingProviders() : [];
     selectEl.innerHTML = '';
@@ -829,10 +723,9 @@
     const custom = document.getElementById(prefix + 'EmbedCustomFields');
     if (select && custom) custom.style.display = select.value === 'custom' ? 'block' : 'none';
   }
-  // Resolves the currently-selected embedding source (provider dropdown or
-  // manual fields) into the {baseUrl, model, apiKey} shape /kb/create and
-  // /kb/<id>/settings expect. Returns null (and sets errEl) if nothing usable
-  // is configured.
+  // Resolves the currently-selected embedding source into the
+  // {baseUrl, model, apiKey} shape /kb/create and /kb/<id>/settings expect.
+  // Returns null (and sets errEl) if nothing usable is configured.
   function resolveEmbeddingPayload(prefix, errEl) {
     const select = document.getElementById(prefix + 'EmbedProviderSelect');
     if (select && select.value.startsWith('prov:')) {
@@ -861,34 +754,31 @@
         </div>
         <div id="${prefix}EmbedCustomFields" style="display:none;">
           <div class="kb-field">
-            <label>${esc(t('kb.embedBaseUrl', 'Embedding server (OpenAI-compatible)'))}</label>
-            <input type="text" id="${prefix}EmbedUrl" placeholder="${esc(t('kb.embedUrlPlaceholder', 'http://localhost:PORT/v1'))}">
-            <div class="kb-hint">${esc(t('kb.embedHint', 'Any server exposing an OpenAI-compatible /embeddings endpoint works — e.g. AnythingLLM, LM Studio, Ollama, vLLM, text-generation-webui, or a hosted embeddings API. Not tied to any specific tool.'))}</div>
+            <label>${esc(t('kb.embedBaseUrl'))}</label>
+            <input type="text" id="${prefix}EmbedUrl" placeholder="${esc(t('kb.embedUrlPlaceholder'))}">
+            <div class="kb-hint">${esc(t('kb.embedHint'))}</div>
           </div>
           <div class="kb-row2">
             <div class="kb-field">
-              <label>${esc(t('kb.embedModel', 'Model'))}</label>
+              <label>${esc(t('kb.embedModel'))}</label>
               <input type="text" id="${prefix}EmbedModel" placeholder="text-embedding-...">
             </div>
             <div class="kb-field">
-              <label>${esc(t('kb.embedKey', 'API key (optional)'))}</label>
-              <input type="password" id="${prefix}EmbedKey" placeholder="${esc(t('kb.embedKeyPlaceholder', 'if required'))}">
+              <label>${esc(t('kb.embedKey'))}</label>
+              <input type="password" id="${prefix}EmbedKey" placeholder="${esc(t('kb.embedKeyPlaceholder'))}">
             </div>
           </div>
         </div>`;
   }
 
-  // ── Generic folder/file browser, shared by the "create knowledge base"
-  // modal and the "add files" modal. Both used to carry their own copy of
-  // this browsing/filtering/picking logic (~140 lines, near-identical);
-  // it now lives here once, parameterized by DOM ids and a few callbacks.
+  // Generic folder/file browser, shared by the "create knowledge base" and
+  // "add files" modals (previously ~140 duplicated lines each).
   function createFilePicker(cfg) {
     // cfg: { pathInput, upBtn, shortcuts, filterInput, list, err,
-    //        filesMode: () => bool,       — show files, not just folders?
+    //        filesMode: () => bool,
     //        getSelected: () => [{path,name}],
-    //        onPick: (file) => void,      — file's "+ add" button clicked
-    //        onNavigate?: (data) => void, // extra per-caller logic on navigate
-    //      }
+    //        onPick: (file) => void,
+    //        onNavigate?: (data) => void }
     let path = '', parent = null, data = { entries: [], files: [] };
 
     async function load(target) {
@@ -960,8 +850,8 @@
         const empty = document.createElement('div');
         empty.style.cssText = 'padding:14px;text-align:center;color:var(--muted,#888);font-size:12px;';
         empty.textContent = filesOn
-          ? (q ? t('kb.noFilterMatches', '– nothing matches this filter –') : t('kb.noFilesHere', '– no matching files here –'))
-          : t('kb.noSubfolders', '– no subfolders –');
+          ? (q ? t('kb.noFilterMatches') : t('kb.noFilesHere'))
+          : t('kb.noSubfolders');
         listEl.appendChild(empty);
       }
     }
@@ -969,9 +859,8 @@
     return { load, render, get path() { return path; }, get parent() { return parent; } };
   }
 
-  // Renders a row of "picked file" chips, shared by the create-modal
-  // (folder-browsed paths + drag-dropped uploads) and the add-files modal
-  // (folder-browsed paths only, hence pending/onRemovePending are optional).
+  // Renders a row of "picked file" chips, shared by the create-modal and
+  // add-files modal.
   function renderFileChips(wrapId, selected, onRemove, pending, onRemovePending) {
     const wrap = document.getElementById(wrapId);
     if (!wrap) return;
@@ -987,13 +876,12 @@
       chip.appendChild(rm);
       wrap.appendChild(chip);
     });
-    // Dropped-in files (staged for upload once the KB exists) get their own
-    // chip style so it's clear they're a copy, not a reference to the
-    // original file on disk.
+    // Dropped-in files get their own chip style so it's clear they're a
+    // copy, not a reference to the original file on disk.
     (pending || []).forEach((f, i) => {
       const chip = document.createElement('span');
       chip.className = 'kb-file-chip kb-file-chip-upload';
-      chip.title = t('kb.willBeUploaded', 'Will be uploaded into the knowledge base');
+      chip.title = t('kb.willBeUploaded');
       chip.innerHTML = `⬆️ ${esc(f.name)} `;
       const rm = document.createElement('button');
       rm.type = 'button'; rm.textContent = '✕';
@@ -1009,7 +897,7 @@
     }
   }
 
-  // ── Local UI state for the create dialog's mode + multi-file picker ──
+  // Local UI state for the create dialog's mode + multi-file picker
   let _kbMode = 'folder';               // 'folder' | 'files'
   let _kbSelectedFiles = [];            // [{path, name}] accumulated across folder navigations, "files" mode
 
@@ -1026,32 +914,32 @@
           <button type="button" class="kb-mode-tab" id="kbModeFilesTab">${esc(tf('kb.modeFiles'))}</button>
         </div>
         <div class="kb-field" id="kbFolderPathField">
-          <label>${esc(t('kb.folder', 'Folder'))}</label>
+          <label>${esc(t('kb.folder'))}</label>
           <div class="kb-path-row">
-            <button type="button" id="kbFpUpBtn" title="${esc(t('kb.up', 'Parent folder'))}">⬆</button>
-            <input type="text" id="kbPathInput" placeholder="${esc(t('kb.folderPlaceholder', 'Absolute folder path…'))}">
-            <button type="button" id="kbFpGoBtn">${esc(t('kb.go', 'Go'))}</button>
+            <button type="button" id="kbFpUpBtn" title="${esc(t('kb.up'))}">⬆</button>
+            <input type="text" id="kbPathInput" placeholder="${esc(t('kb.folderPlaceholder'))}">
+            <button type="button" id="kbFpGoBtn">${esc(t('kb.go'))}</button>
           </div>
         </div>
         <div class="kb-selected-files" id="kbSelectedFiles" style="display:none;"></div>
         <div class="kb-fp-shortcuts" id="kbFpShortcuts"></div>
-        <input type="text" id="kbFilterInput" class="kb-filter-input" style="display:none;" placeholder="${esc(t('kb.filterPlaceholder', 'Filter files…'))}">
+        <input type="text" id="kbFilterInput" class="kb-filter-input" style="display:none;" placeholder="${esc(t('kb.filterPlaceholder'))}">
         <div class="kb-fp-list" id="kbFpList"></div>
-        <div class="kb-hint" id="kbDropHint" style="display:none;">${esc(t('kb.dropHint', '…or drag files here to upload them directly.'))}</div>
+        <div class="kb-hint" id="kbDropHint" style="display:none;">${esc(t('kb.dropHint'))}</div>
         <div class="kb-field">
-          <label>${esc(t('kb.name', 'Name'))}</label>
+          <label>${esc(t('kb.name'))}</label>
           <input type="text" id="kbNameInput" maxlength="96">
         </div>
         ${embedSourceFieldsHtml('kb')}
-        <div class="kb-advanced-toggle" id="kbAdvToggle">▸ ${esc(t('kb.advanced', 'Advanced'))}</div>
+        <div class="kb-advanced-toggle" id="kbAdvToggle">▸ ${esc(t('kb.advanced'))}</div>
         <div class="kb-advanced-body" id="kbAdvBody">
           <div class="kb-row2">
             <div class="kb-field">
-              <label>${esc(t('kb.chunkTokens', 'Chunk size (words)'))}</label>
+              <label>${esc(t('kb.chunkTokens'))}</label>
               <input type="number" id="kbChunkTokens" value="512" min="32" max="4000">
             </div>
             <div class="kb-field">
-              <label>${esc(t('kb.chunkOverlap', 'Overlap'))}</label>
+              <label>${esc(t('kb.chunkOverlap'))}</label>
               <input type="number" id="kbChunkOverlap" value="64" min="0" max="1000">
             </div>
           </div>
@@ -1067,8 +955,8 @@
         </div>
         <div class="kb-error" id="kbCreateError" hidden></div>
         <div class="kb-modal-footer">
-          <button type="button" class="kb-secondary-btn" id="kbCreateCancel">${esc(t('common.cancel', 'Cancel'))}</button>
-          <button type="button" class="kb-primary-btn" id="kbCreateConfirm">${esc(t('kb.create', 'Create'))}</button>
+          <button type="button" class="kb-secondary-btn" id="kbCreateCancel">${esc(t('js.cancel'))}</button>
+          <button type="button" class="kb-primary-btn" id="kbCreateConfirm">${esc(t('kb.create'))}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1079,16 +967,14 @@
     document.getElementById('kbAdvToggle').addEventListener('click', () => {
       const body = document.getElementById('kbAdvBody');
       const open = body.classList.toggle('open');
-      document.getElementById('kbAdvToggle').textContent = (open ? '▾ ' : '▸ ') + t('kb.advanced', 'Advanced');
+      document.getElementById('kbAdvToggle').textContent = (open ? '▾ ' : '▸ ') + t('kb.advanced');
     });
     document.getElementById('kbEmbedProviderSelect').addEventListener('change', () => syncEmbedCustomFieldsVisibility('kb'));
     document.getElementById('kbModeFolderTab').addEventListener('click', () => setCreateMode('folder'));
     document.getElementById('kbModeFilesTab').addEventListener('click', () => setCreateMode('files'));
-    // Direct path entry (type/paste an absolute path + Go, or Enter) is the
-    // primary way in — same UX as the project folder picker's fp-path-row,
-    // which is more convenient than a browse-only list when you already
-    // know the path. Browsing the subfolder list below is still available
-    // for exploring, same as the project picker.
+    // Direct path entry (type/paste + Go/Enter) is the primary way in, same
+    // UX as the project folder picker. Browsing the subfolder list is also
+    // available.
     document.getElementById('kbFpUpBtn').addEventListener('click', () => { if (kbPicker.parent) loadFolderPicker(kbPicker.parent); });
     document.getElementById('kbFpGoBtn').addEventListener('click', () => loadFolderPicker(document.getElementById('kbPathInput').value.trim()));
     document.getElementById('kbPathInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadFolderPicker(e.target.value.trim()); });
@@ -1108,10 +994,9 @@
       renderSelectedFilesChips();
     });
   }
-  // Dropped-in-the-browser files staged for upload once the KB exists (see
-  // the drag & drop note on uploadFilesToKnowledgeBase() above) - separate
-  // from _kbSelectedFiles, which holds real server-side paths from the
-  // folder browser and is sent to /kb/create as `fileList`.
+  // Dropped-in-the-browser files staged for upload once the KB exists -
+  // separate from _kbSelectedFiles, which holds real server-side paths sent
+  // to /kb/create as `fileList`.
   let _kbPendingUploadFiles = [];
 
   function setCreateMode(mode) {
@@ -1150,8 +1035,7 @@
       kbPicker.render();
     },
     onNavigate: data => {
-      // Only in folder mode: default the name field to the chosen folder's
-      // name, same idea as the file-picker's "default from parent folder".
+      // Only in folder mode: default the name field to the chosen folder's name.
       if (_kbMode === 'folder' && !document.getElementById('kbNameInput').value) {
         const base = (data.path || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop();
         if (base) document.getElementById('kbNameInput').value = base;
@@ -1174,14 +1058,14 @@
     document.getElementById('kbTopK').value = '8';
     document.getElementById('kbReranker').checked = false;
     document.getElementById('kbAdvBody').classList.remove('open');
-    document.getElementById('kbAdvToggle').textContent = '▸ ' + t('kb.advanced', 'Advanced');
+    document.getElementById('kbAdvToggle').textContent = '▸ ' + t('kb.advanced');
     document.getElementById('kbCreateError').hidden = true;
     setCreateMode('folder');
     renderEmbedProviderSelect(document.getElementById('kbEmbedProviderSelect'));
     syncEmbedCustomFieldsVisibility('kb');
     document.getElementById('kbCreateModalOverlay').classList.add('open');
-    // Same as the project picker's openFolderPicker(): start browsing at
-    // the filesystem root/shortcuts right away instead of an empty field.
+    // Same as the project picker: start browsing at the filesystem
+    // root/shortcuts right away instead of an empty field.
     loadFolderPicker('');
   }
   function closeCreateModal() {
@@ -1202,20 +1086,16 @@
     const btn = document.getElementById('kbCreateConfirm');
     btn.disabled = true;
     try {
-      // "files" mode can mix real server-side paths (_kbSelectedFiles, from
-      // the folder browser) with dropped browser files (_kbPendingUploadFiles,
-      // which have no OS path - see uploadFilesToKnowledgeBase()). If it's
-      // ALL dropped files, create the KB with an empty fileList first, then
-      // upload into it - /kb/create requires at least one usable source only
-      // when sourceType is "files" AND nothing else was staged.
+      // "files" mode can mix real server-side paths with dropped browser
+      // files (no OS path). If ALL are dropped files, create the KB with an
+      // empty fileList first, then upload into it.
       const res = await createKnowledgeBase({
         name,
         sourceType: _kbMode,
         path: _kbMode === 'folder' ? path : '',
         fileList: _kbMode === 'files' ? _kbSelectedFiles.map(f => f.path) : [],
-        // A browser cannot reveal an OS path for a dropped file.  Allow the
-        // server to create the empty shell here; it is filled immediately by
-        // /upload-files below.
+        // A browser cannot reveal an OS path for a dropped file - let the
+        // server create the empty shell, filled by /upload-files below.
         allowEmptyFileList: _kbMode === 'files' && !_kbSelectedFiles.length && !!_kbPendingUploadFiles.length,
         embedding,
         chunkTokens: parseInt(document.getElementById('kbChunkTokens').value || '512', 10),
@@ -1247,9 +1127,8 @@
     }
   }
 
-  // ── Edit-settings modal (name / embedding source / chunking / reranker) —
-  // uses the same PATCH /kb/<id>/settings endpoint that already existed
-  // server-side; this modal is the missing UI for it. ─────────────────
+  // Edit-settings modal (name / embedding source / chunking / reranker) -
+  // UI for the existing PATCH /kb/<id>/settings endpoint.
   function injectEditSettingsModal() {
     if (document.getElementById('kbEditModalOverlay')) return;
     const overlay = document.createElement('div');
@@ -1259,17 +1138,17 @@
       <div class="kb-modal">
         <div class="kb-modal-title"><span id="kbEditTitle"></span><button type="button" id="kbEditClose">✕</button></div>
         <div class="kb-field">
-          <label>${esc(t('kb.name', 'Name'))}</label>
+          <label>${esc(t('kb.name'))}</label>
           <input type="text" id="kbEditNameInput" maxlength="96">
         </div>
         ${embedSourceFieldsHtml('kbEdit')}
         <div class="kb-row2">
           <div class="kb-field">
-            <label>${esc(t('kb.chunkTokens', 'Chunk size (words)'))}</label>
+            <label>${esc(t('kb.chunkTokens'))}</label>
             <input type="number" id="kbEditChunkTokens" min="32" max="4000">
           </div>
           <div class="kb-field">
-            <label>${esc(t('kb.chunkOverlap', 'Overlap'))}</label>
+            <label>${esc(t('kb.chunkOverlap'))}</label>
             <input type="number" id="kbEditChunkOverlap" min="0" max="1000">
           </div>
         </div>
@@ -1282,10 +1161,10 @@
           <input type="checkbox" id="kbEditReranker" style="accent-color:var(--accent,#3d7eff);width:15px;height:15px;">
           <span>${esc(tf('kb.rerankerLabel'))}</span>
         </label>
-        <div class="kb-hint">${esc(t('kb.editHint', 'Changing the embedding model requires re-indexing (use "🔄 Re-index" afterwards) — existing chunks were embedded with the previous model.'))}</div>
+        <div class="kb-hint">${esc(t('kb.editHint'))}</div>
         <div class="kb-error" id="kbEditError" hidden></div>
         <div class="kb-modal-footer">
-          <button type="button" class="kb-secondary-btn" id="kbEditCancel">${esc(t('common.cancel', 'Cancel'))}</button>
+          <button type="button" class="kb-secondary-btn" id="kbEditCancel">${esc(t('js.cancel'))}</button>
           <button type="button" class="kb-primary-btn" id="kbEditConfirm">${esc(tf('kb.save'))}</button>
         </div>
       </div>`;
@@ -1309,9 +1188,7 @@
     document.getElementById('kbEditTopK').value = settings.topK || 8;
     document.getElementById('kbEditReranker').checked = !!settings.reranker;
     // Pre-select the matching configured provider if the stored baseUrl+model
-    // matches one, otherwise fall back to "Custom" with the stored values
-    // filled in (covers KBs created before this dropdown existed, or with a
-    // server not currently configured as a provider).
+    // matches one, otherwise fall back to "Custom" with the stored values.
     const match = findMatchingEmbeddingProvider(emb);
     renderEmbedProviderSelect(document.getElementById('kbEditEmbedProviderSelect'), match ? 'prov:' + match.id : 'custom');
     document.getElementById('kbEditEmbedUrl').value = emb.baseUrl || '';
@@ -1355,10 +1232,8 @@
     }
   }
 
-  // ── "Add files" modal — same folder-browsing file picker as the create
-  // dialog's "Individual files" tab, but appends to an already-existing
-  // knowledge base via POST /kb/<id>/add-files instead of creating a new
-  // one (kiconnect-rag-spec.md section 9 Phase 2). ────────────────────
+  // "Add files" modal - same folder-browsing picker as the create dialog's
+  // "Individual files" tab, but appends via POST /kb/<id>/add-files.
   let _kbAddFilesId = null;
   let _kbAddFilesSelected = [];
 
@@ -1371,18 +1246,18 @@
       <div class="kb-modal">
         <div class="kb-modal-title"><span id="kbAddFilesTitle"></span><button type="button" id="kbAddFilesClose">✕</button></div>
         <div class="kb-path-row">
-          <button type="button" id="kbAddFpUpBtn" title="${esc(t('kb.up', 'Parent folder'))}">⬆</button>
-          <input type="text" id="kbAddPathInput" placeholder="${esc(t('kb.folderPlaceholder', 'Absolute folder path…'))}">
-          <button type="button" id="kbAddFpGoBtn">${esc(t('kb.go', 'Go'))}</button>
+          <button type="button" id="kbAddFpUpBtn" title="${esc(t('kb.up'))}">⬆</button>
+          <input type="text" id="kbAddPathInput" placeholder="${esc(t('kb.folderPlaceholder'))}">
+          <button type="button" id="kbAddFpGoBtn">${esc(t('kb.go'))}</button>
         </div>
         <div class="kb-selected-files" id="kbAddSelectedFiles"></div>
         <div class="kb-fp-shortcuts" id="kbAddFpShortcuts"></div>
-        <input type="text" id="kbAddFilterInput" class="kb-filter-input" placeholder="${esc(t('kb.filterPlaceholder', 'Filter files…'))}">
+        <input type="text" id="kbAddFilterInput" class="kb-filter-input" placeholder="${esc(t('kb.filterPlaceholder'))}">
         <div class="kb-fp-list kb-fp-dropzone" id="kbAddFpList"></div>
-        <div class="kb-hint" id="kbAddDropHint">${esc(t('kb.dropHint', '…or drag files here to upload them directly.'))}</div>
+        <div class="kb-hint" id="kbAddDropHint">${esc(t('kb.dropHint'))}</div>
         <div class="kb-error" id="kbAddFilesError" hidden></div>
         <div class="kb-modal-footer">
-          <button type="button" class="kb-secondary-btn" id="kbAddFilesCancel">${esc(t('common.cancel', 'Cancel'))}</button>
+          <button type="button" class="kb-secondary-btn" id="kbAddFilesCancel">${esc(t('js.cancel'))}</button>
           <button type="button" class="kb-primary-btn" id="kbAddFilesConfirm">${esc(tf('kb.addFilesConfirm'))}</button>
         </div>
       </div>`;
@@ -1395,11 +1270,9 @@
     document.getElementById('kbAddPathInput').addEventListener('keydown', e => { if (e.key === 'Enter') loadAddFilesPicker(e.target.value.trim()); });
     document.getElementById('kbAddFilesConfirm').addEventListener('click', onAddFilesConfirm);
     document.getElementById('kbAddFilterInput').addEventListener('input', () => kbAddPicker.render());
-    // Drag & drop: browsers never expose a dropped file's real OS path (only
-    // Electron's File.path does that, and this is a plain browser page), so
-    // dropped files can't be added "by reference" like browsed ones. Instead
-    // they're read client-side and uploaded straight into the KB's own
-    // storage via /kb/<id>/upload-files - see uploadFilesToKnowledgeBase().
+    // Drag & drop: browsers never expose a dropped file's real OS path, so
+    // dropped files can't be added "by reference". They're read client-side
+    // and uploaded via /kb/<id>/upload-files instead.
     const dz = document.getElementById('kbAddFpList');
     ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => {
       e.preventDefault(); e.stopPropagation(); dz.classList.add('kb-dragover');
@@ -1484,8 +1357,8 @@
     }
   }
 
-  // ── Source manager: inspect the files that currently feed a KB and
-  // remove selected ones from the index without touching their files on disk.
+  // Source manager: inspect files feeding a KB and remove selected ones
+  // from the index without touching the files on disk.
   function closeSourcesModal() {
     const overlay = document.getElementById('kbSourcesModalOverlay');
     if (overlay) overlay.remove();
@@ -1494,7 +1367,7 @@
     closeSourcesModal();
     const overlay = document.createElement('div');
     overlay.id = 'kbSourcesModalOverlay'; overlay.className = 'kb-modal-overlay';
-    overlay.innerHTML = `<div class="kb-modal"><div class="kb-modal-title"><span>${esc(tf('kb.sourcesTitle', { name: kb.name }))}</span><button type="button">✕</button></div><div class="kb-hint" data-role="hint">Loading …</div><div data-role="list" style="max-height:48vh;overflow-y:auto;margin-top:8px;"></div><div class="kb-error" data-role="error" hidden></div><div class="kb-modal-footer"><button type="button" class="kb-secondary-btn" data-role="close">${esc(t('common.close', 'Close'))}</button><button type="button" class="kb-primary-btn" data-role="remove" disabled>${esc(tf('kb.removeSource'))}</button></div></div>`;
+    overlay.innerHTML = `<div class="kb-modal"><div class="kb-modal-title"><span>${esc(tf('kb.sourcesTitle', { name: kb.name }))}</span><button type="button">✕</button></div><div class="kb-hint" data-role="hint">Loading …</div><div data-role="list" style="max-height:48vh;overflow-y:auto;margin-top:8px;"></div><div class="kb-error" data-role="error" hidden></div><div class="kb-modal-footer"><button type="button" class="kb-secondary-btn" data-role="close">${esc(t('js.close'))}</button><button type="button" class="kb-primary-btn" data-role="remove" disabled>${esc(tf('kb.removeSource'))}</button></div></div>`;
     document.body.appendChild(overlay);
     overlay.classList.add('open');
     const close = () => closeSourcesModal();
@@ -1529,8 +1402,7 @@
     }
   }
 
-  // ── Language change hook (same pattern as kiconnect-agent.js's
-  // window._kicAgentRetranslate, called from kiconnect.js's setLang()) ──
+  // Language change hook (same pattern as kiconnect-agent.js's window._kicAgentRetranslate).
   window._kicDbRetranslate = function () {
     syncComposerButton();
     renderComposerPopover();
@@ -1538,9 +1410,8 @@
     if (btn) btn.title = tf('kb.button.title');
   };
 
-  // ── Session lifecycle: refresh the KB list once the agent session is
-  // unlocked (login/account switch/password change), clear it on lock/
-  // logout — same session kiconnect-agent.js already reuses. ─────────
+  // Session lifecycle: refresh the KB list when the agent session unlocks,
+  // clear it on lock/logout - same session kiconnect-agent.js reuses.
   function installHooks() {
     if (typeof window.unlockAgentSession === 'function') {
       const _origUnlock = window.unlockAgentSession;
@@ -1568,7 +1439,7 @@
     }
   }
 
-  // ── Boot ─────────────────────────────────────────────────────────
+  // Boot
   function waitForHost(tries) {
     tries = tries || 0;
     if (document.querySelector('.input-zone') && document.getElementById('assetBtnGroup')) {
@@ -1576,13 +1447,8 @@
       injectComposerUI();
       installHooks();
       // Only worth trying eagerly if a session token already exists in RAM
-      // (e.g. this module re-booting via SPA-internal navigation, not a
-      // real page load). On an actual F5 the agent session is always empty
-      // at this point - see kiconnect.js checkLogin(), which only restores
-      // it after the user re-enters their password - so calling this here
-      // unconditionally used to hit a 401 before login and, worse, made
-      // kbFetch() treat that as an expired session. installHooks() above
-      // already covers the real "session just got unlocked" case.
+      // (SPA-internal re-boot, not a real page load) - on an actual F5 the
+      // agent session is empty until the user re-enters their password.
       if (typeof agentSessionHeader === 'function' && Object.keys(agentSessionHeader()).length) {
         refreshKbList();
       }

@@ -1,9 +1,7 @@
-/* ================================================================
-   kiconnect.css  –  KI Connect styles
-   ================================================================ */
+/* kiconnect.css – KI Connect styles */
 
 
-/* ── Fonts (system font stack, no external loading) ─────────────── */
+/* Fonts (system font stack, no external loading) */
 
 @font-face {
   font-family: 'Syne';
@@ -22,9 +20,9 @@
 }
 
 
-/* ── Design tokens ───────────────────────────────────────────────── */
+/* Design tokens */
 
-/* ── DARK (default) ─────────────────────────────────────────────── */
+/* DARK (default) */
 :root,
 [data-theme="dark"] {
   --bg:         #0e0f13;
@@ -44,7 +42,7 @@
   --chat-max-w: 880px;
 }
 
-/* ── OLED BLACK ─────────────────────────────────────────────────── */
+/* OLED BLACK */
 [data-theme="dark_oled"] {
   --bg:         #000000;
   --surface:    #0a0a0a;
@@ -63,7 +61,7 @@
   --chat-max-w: 880px;
 }
 
-/* ── WHITE / LIGHT ──────────────────────────────────────────────── */
+/* WHITE / LIGHT */
 [data-theme="white"] {
   --bg:         #f0f2f8;
   --surface:    #ffffff;
@@ -93,7 +91,7 @@
 [data-theme="white"] .bubble pre { background: #eaecf6; }
 [data-theme="white"] .status-dot { box-shadow: 0 0 8px var(--green); }
 
-/* ── DARK GOLD (OLED) ──────────────────────────────────── */
+/* DARK GOLD (OLED) */
 [data-theme="gold_oled"] {
   --bg:         #000000;
   --surface:    #0f0e0a;
@@ -153,7 +151,7 @@
   color: #7a6e50; 
 }
 
-/* ── Emerald OLED theme ──────────────────────────────────────────── */
+/* Emerald OLED theme */
 [data-theme="emerald_oled"] {
   --bg:         #000000;
   --surface:    #040d07;
@@ -198,7 +196,7 @@
   color: #2a6645;
 }
 
-/* ── Red OLED theme ──────────────────────────────────────────────── */
+/* Red OLED theme */
 [data-theme="red_oled"] {
   --bg:         #000000;
   --surface:    #0d0303;
@@ -243,7 +241,7 @@
   color: #6b2a2a;
 }
 
-/* ── Nord theme ──────────────────────────────────────────────────── */
+/* Nord theme */
 [data-theme="nord"] {
   --bg:         #2e3440;
   --surface:    #3b4252;
@@ -262,7 +260,7 @@
   --chat-max-w: 880px;
 }
 
-/* ── Dracula theme ───────────────────────────────────────────────── */
+/* Dracula theme */
 [data-theme="dracula"] {
   --bg:         #282a36;
   --surface:    #343746;
@@ -294,7 +292,7 @@
   box-shadow: 0 0 10px var(--green), 0 0 20px rgba(80, 250, 123, 0.3);
 }
 
-/* ── Forest theme ────────────────────────────────────────────────── */
+/* Forest theme */
 [data-theme="forest"] {
   --bg:         #0d1b12;
   --surface:    #132418;
@@ -326,7 +324,7 @@
   box-shadow: 0 0 10px var(--accent), 0 0 20px rgba(76, 175, 110, 0.3);
 }
 
-/* ── Mocha theme ─────────────────────────────────────────────────── */
+/* Mocha theme */
 [data-theme="mocha"] {
   --bg:         #1c1510;
   --surface:    #261d16;
@@ -358,7 +356,7 @@
   box-shadow: 0 0 10px var(--accent), 0 0 20px rgba(200, 149, 108, 0.3);
 }
 
-/* ── Rose theme (warm light) ─────────────────────────────────────── */
+/* Rose theme (warm light) */
 [data-theme="rose"] {
   --bg:         #fdf6f7;
   --surface:    #ffffff;
@@ -382,7 +380,7 @@
 [data-theme="rose"] .code-block-header { background: #f5e0e4; color: #a07888; }
 [data-theme="rose"] pre, [data-theme="rose"] code { color: #2c1a1f; }
 
-/* ── Solarized theme ─────────────────────────────────────────────── */
+/* Solarized theme */
 [data-theme="solarized"] {
   --bg:         #fdf6e3;
   --surface:    #eee8d5;
@@ -405,7 +403,7 @@
 [data-theme="solarized"] .code-block-header { background: #e8e0ca; color: #93a1a1; }
 [data-theme="solarized"] pre, [data-theme="solarized"] code { color: #586e75; }
 
-/* ── Theme switcher widget ──────────────────────────────────────── */
+/* Theme switcher widget */
 .theme-oled-label {
   display: flex;
   align-items: center;
@@ -519,7 +517,7 @@
 
 
 
-/* ── Reset ───────────────────────────────────────────────────────── */
+/* Reset */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
@@ -536,7 +534,7 @@ body {
 ::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 3px; }
 
 
-/* ── Header ──────────────────────────────────────────────────────── */
+/* Header */
 
 header {
   display: flex;
@@ -577,7 +575,7 @@ header {
 .model-select { display: none; }
 
 
-/* ── Custom model dropdown ───────────────────────────────────────── */
+/* Custom model dropdown */
 
 .cm-wrap { position: relative; min-width: 180px; flex-shrink: 0; }
 .cm-trigger {
@@ -647,7 +645,7 @@ header {
 
 
 
-/* ── Language switcher ───────────────────────────────────────────── */
+/* Language switcher */
 
 .lang-switcher { position: relative; }
 .lang-btn {
@@ -687,7 +685,7 @@ header {
 .lang-option.active:hover { color: #fff; }
 
 
-/* ── Thinking / Reasoning toggle ─────────────────────────────────── */
+/* Thinking / Reasoning toggle */
 
 .thinking-group { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .thinking-toggle {
@@ -718,13 +716,13 @@ header {
   min-width: 52px; text-align: right;
 }
 
-/* ── Overlay ─────────────────────────────────────────────────────── */
+/* Overlay */
 
 .overlay      { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 99; display: none; }
 .overlay.show { display: block; }
 
 
-/* ── Side panels ─────────────────────────────────────────────────── */
+/* Side panels */
 
 .panel {
   position: fixed; top: 0; right: -460px;
@@ -749,9 +747,7 @@ header {
   text-transform: uppercase; letter-spacing: 1px;
   font-family: 'IBM Plex Mono', monospace;
 }
-/* Generic collapse/expand for panel sections (#tuningPanel, #settingsPanel).
-   Applied at runtime by initPanelSectionCollapse() in kiconnect.js, which
-   wraps each section's content into a .tuning-section div. */
+/* Generic collapse/expand for panel sections; applied at runtime by initPanelSectionCollapse() in kiconnect.js. */
 .section-header.tuning-collapsible {
   cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;
 }
@@ -822,7 +818,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .icon-btn.danger:hover { color: var(--red);  border-color: var(--red); }
 
 
-/* ── Provider panel ──────────────────────────────────────────────── */
+/* Provider panel */
 
 .provider-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .provider-item {
@@ -889,7 +885,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .type-chip.selected { border-color: var(--accent); color: var(--text); background: rgba(61, 126, 255, 0.12); }
 
 
-/* ── Profile panel ───────────────────────────────────────────────── */
+/* Profile panel */
 
 .profile-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .profile-item {
@@ -918,7 +914,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .color-swatch.selected { border-color: white; transform: scale(1.2); }
 
 
-/* ── Model limits panel ──────────────────────────────────────────── */
+/* Model limits panel */
 
 .model-max-row {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px;
@@ -942,12 +938,12 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .reset-btn:hover { color: var(--accent); border-color: var(--accent); }
 
 
-/* ── Main layout ─────────────────────────────────────────────────── */
+/* Main layout */
 
 .main { display: flex; flex: 1; overflow: hidden; }
 
 
-/* ── Sidebar ─────────────────────────────────────────────────────── */
+/* Sidebar */
 
 .sidebar {
   width: var(--sidebar-w); min-width: 160px; max-width: 480px;
@@ -986,7 +982,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .sidebar-resizer.dragging::after { background: var(--accent); }
 
 
-/* ── Folder tree ─────────────────────────────────────────────────── */
+/* Folder tree */
 
 .folder         { margin-bottom: 6px; }
 .folder-header {
@@ -1022,9 +1018,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 }
 .folder-btn:hover        { color: var(--text); background: var(--border); }
 .folder-btn.danger:hover { color: var(--red); }
-/* Chats nested inside a folder get a visible indent + a thin guide line so
-   the containment relationship (folder → its chats) reads instantly, instead
-   of folders and chats looking like the same flat level. */
+/* Indent + guide line so nested chats read as contained within their folder. */
 .folder-chats {
   padding-left: 14px; margin-left: 11px; margin-top: 2px;
   border-left: 1px solid var(--border);
@@ -1043,7 +1037,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 }
 
 
-/* ── Chat list items ─────────────────────────────────────────────── */
+/* Chat list items */
 
 .chat-item {
   padding: 6px 8px; border-radius: 7px;
@@ -1065,11 +1059,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
   border-radius: 4px; padding: 1px 4px; flex-shrink: 0;
   font-family: 'IBM Plex Mono', monospace;
 }
-/* Phase 2 (parallele Streams): small pulsing dot next to a chat's title in
-   the sidebar while it has an in-flight run (chat stream or agent turn) —
-   most useful for chats OTHER than the one currently on screen, so a
-   background stream stays visible without switching into it. Reuses the
-   same @keyframes pulse the header's status dot already uses. */
+/* Pulsing dot for a chat with an in-flight run, most useful for background chats. Reuses the header status dot's @keyframes pulse. */
 .chat-item-live-dot {
   width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
   background: var(--green); box-shadow: 0 0 5px var(--green);
@@ -1083,7 +1073,7 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 .chat-item:hover .chat-item-menu { display: block; }
 .chat-item-menu:hover { color: var(--text); background: var(--border); }
 
-/* ── Multi-select ────────────────────────────────────────────────── */
+/* Multi-select */
 
 /* Checkbox icon – hidden by default, shown when multi-select active */
 .chat-item-cb {
@@ -1121,7 +1111,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 #multiSelectBar.visible { display: flex; }
 
 
-/* ── Context menu ────────────────────────────────────────────────── */
+/* Context menu */
 
 .ctx-menu {
   position: fixed; background: var(--surface); border: 1px solid var(--border);
@@ -1153,7 +1143,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .ctx-submenu.open { display: block; }
 
 
-/* ── Chat area ───────────────────────────────────────────────────── */
+/* Chat area */
 
 .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
 
@@ -1172,7 +1162,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 
-/* ── Message rows ────────────────────────────────────────────────── */
+/* Message rows */
 
 .message-row {
   display: flex; gap: 12px;
@@ -1207,7 +1197,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .message-row.ai   .bubble { background: var(--ai-bg);   border: 1px solid var(--border); }
 
 
-/* ── Bubble actions ──────────────────────────────────────────────── */
+/* Bubble actions */
 
 .bubble-actions { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.2s; }
 
@@ -1244,7 +1234,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .bubble-act-btn.copy-done   { color: var(--green); border-color: var(--green); }
 
 
-/* ── Personal per-bubble notes (account-specific, yellowish) ───────── */
+/* Personal per-bubble notes (account-specific, yellowish) */
 .note-holder {
   margin-top: 4px;
   opacity: 0;
@@ -1327,7 +1317,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 .note-print { display: none; }
 
 
-/* ── Token badge ─────────────────────────────────────────────────── */
+/* Token badge */
 
 .token-badge {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1343,7 +1333,7 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 
 
-/* ── Bubble rich content ─────────────────────────────────────────── */
+/* Bubble rich content */
 
 .bubble p              { margin-bottom: 8px; }
 .bubble p:last-child   { margin-bottom: 0; }
@@ -1422,14 +1412,11 @@ body.multiselect-active .chat-item-menu { display: none !important; }
 }
 .bubble .MathJax { color: var(--text) !important; }
 .math-block      { display: block; overflow-x: auto; padding: 4px 0; }
-/* MathJax's assistive MathML sits invisibly on top of every formula for
-   screen readers. Without this rule it catches clicks/selection instead of
-   the visible copy, which can steal the speechSynthesis channel our TTS
-   uses. Keep it pointer/selection-transparent. */
+/* MathJax's invisible assistive MathML layer would otherwise catch clicks and steal TTS focus; keep it pointer/selection-transparent. */
 mjx-assistive-mml { pointer-events: none; user-select: none; }
 
 
-/* ── Inline edit ─────────────────────────────────────────────────── */
+/* Inline edit */
 
 .edit-box {
   width: 100%; background: var(--surface2); border: 1px solid var(--accent);
@@ -1452,7 +1439,7 @@ mjx-assistive-mml { pointer-events: none; user-select: none; }
 .edit-cancel-btn:hover { color: var(--text); }
 
 
-/* ── Typing indicator ────────────────────────────────────────────── */
+/* Typing indicator */
 
 .typing .bubble { padding: 14px 16px; }
 .dots span {
@@ -1465,7 +1452,7 @@ mjx-assistive-mml { pointer-events: none; user-select: none; }
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
 
 
-/* ── Empty state ─────────────────────────────────────────────────── */
+/* Empty state */
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1482,7 +1469,7 @@ mjx-assistive-mml { pointer-events: none; user-select: none; }
 .suggestion-chip:hover { border-color: var(--accent); color: var(--text); }
 
 
-/* ── Input zone ──────────────────────────────────────────────────── */
+/* Input zone */
 
 .input-zone {
   padding: 16px 24px 20px; background: var(--bg);
@@ -1708,9 +1695,7 @@ textarea::placeholder { color: var(--muted); }
   margin-left: 8px;
   order: 6;
 }
-/* Composer group order: 1 Assets, 2 Web, 3 Voice settings, 4 Agentic
-   Coding/Project — explicit values so order doesn't depend on incidental
-   script-load order (voice.js vs agent.js injecting themselves). */
+/* Explicit composer group order so it doesn't depend on script-load order (voice.js vs agent.js). */
 .input-actions .asset-btn-group        { order: 1; }
 .input-actions .web-context-wrap       { order: 2; }
 .input-actions .voice-btn-group        { order: 3; }
@@ -1726,7 +1711,7 @@ textarea::placeholder { color: var(--muted); }
 .hint kbd { background: var(--surface2); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 10px; }
 
 
-/* ── Toast notification ──────────────────────────────────────────── */
+/* Toast notification */
 
 .toast {
   position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -1737,14 +1722,14 @@ textarea::placeholder { color: var(--muted); }
 .toast.show { opacity: 1; }
 
 
-/* ── Login screen ────────────────────────────────────────────────── */
+/* Login screen */
 
 #loginScreen        { display: none; }
 #loginScreen.active,
 #loginScreen.visible { display: flex !important; }
 
 
-/* ── Responsive ──────────────────────────────────────────────────── */
+/* Responsive */
 
 @media (max-width: 640px) {
   .sidebar     { display: none; }
@@ -1788,7 +1773,7 @@ textarea::placeholder { color: var(--muted); }
   white-space: nowrap;
 }
 
-/* ── Print Single Overlay ──────────────────────────────────────────────────── */
+/* Print Single Overlay */
 #printSingleOverlay {
   display: none;
   position: fixed; inset: 0;
@@ -1844,7 +1829,7 @@ textarea::placeholder { color: var(--muted); }
 .print-single-bubble th, .print-single-bubble td { border: 1px solid var(--border); padding: 5px 10px; }
 .print-single-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-/* ── Streaming performance ───────────────────────────────────────────────── */
+/* Streaming performance */
 
 .bubble.streaming {
   will-change: contents;
@@ -1852,7 +1837,7 @@ textarea::placeholder { color: var(--muted); }
 }
 
 
-/* ── Phase 3: Battle-Modus ───────────────────────────────────────────────── */
+/* Battle-Modus */
 
 /* Composer toggle button + model-picker popover (mirrors .web-context-wrap /
    .web-context-popover / .mini-toggle right next to it). */
@@ -1964,7 +1949,7 @@ textarea::placeholder { color: var(--muted); }
 }
 
 
-/* ── Bubble voice controls ───────────────────────────────────────────────── */
+/* Bubble voice controls */
 
 .bubble-voice-controls {
   display: inline-flex;
@@ -1981,9 +1966,7 @@ textarea::placeholder { color: var(--muted); }
 .bubble-voice-btn:hover       { color: var(--text); border-color: var(--accent); }
 .bubble-voice-btn.playing     { color: var(--red); border-color: var(--red); animation: voice-pulse 1.2s ease-in-out infinite; }
 
-/* Pause/Resume — only shown while this bubble is the one reading aloud,
-   same idea and icon set as the main input-row control (kiconnect-voice.js
-   sets its innerHTML to SVG_PAUSE / SVG_RESUME at runtime). */
+/* Pause/Resume shown only while this bubble is reading aloud; matches the main input-row control. */
 .bubble-voice-pause-btn {
   background: var(--surface2); border: 1px solid var(--border);
   color: var(--muted); padding: 3px 6px;
@@ -1994,18 +1977,12 @@ textarea::placeholder { color: var(--muted); }
 .bubble-voice-pause-btn:hover { color: var(--text); border-color: var(--accent); }
 
 
-/* ── Print ────────────────────────────────────────────────────────────────── */
+/* Print */
 @media print {
-  /* Force actual page/paper white regardless of the active theme's dark
-     --bg — otherwise the color-adjust:exact rule below (needed for
-     .note-print/MathJax backgrounds) also force-prints this dark body
-     background as solid black bars wherever no bubble covers it. */
+  /* Force page white regardless of theme; otherwise color-adjust:exact below also force-prints the dark body bg. */
   html, body { background: #fff !important; }
 
-  /* Force these specific elements' backgrounds to actually print (Chrome/
-     Edge drop them by default). Scoped narrowly — not `*` — so we don't
-     also force-print the dark theme's page/panel backgrounds. Without
-     this, .note-print looks pale and MathJax's stretchy glyphs vanish. */
+  /* Force these elements' backgrounds to print (Chrome/Edge drop them by default); scoped narrowly to avoid printing dark-theme panels too. */
   .note-print, .bubble, .math-block, .math-inline, mjx-container, mjx-container * {
     -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important;
   }
@@ -2148,7 +2125,7 @@ textarea::placeholder { color: var(--muted); }
   }
 }
 
-/* ── Panel Icon Toolbar ──────────────────────────────────────────── */
+/* Panel Icon Toolbar */
 .panel-toolbar {
   display: flex;
   align-items: center;
@@ -2218,7 +2195,7 @@ textarea::placeholder { color: var(--muted); }
   white-space: nowrap;
 }
 
-/* ── Tuning Limits Card ──────────────────────────────────────────── */
+/* Tuning Limits Card */
 .tuning-limits-card {
   background: var(--surface2);
   border: 1px solid var(--border);

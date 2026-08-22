@@ -1,12 +1,10 @@
-// ================================================================
 // kiconnect-voice.js  –  Speech input & speech output (Web Speech API)
 // Version 2.1 – fully revised
-// ================================================================
 
 (function () {
   'use strict';
 
-  // ── Settings ─────────────────────────────────────────────────
+  // Settings
   const STORAGE_KEY = 'kic_voice_settings';
 
   function loadSettings() {
@@ -34,13 +32,12 @@
     ...loadSettings(),
   };
 
-  // Hard safety cap so listening can never run away indefinitely even if
-  // silence detection somehow never fires (background noise, muted mic, …).
-  // Not user-configurable on purpose — it's a backstop, not a feature.
+  // Hard safety cap so listening never runs away indefinitely if silence
+  // detection somehow never fires. Not user-configurable — it's a backstop.
   var STT_MAX_LISTEN_MS = 90000;
 
-  // ── Bridge to the Tuning panel's Audio section (kiconnect.js) ──────
-  // Provider choices live in `vs` (localStorage); API keys stay encrypted in
+  // Bridge to the Tuning panel's Audio section (kiconnect.js). Provider
+  // choices live in `vs` (localStorage); API keys stay encrypted in
   // config.audioProviders and are only read here, never written.
   window.kicVoiceGetSetting = function (key) { return vs[key]; };
   window.kicVoiceSetSetting = function (key, value) {
@@ -49,16 +46,15 @@
     if (key === 'dialogMode') updateDialogBadge();
   };
 
-  // ── State ──────────────────────────────────────────────────────
+  // State
   let sttActive     = false;
   let ttsActive     = false;
   let ttsPaused     = false;
   let dialogPending = false;
   let btnMic, btnTts, btnTtsPause, btnVoiceSettings;
 
-  // ── i18n helper ──────────────────────────────────────────────
-  // TRANSLATIONS/currentLang are global lexical bindings (not on window) but
-  // still accessible as plain identifiers from inside this IIFE.
+  // i18n helper. TRANSLATIONS/currentLang are global lexical bindings (not
+  // on window) but still accessible as plain identifiers inside this IIFE.
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
@@ -77,7 +73,7 @@
     return s;
   }
 
-  // ── DOM helper functions ─────────────────────────────────────
+  // DOM helper functions
   function waitForElement(id, cb, tries) {
     tries = tries || 0;
     const el = document.getElementById(id);
@@ -97,7 +93,7 @@
     setTimeout(function () { el.classList.remove('show'); }, 3000);
   }
 
-  // ── SVG icons ────────────────────────────────────────────────
+  // SVG icons
   var SVG_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg>';
 
   var SVG_MIC_STOP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/><line x1="4" y1="4" x2="20" y2="20" stroke="#e74c3c" stroke-width="2.5"/></svg>';
@@ -112,14 +108,13 @@
 
   var SVG_GEAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
-  // ── Inject CSS ────────────────────────────────────────────────
+  // Inject CSS
   function injectStyles() {
     var s = document.createElement('style');
     s.id = 'kiconnect-voice-styles';
     s.textContent = [
-      /* Grouped like .panel-toolbar in the header: a bordered "frame" around
-         the mic/TTS/settings trio so they read as one unit, distinct from
-         the other input-actions icons (attach, image, web, …). */
+      /* Grouped like .panel-toolbar in the header: a bordered frame around
+         the mic/TTS/settings trio, distinct from other input-action icons. */
       '.voice-btn-group{display:flex;align-items:center;gap:2px;background:var(--surface2,rgba(128,128,128,.08));border:1px solid var(--border,#2a2d3a);border-radius:10px;padding:3px 4px;flex-shrink:0;}',
       '.voice-btn{background:none;border:none;cursor:pointer;color:var(--muted,#888);padding:7px;border-radius:7px;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s;flex-shrink:0;}',
       '.voice-btn:hover{background:var(--surface,rgba(128,128,128,.18));color:var(--text,#eee);}',
@@ -169,31 +164,28 @@
     document.head.appendChild(s);
   }
 
-  // ── Button status ────────────────────────────────────────────
+  // Button status
   function setMicState(active) {
     sttActive = active;
     if (!btnMic) return;
     btnMic.classList.toggle('voice-active', active);
-    btnMic.title    = active ? t('voice.micStop',  'Stop recording')     : t('voice.micStart',  'Start voice input');
+    btnMic.title    = active ? t('voice.micStop')     : t('voice.micStart');
     btnMic.innerHTML = active ? SVG_MIC_STOP : SVG_MIC;
   }
 
-  // ── Unified TTS UI sync ────────────────────────────────────────────
-  // Only one thing can be read aloud at a time (see stopCurrentTtsController),
-  // so the main 🔊 button and whichever bubble's Play button is involved
-  // must always show the same play/pause state, no matter which one the
-  // user clicked ("induced" state). state: 'idle' | 'playing' | 'paused'.
-  // bubbleCtrl: the .bubble-voice-controls element that triggered playback,
-  // or null when triggered from the main button (in which case we mirror
-  // onto the last-assistant-message bubble, since the main button reads
-  // that same text).
+  // Unified TTS UI sync. Only one thing can be read aloud at a time (see
+  // stopCurrentTtsController), so the main 🔊 button and whichever bubble's
+  // Play button is involved must show the same play/pause state.
+  // state: 'idle' | 'playing' | 'paused'. bubbleCtrl: the triggering
+  // .bubble-voice-controls element, or null for the main button (mirrors
+  // onto the last-assistant-message bubble, since it reads the same text).
   function syncTtsUi(state, bubbleCtrl) {
     ttsActive = state !== 'idle';
     ttsPaused = state === 'paused';
 
     if (btnTts) {
       btnTts.classList.toggle('voice-active', ttsActive);
-      btnTts.title    = ttsActive ? t('voice.ttsStop',  'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
+      btnTts.title    = ttsActive ? t('voice.ttsStop') : t('voice.ttsStart');
       btnTts.innerHTML = ttsActive ? SVG_SPEAKER_STOP : SVG_SPEAKER;
     }
     setTtsPauseButtonState(state === 'idle' ? 'hidden' : state);
@@ -204,9 +196,8 @@
     _currentBubbleCtrl = targetBubble;
   }
 
-  // Shows/hides + relabels the little Pause/Resume button next to the main
-  // 🔊 button. 'hidden' when nothing is playing, 'playing' shows a Pause
-  // icon, 'paused' shows a Resume icon.
+  // Shows/hides + relabels the Pause/Resume button next to the main 🔊
+  // button: 'hidden'/'playing' (Pause icon)/'paused' (Resume icon).
   function setTtsPauseButtonState(state) {
     if (!btnTtsPause) return;
     if (state === 'hidden') {
@@ -216,7 +207,7 @@
     btnTtsPause.style.display = '';
     var paused = state === 'paused';
     btnTtsPause.innerHTML = paused ? SVG_RESUME : SVG_PAUSE;
-    btnTtsPause.title = paused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
+    btnTtsPause.title = paused ? t('voice.ttsResume') : t('voice.ttsPause');
   }
 
   function toggleTtsPause() {
@@ -230,7 +221,7 @@
     }
   }
 
-  // ── Insert buttons (LEFT of send button) ───────────────────
+  // Insert buttons (LEFT of send button)
   function injectButtons() {
     var actions = document.querySelector('.input-actions');
     if (!actions) return;
@@ -245,7 +236,7 @@
     btnMic.type      = 'button';
     btnMic.id        = 'voiceMicBtn';
     btnMic.className = 'voice-btn';
-    btnMic.title     = t('voice.micStart', 'Start voice input');
+    btnMic.title     = t('voice.micStart');
     btnMic.innerHTML = SVG_MIC;
     btnMic.addEventListener('click', toggleStt);
 
@@ -253,7 +244,7 @@
     btnTts.type      = 'button';
     btnTts.id        = 'voiceTtsBtn';
     btnTts.className = 'voice-btn';
-    btnTts.title     = t('voice.ttsStart', 'Read last reply aloud');
+    btnTts.title     = t('voice.ttsStart');
     btnTts.innerHTML = SVG_SPEAKER;
     btnTts.addEventListener('click', toggleTts);
 
@@ -263,7 +254,7 @@
     btnTtsPause.id        = 'voiceTtsPauseBtn';
     btnTtsPause.className = 'voice-btn';
     btnTtsPause.style.display = 'none';
-    btnTtsPause.title     = t('voice.ttsPause', 'Pause speech output');
+    btnTtsPause.title     = t('voice.ttsPause');
     btnTtsPause.innerHTML = SVG_PAUSE;
     btnTtsPause.addEventListener('click', function (e) { e.stopPropagation(); toggleTtsPause(); });
 
@@ -271,13 +262,12 @@
     btnVoiceSettings.type      = 'button';
     btnVoiceSettings.id        = 'voiceSettingsBtn';
     btnVoiceSettings.className = 'voice-gear-btn';
-    btnVoiceSettings.title     = t('voice.settingsTitle', 'Voice Settings');
+    btnVoiceSettings.title     = t('voice.settingsTitle');
     btnVoiceSettings.innerHTML = SVG_GEAR;
     btnVoiceSettings.addEventListener('click', toggleVoiceSettingsPanel);
 
     // Order: sep | [🎤 | 🔊 | ⚙] | [Send] — the trio sits inside one bordered
-    // frame (like the header's .panel-toolbar) so it reads as a single
-    // "voice" group, visually distinct from the other input-actions icons.
+    // frame (like the header's .panel-toolbar) as a distinct "voice" group.
     group.appendChild(btnMic);
     group.appendChild(btnTts);
     group.appendChild(btnTtsPause);
@@ -287,7 +277,7 @@
     // Dialog badge in header
     var dialogBadge = document.createElement('span');
     dialogBadge.id        = 'voiceDialogBadge';
-    dialogBadge.title     = t('voice.dialogStop', 'Stop dialog mode – click to stop');
+    dialogBadge.title     = t('voice.dialogStop');
     dialogBadge.textContent = '🎙️ Dialog';
     dialogBadge.addEventListener('click', function () {
       vs.dialogMode = false;
@@ -295,7 +285,7 @@
       updateDialogBadge();
       stopStt();
       stopTts();
-      showToast(t('voice.dialogStopped', 'Dialog mode stopped'));
+      showToast(t('voice.dialogStopped'));
     });
     var headerRight = document.querySelector('.header-right');
     if (headerRight) {
@@ -318,7 +308,7 @@
   }
   
 
-  // ── Settings panel ────────────────────────────────────────────
+  // Settings panel
   // Voice panel with data-i18n attributes (no full panel rebuild on language change)
   function buildVoiceSettingsPanel() {
     var panel = document.createElement('div');
@@ -545,24 +535,21 @@
       saveSettings({ dialogMode: vs.dialogMode });
       updateDialogBadge();
       if (vs.dialogMode) {
-        showToast(t('voice.dialogStarted', '💬 Dialog mode active – start microphone to begin'));
+        showToast(t('voice.dialogStarted'));
       } else {
         stopStt();
         stopTts();
-        showToast(t('voice.dialogStopped', 'Dialog mode stopped'));
+        showToast(t('voice.dialogStopped'));
       }
     });
 
     // Close
     panel.querySelector('#vsClose').addEventListener('click', closeVoiceSettingsPanel);
-    // NOTE: uses composedPath() rather than panel.contains(e.target). Several
-    // controls in here (the TTS/STT provider chips, in particular) rebuild
-    // their container's innerHTML on click, which detaches the very node
-    // that was just clicked from the DOM. By the time this bubbled listener
-    // on `document` runs, panel.contains(e.target) would then wrongly return
-    // false (a detached node has no parent) and slam the panel shut right
-    // after every click inside it. composedPath() is captured at dispatch
-    // time and stays correct regardless of later DOM mutations.
+    // Uses composedPath() rather than panel.contains(e.target): the TTS/STT
+    // provider chips rebuild their container's innerHTML on click, detaching
+    // the clicked node before this bubbled listener runs —
+    // panel.contains(e.target) would then wrongly return false and close the
+    // panel. composedPath() is captured at dispatch time and stays correct.
     document.addEventListener('click', function (e) {
       var path = (typeof e.composedPath === 'function') ? e.composedPath() : null;
       var insidePanel = path
@@ -611,27 +598,25 @@
     renderAudioEngineSection(panel);
   }
 
-  // ── Engine quick-switch chips (TTS/STT) ─────────────────────────
-  // Only lists providers that either need no key (browser) or already have
-  // one configured in the Tuning panel — so a provider only shows up here
-  // once it's actually usable, per the user's ask.
+  // Engine quick-switch chips (TTS/STT). Only lists providers that need no
+  // key (browser) or already have one configured in the Tuning panel, so a
+  // provider only shows up once it's actually usable.
   var TTS_PROVIDERS = [
-    { id: 'browser',    icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser',    nameFallback: 'Browser' },
-    { id: 'openai',     icon: '🟢', needsKey: true,  nameKey: 'audio.providerOpenAI',     nameFallback: 'OpenAI' },
-    { id: 'elevenlabs', icon: '🎙️', needsKey: true,  nameKey: 'audio.providerElevenLabs', nameFallback: 'ElevenLabs' },
-    { id: 'groq',       icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroq',       nameFallback: 'Groq' },
-    { id: 'gemini',     icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini',     nameFallback: 'Gemini' },
-    { id: 'gcloud',     icon: '☁️', needsKey: true,  nameKey: 'audio.providerGcloud',     nameFallback: 'Google Cloud TTS' },
+    { id: 'browser',    icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser' },
+    { id: 'openai',     icon: '🟢', needsKey: true,  nameKey: 'audio.providerOpenAI' },
+    { id: 'elevenlabs', icon: '🎙️', needsKey: true,  nameKey: 'audio.providerElevenLabs' },
+    { id: 'groq',       icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroq' },
+    { id: 'gemini',     icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini' },
+    { id: 'gcloud',     icon: '☁️', needsKey: true,  nameKey: 'audio.providerGcloud' },
   ];
   var STT_PROVIDERS = [
-    { id: 'browser', icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser',       nameFallback: 'Browser' },
-    { id: 'groq',    icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroqWhisper',   nameFallback: 'Groq Whisper' },
-    { id: 'gemini',  icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini',        nameFallback: 'Gemini' },
+    { id: 'browser', icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser' },
+    { id: 'groq',    icon: '⚡', needsKey: true,  nameKey: 'audio.providerGroqWhisper' },
+    { id: 'gemini',  icon: '✨', needsKey: true,  nameKey: 'audio.providerGemini' },
   ];
 
-  // Renders the chip row for one provider list into `container`, marking the
-  // currently active one; returns true if at least one provider is still
-  // locked behind a missing key (used to show/hide the "add more" link).
+  // Renders the chip row for one provider list, marking the active one;
+  // returns true if any provider is still locked behind a missing key.
   function renderProviderChips(container, providers, vsKey) {
     if (!container) return false;
     var current = vs[vsKey] || 'browser';
@@ -645,7 +630,7 @@
     available.forEach(function (p) {
       var chip = document.createElement('div');
       chip.className = 'vs-chip vs-chip-sm' + (p.id === current ? ' active' : '');
-      chip.innerHTML = '<span class="vs-chip-icon">' + p.icon + '</span><span class="vs-chip-name">' + t(p.nameKey, p.nameFallback) + '</span>';
+      chip.innerHTML = '<span class="vs-chip-icon">' + p.icon + '</span><span class="vs-chip-name">' + t(p.nameKey) + '</span>';
       chip.addEventListener('click', function () {
         vs[vsKey] = p.id;
         var o = {}; o[vsKey] = p.id; saveSettings(o);
@@ -672,9 +657,8 @@
     if (gcloudVoiceGroup) gcloudVoiceGroup.style.display = provider === 'gcloud' ? '' : 'none';
   }
 
-  // Re-renders both chip rows — called on panel build and every time the
-  // panel is opened, so newly added API keys (entered via Tuning → Audio)
-  // show up here without needing a page reload.
+  // Re-renders both chip rows on panel build/open, so newly added API keys
+  // (via Tuning → Audio) show up without a page reload.
   function renderAudioEngineSection(panel) {
     if (!panel) return;
     var ttsLocked = renderProviderChips(panel.querySelector('#vsTtsProviderRow'), TTS_PROVIDERS, 'ttsProvider');
@@ -698,7 +682,7 @@
     if (!sel || !window.speechSynthesis) return;
     var voices = speechSynthesis.getVoices();
     var prev   = sel.value;
-    sel.innerHTML = '<option value="">— ' + t('voice.defaultVoice','Default') + ' —</option>';
+    sel.innerHTML = '<option value="">— ' + t('voice.defaultVoice') + ' —</option>';
     voices.forEach(function (v) {
       var opt = document.createElement('option');
       opt.value       = v.voiceURI;
@@ -727,11 +711,9 @@
     }
   }
 
-  // Positions the panel directly above its own gear button (with viewport
-  // clamping on both axes) instead of anchoring to the send button — the
-  // old anchor meant the popup could land far from the voice group itself
-  // whenever the composer groups were reordered or wrapped onto a second
-  // line on narrow viewports.
+  // Positions the panel above its own gear button (viewport-clamped)
+  // instead of anchoring to the send button — the old anchor could land the
+  // popup far from the voice group on reordered/wrapped narrow layouts.
   function positionVoiceSettingsPanel() {
     var panel = document.getElementById('voiceSettingsPanel');
     if (!panel || !btnVoiceSettings) return;
@@ -757,12 +739,10 @@
     if (panel) panel.classList.remove('open');
   }
 
-  // ── Access to config.audioProviders (kiconnect.js, read-only) ──────
-  // `config` is not declared locally here — it resolves to kiconnect.js's
-  // top-level `let config`, a global lexical binding shared across all
-  // classic <script> tags on the page (same mechanism as TRANSLATIONS/
-  // currentLang, see the comment on t() above). kiconnect.js loads first,
-  // so config already exists by the time this file runs.
+  // Access to config.audioProviders (kiconnect.js, read-only). `config` is
+  // not declared locally — it resolves to kiconnect.js's top-level `let
+  // config`, a global lexical binding shared across script tags (same
+  // mechanism as TRANSLATIONS/currentLang above); kiconnect.js loads first.
   function audioProviderKey(provider) {
     try { return (config && config.audioProviders && config.audioProviders[provider] && config.audioProviders[provider].apiKey) || ''; }
     catch (e) { return ''; }
@@ -774,28 +754,19 @@
     try { if (typeof openTuningPanel === 'function') openTuningPanel(); } catch (e) {}
   }
   function noKeyToast(icon) {
-    showToast(icon + ' ' + t('voice.noApiKey', 'No API key set for this provider — check Tuning → Audio.'));
+    showToast(icon + ' ' + t('voice.noApiKey'));
     openAudioTuningPanel();
   }
 
-  // ── Guard against MathJax's own Explorer/Speech feature ─────────────
-  // MathJax 4's combined bundles (tex-chtml.js) ship with the "explorer" a11y
-  // extension enabled by default. On mousedown over any rendered formula it
-  // calls its own internal cancelVoice(), which — since there is only ever
-  // one global window.speechSynthesis — unconditionally kills whatever
-  // utterance is currently playing, including ours (confirmed via stack
-  // trace: cancelVoice() called from MouseDown, both inside tex-chtml.js).
-  // Intercepting the click itself turned out unreliable (MathJax's own
-  // listener setup/timing can't be relied on to lose that race). Instead we
-  // guard the shared resource directly: window.speechSynthesis.cancel() is
-  // wrapped so that while our own browser-TTS is actively speaking, any
-  // *external* caller's cancel() is swallowed instead of tearing playback
-  // down. Our own code always bypasses the wrapper via _nativeSpeechCancel,
-  // so it can still legitimately cancel (new speak() request, explicit
-  // stop()) at any time. This only matters for the 'browser' TTS engine;
-  // HTTP-based providers (OpenAI/ElevenLabs/Groq/Gemini) play through
-  // <audio> and never touch speechSynthesis, so formulas stay fully
-  // interactive with those regardless.
+  // Guard against MathJax's own Explorer/Speech feature. MathJax 4's
+  // "explorer" a11y extension calls its own cancelVoice() on formula
+  // mousedown, which kills whatever speechSynthesis utterance is playing,
+  // including ours (confirmed via stack trace). Intercepting the click
+  // itself is unreliable, so instead window.speechSynthesis.cancel() is
+  // wrapped: while our browser-TTS is speaking, external cancel() calls are
+  // swallowed; our own code bypasses the wrapper via _nativeSpeechCancel and
+  // can still cancel normally. Only matters for the 'browser' TTS engine —
+  // HTTP-based providers play through <audio> and never touch speechSynthesis.
   var _nativeSpeechCancel = null;
   var _browserEngineSpeaking = false; // true only while OUR utterance is actually playing
   (function installCancelGuard() {
@@ -804,70 +775,51 @@
     _nativeSpeechCancel = ss.cancel.bind(ss);
     ss.cancel = function () {
       if (!_browserEngineSpeaking) return _nativeSpeechCancel();
-      // Swallowed: something other than our own code (confirmed to be
-      // MathJax's formula explorer, see note above) tried to cancel the
-      // shared speechSynthesis queue while we're actively reading aloud.
-      // This is expected and harmless — playback just continues.
+      // Swallowed: something other than our own code (MathJax's formula
+      // explorer, see note above) tried to cancel while we're speaking.
+      // Expected and harmless — playback just continues.
     };
     ss.__kicCancelGuarded = true;
   })();
 
-  // ══════════════════════════════════════════════════════════════════
-  // TTS engines — one per provider, all exposing the same interface:
+  // TTS engines, one per provider, all exposing the same interface:
   //   speak(text, opts, {onstart, onend, onerror}) → {pause(), resume(), stop()}
-  // This lets speakLastAssistantMessage()/speakBubble() and the bubble
-  // Play/Pause/Resume/Stop submenu stay provider-agnostic: they just hold
-  // on to whatever controller the active engine handed back.
-  // ══════════════════════════════════════════════════════════════════
+  // Lets speakLastAssistantMessage()/speakBubble() and the bubble submenu
+  // stay provider-agnostic, just holding onto whatever controller comes back.
   var ttsEngines = {
     browser: {
       speak: function (text, opts, cbs) {
         if (!window.speechSynthesis) {
-          showToast('🔇 ' + t('voice.ttsUnavailable', 'TTS not available.'));
+          showToast('🔇 ' + t('voice.ttsUnavailable'));
           if (cbs.onerror) cbs.onerror('unavailable');
           return { pause: function () {}, resume: function () {}, stop: function () {} };
         }
         _nativeSpeechCancel();
 
-        // Chrome's native speech engine has an undocumented internal length
-        // ceiling on a single utterance: past it, speak() just does nothing
-        // at all — no onstart, no onerror, no sound, nothing. Short/medium
-        // replies are well under it so they're fine; long replies (e.g. a
-        // full long-form answer) silently go nowhere after the click, which
-        // looks exactly like a dead button. Splitting into sentence-bounded
-        // chunks and queuing them back-to-back sidesteps it entirely — same
-        // chunkTextForTts() the HTTP TTS providers already use for their own
-        // (documented) per-request limits — and the chunk boundaries are
-        // inaudible since the next utterance is queued immediately.
+        // Chrome's native speech engine has an undocumented per-utterance
+        // length ceiling: past it, speak() silently does nothing (looks like
+        // a dead button on long replies). Splitting into sentence-bounded
+        // chunks and queuing them back-to-back sidesteps it — same
+        // chunkTextForTts() the HTTP TTS providers use for their documented
+        // limits — with inaudible chunk boundaries since the next utterance
+        // queues immediately.
         var chunks = chunkTextForTts(text, BROWSER_TTS_CHUNK_MAX_CHARS);
         var chunkIdx = 0;
         var utter = null;
 
-        // ── Reliability workarounds for well-known Web Speech API bugs ──
-        // 1) Chrome/Edge sometimes silently drop an utterance if speak() is
-        //    called synchronously right after cancel() — the queue hasn't
-        //    been flushed yet. Deferring to a macrotask avoids that.
-        // 2) Calling pause() before the utterance has actually started
-        //    (i.e. before onstart fires) is silently ignored by Chrome —
-        //    speech.speaking is still false at that point, so pause() has
-        //    nothing to act on and the utterance just plays through as if
-        //    nothing happened. We buffer an early pause() request and apply
-        //    it as soon as onstart fires.
-        // 3) Chrome stops firing progress on long utterances (~15s+) if the
-        //    engine is left untouched — a periodic harmless pause()+resume()
-        //    "kick" while actively speaking (not while intentionally paused)
-        //    prevents playback from silently dying partway through, which
-        //    otherwise looks exactly like "stop" firing on its own.
-        // 4) The kick itself (3) can misfire: on some Chrome builds, calling
-        //    pause() immediately followed by resume() occasionally makes the
-        //    engine tear the utterance down instead of just pausing it —
-        //    speechSynthesis.speaking flips to false and onerror fires with
-        //    'interrupted'/'canceled', indistinguishable from real outside
-        //    interference. Confirmed via event logging: this fires with *no*
-        //    preceding user interaction, only after a kick. Since we know
-        //    our own last kick's timestamp, an error arriving right after it
-        //    is treated as a kick self-abort, not a real stop: we resume
-        //    speaking from the last known word boundary instead of giving up.
+        // Reliability workarounds for well-known Web Speech API bugs:
+        // 1) Chrome/Edge can silently drop an utterance if speak() runs right
+        //    after cancel(), before the queue flushes — defer to a macrotask.
+        // 2) pause() before onstart fires is silently ignored by Chrome —
+        //    buffer an early pause() and apply it once onstart fires.
+        // 3) Chrome stops firing progress on long utterances (~15s+) if
+        //    left untouched — a periodic harmless pause()+resume() "kick"
+        //    while speaking prevents it from silently dying.
+        // 4) That kick can itself misfire on some Chrome builds, tearing the
+        //    utterance down (onerror 'interrupted'/'canceled', confirmed via
+        //    event logging to only follow a kick, never real user action).
+        //    An error right after our last kick is treated as a kick
+        //    self-abort, not a real stop: resume from the last word boundary.
         var started = false, pendingPause = false, userPaused = false, keepAliveTimer = null;
         var canceled = false; // true once stop() has been called, even before speak() was actually issued
         var lastKickAt = 0;   // timestamp of the most recent keep-alive pause()/resume() kick
@@ -876,17 +828,12 @@
         var MAX_RECOVERY_ATTEMPTS = 5;
         var KICK_ERROR_WINDOW_MS = 1500; // error within this window of a kick is blamed on the kick
 
-        // The keep-alive kick below works around a Chrome bug where
-        // speechSynthesis silently stalls if left untouched for ~15s+.
-        // That bug is specific to *network* voices (Google's cloud voices
-        // used by Chrome); it does not affect *local* voices (e.g. Windows
-        // SAPI voices exposed via speechSynthesis on Windows, or macOS
-        // system voices). Worse, on local engines pause()+resume() is a
-        // real round-trip to the OS TTS engine with variable, sometimes
-        // multi-second latency — so kicking a local voice doesn't just do
-        // nothing, it introduces an audible, unpredictable-length gap
-        // every ~12s, which is exactly what this "kick" was meant to
-        // prevent. So: only arm the kick for non-local voices.
+        // The keep-alive kick works around a Chrome bug where speechSynthesis
+        // stalls after ~15s+ on *network* voices only — it doesn't affect
+        // *local* voices (Windows SAPI, macOS system). On local engines,
+        // pause()+resume() is a real OS round-trip with unpredictable
+        // multi-second latency, so kicking one introduces the exact audible
+        // gap the kick was meant to prevent. Only arm it for non-local voices.
         function isLocalVoice() {
           try {
             var voices = speechSynthesis.getVoices();
@@ -894,10 +841,8 @@
             if (opts.voiceURI) {
               match = voices.filter(function (v) { return v.voiceURI === opts.voiceURI; });
             } else {
-              // No explicit voice chosen in settings — the engine falls back
-              // to its own default voice, so check *that* one. On Windows,
-              // if no cloud voice is installed/reachable, the default is
-              // typically a local SAPI voice.
+              // No explicit voice chosen — check the engine's default voice
+              // instead. On Windows, that default is typically local SAPI.
               match = voices.filter(function (v) { return v.default; });
             }
             return !!(match.length && match[0].localService);
@@ -930,13 +875,10 @@
           return u;
         }
 
-        // Wires up on{start,boundary,end,error} on a given utterance so the
-        // initial utterance, any recovery-restart utterance, and any
-        // next-chunk utterance all behave identically. `isRestart` suppresses
-        // cbs.onstart() so callers don't see a second "speech started"
-        // callback for the same logical speak() — that covers both kick
-        // recovery restarts and chunk-to-chunk advances (only the very first
-        // chunk's first attempt should ever fire cbs.onstart).
+        // Wires up on{start,boundary,end,error} identically for the initial,
+        // recovery-restart, and next-chunk utterances. `isRestart` suppresses
+        // cbs.onstart() so callers don't get a second "started" callback for
+        // kick recoveries or chunk advances (only the first attempt fires it).
         function attachHandlers(u, isRestart) {
           u.onstart = function () {
             started = true;
@@ -953,9 +895,8 @@
             if (canceled) { _browserEngineSpeaking = false; return; }
             chunkIdx++;
             if (chunkIdx < chunks.length) {
-              // More chunks queued — this is an internal seam, not the end
-              // of the reply, so no cbs.onend() here; playChunk() below
-              // fires a fresh onstart-suppressed utterance immediately.
+              // More chunks queued — an internal seam, not the reply's end,
+              // so no cbs.onend() here; playChunk() fires the next chunk.
               lastBoundaryIdx = 0;
               recoveryAttempts = 0;
               playChunk(chunkIdx);
@@ -964,16 +905,12 @@
               if (cbs.onend) cbs.onend();
             }
           };
-          // event.error is 'canceled'/'interrupted' whenever *anything* calls
-          // speechSynthesis.cancel() — including our own stop()/pause() below
-          // (expected, already flagged via `canceled`/`userPaused`), our own
-          // keep-alive kick misfiring (see note 4 above — recovered silently
-          // below), or genuine outside interference (another script, an
-          // extension, a browser/OS accessibility feature). MathJax's own
-          // formula-explorer cancel() calls are now blocked before they ever
-          // reach here (see installCancelGuard above), so this should mostly
-          // only ever see our own expected cancels and the rare real kick
-          // misfire from here on.
+          // event.error is 'canceled'/'interrupted' whenever anything calls
+          // speechSynthesis.cancel(): our own stop()/pause() (expected), our
+          // keep-alive kick misfiring (note 4 above, recovered silently
+          // below), or real outside interference. MathJax's own cancel()
+          // calls are blocked before reaching here (see installCancelGuard),
+          // so this mostly sees our own cancels and rare kick misfires.
           u.onerror = function (ev) {
             clearKeepAlive();
             var reason = (ev && ev.error) || 'unknown';
@@ -1001,14 +938,12 @@
           };
         }
 
-        // Re-issues the remainder of the CURRENT chunk as a fresh utterance,
-        // carrying over voice/rate/pitch/lang. Used for kick recovery; shares
-        // the same wiring path as normal chunk playback, so pause()/resume()/
-        // stop() below keep working transparently against whichever
-        // utterance is currently live (they close over the mutable `utter`
-        // variable). Mutates chunks[chunkIdx] to the remaining text so
-        // onboundary's charIndex (relative to whatever utterance is live)
-        // and any *second* recovery within the same chunk stay consistent.
+        // Re-issues the remainder of the CURRENT chunk as a fresh utterance
+        // for kick recovery, sharing the same wiring as normal chunk
+        // playback so pause()/resume()/stop() keep working transparently
+        // (they close over the mutable `utter`). Mutates chunks[chunkIdx] to
+        // the remaining text so onboundary's charIndex and any second
+        // recovery within the same chunk stay consistent.
         function restartFrom(charIndex) {
           if (canceled) return;
           var remaining = chunks[chunkIdx].slice(charIndex);
@@ -1029,10 +964,9 @@
           utter = makeUtterance(chunks[idx]);
           attachHandlers(utter, /* isRestart */ idx > 0);
           setTimeout(function () {
-            // A newer speak() request may have called stop() on this very
-            // controller before this deferred call ever ran — in that case
-            // the utterance must never reach the queue, or it plays anyway
-            // right alongside whatever superseded it (see 'canceled' above).
+            // A newer speak() request may have already called stop() on this
+            // controller before this deferred call ran — don't queue the
+            // utterance, or it plays alongside whatever superseded it.
             if (canceled) return;
             speechSynthesis.speak(utter);
           }, 0);
@@ -1071,31 +1005,24 @@
     gcloud:     createChunkedHttpTtsEngine(fetchGcloudTtsBlob, GCLOUD_TTS_MAX_CHARS),
   };
 
-  // Chrome's native speechSynthesis has no *documented* per-utterance limit
-  // (unlike Groq/Cloud TTS below, which reject oversized requests outright),
-  // but in practice speak() silently no-ops well before the ~32k-char figure
-  // sometimes cited for the Web Speech API spec — the exact point seems to
-  // depend on voice/OS. Kept comfortably low so it never gets anywhere near
-  // whatever the real ceiling is on a given machine, while still being large
-  // enough that chunk seams (inaudible, but each is a fresh queue() call)
-  // stay infrequent for normal-length replies.
+  // Chrome's speechSynthesis has no documented per-utterance limit (unlike
+  // Groq/Cloud TTS below), but silently no-ops well before the ~32k-char
+  // spec figure, depending on voice/OS. Kept comfortably low so it never
+  // approaches the real ceiling, while chunk seams stay infrequent.
   var BROWSER_TTS_CHUNK_MAX_CHARS = 1000;
 
-  // Groq's Orpheus TTS models cap `input` at 200 characters per request
-  // (see https://console.groq.com/docs/text-to-speech/orpheus#limitations).
-  // Kept a little under that as safety margin for multi-byte characters.
+  // Groq's Orpheus TTS caps `input` at 200 chars/request
+  // (console.groq.com/docs/text-to-speech/orpheus#limitations); kept a bit
+  // under that for multi-byte character safety margin.
   var GROQ_TTS_MAX_CHARS = 190;
 
-  // Cloud TTS's text:synthesize endpoint caps request input at ~5000 bytes
-  // of UTF-8 text; kept well under that as safety margin for multi-byte
-  // characters (umlauts, emoji, ...) and because Chirp 3: HD in particular
-  // tends to reject very long single requests with a 400.
+  // Cloud TTS's text:synthesize endpoint caps input at ~5000 UTF-8 bytes;
+  // kept well under that for multi-byte character safety margin, and
+  // because Chirp 3: HD tends to reject very long requests with a 400.
   var GCLOUD_TTS_MAX_CHARS = 3000;
 
-  // Splits `text` into chunks no longer than `maxLen`, preferring to break
-  // on sentence boundaries (. ! ? followed by whitespace) so pauses land
-  // naturally; falls back to a hard word-boundary split for any run-on
-  // sentence longer than maxLen.
+  // Splits `text` into chunks no longer than `maxLen`, preferring sentence
+  // boundaries (. ! ? + whitespace); falls back to word-boundary splits.
   function chunkTextForTts(text, maxLen) {
     var sentences = text.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [text];
     var chunks = [];
@@ -1132,11 +1059,9 @@
   }
 
   // Wraps an async "text → audio Blob" fetcher into the common TTS engine
-  // interface, but first splits `text` into <=maxChars chunks and plays
-  // them back-to-back through one <audio> element (queue advances on
-  // `onended`). Needed for providers (Groq/Orpheus) with a short per-request
-  // input limit; onstart fires once, on the very first chunk, and onend
-  // fires once, after the last chunk finishes.
+  // interface, splitting `text` into <=maxChars chunks played back-to-back
+  // through one <audio> element (queue advances on `onended`). Needed for
+  // providers (Groq/Orpheus) with a short per-request input limit.
   function createChunkedHttpTtsEngine(fetchBlobFn, maxChars) {
     return {
       speak: function (text, opts, cbs) {
@@ -1174,10 +1099,9 @@
   }
 
   // Wraps an async "text → audio Blob" fetcher into the common TTS engine
-  // interface, playing the result through a plain <audio> element. The
-  // controller is returned synchronously (before the fetch resolves) so
-  // callers can attach it to _currentTtsController right away; pause/resume
-  // calls that land before the audio element exists are harmless no-ops.
+  // interface, playing through a plain <audio> element. Returns the
+  // controller synchronously so callers can attach it right away; early
+  // pause/resume calls before the audio element exists are harmless no-ops.
   function createHttpTtsEngine(fetchBlobFn) {
     return {
       speak: function (text, opts, cbs) {
@@ -1204,11 +1128,10 @@
     };
   }
 
-  // Extracts the provider's actual error message (e.g. Groq/OpenAI put it at
-  // error.message in the JSON body) so failures show *why* a request was
-  // rejected, not just the bare status code. Encoded into the Error's
-  // message as 'tts-http-<code>::<detail>' since the engine callback chain
-  // only passes a string through onerror(); ttsErrorToast() below decodes it.
+  // Extracts the provider's actual error message (e.g. error.message in
+  // Groq/OpenAI's JSON body) so failures show why, not just the status code.
+  // Encoded as 'tts-http-<code>::<detail>' since onerror() only passes a
+  // string; ttsErrorToast() below decodes it.
   async function ttsHttpError(res) {
     var detail = '';
     try {
@@ -1237,11 +1160,9 @@
   async function fetchGroqTtsBlob(text) {
     var apiKey = audioProviderKey('groq');
     if (!apiKey) throw new Error('no-key');
-    // 'playai-tts' was decommissioned by Groq — current model is the
-    // Orpheus v1 English TTS (max 200 chars/request, hence the chunking
-    // in createChunkedHttpTtsEngine above). Voice is user-selectable in
-    // the Voice Settings panel (vs.groqTtsVoice). See:
-    // https://console.groq.com/docs/text-to-speech/orpheus
+    // 'playai-tts' was decommissioned by Groq — current model is Orpheus v1
+    // English TTS (max 200 chars/request, hence the chunking above). Voice
+    // is user-selectable (vs.groqTtsVoice). See: console.groq.com/docs/text-to-speech/orpheus
     var voice = vs.groqTtsVoice || 'troy';
     var res = await fetch(proxyUrl('https://api.groq.com/openai/v1/audio/speech'), {
       method: 'POST',
@@ -1265,14 +1186,12 @@
     return res.blob();
   }
 
-  // Gemini's generateContent TTS returns JSON with base64-encoded *raw* PCM
-  // audio (no WAV header) at inlineData.data — unlike OpenAI/Groq/ElevenLabs,
-  // which hand back a ready-to-play audio Blob directly. So we decode the
-  // base64, read the actual sample rate out of inlineData.mimeType (looks
-  // like "audio/L16;codec=pcm;rate=24000" — don't hardcode it, Google can
-  // change it), and wrap it in a minimal 44-byte WAV header ourselves so the
-  // result is a normal playable Blob, same as every other engine here.
-  // See: https://ai.google.dev/gemini-api/docs/speech-generation
+  // Gemini's generateContent TTS returns base64-encoded *raw* PCM (no WAV
+  // header) at inlineData.data, unlike OpenAI/Groq/ElevenLabs which hand
+  // back a ready-to-play Blob. Decode the base64, read the sample rate from
+  // inlineData.mimeType (don't hardcode it, Google can change it), and wrap
+  // in a minimal 44-byte WAV header for a normal playable Blob.
+  // See: ai.google.dev/gemini-api/docs/speech-generation
   function pcmBase64ToWavBlob(base64, sampleRate, numChannels, bitsPerSample) {
     var binary = atob(base64);
     var len = binary.length;
@@ -1304,11 +1223,10 @@
     var apiKey = audioProviderKey('gemini');
     if (!apiKey) throw new Error('no-key');
     var voice = vs.geminiTtsVoice || 'Kore';
-    // gemini-2.5-flash-preview-tts is the broadly-available TTS model on the
-    // free AI Studio tier; see https://ai.google.dev/gemini-api/docs/speech-generation
-    // Key goes in the ?key= query param rather than the x-goog-api-key header,
-    // since the proxy's forwarded-header allowlist (kiconnect-proxy.py) doesn't
-    // include that header and this avoids having to widen it.
+    // gemini-2.5-flash-preview-tts is the broadly-available free-tier model;
+    // see ai.google.dev/gemini-api/docs/speech-generation
+    // Key goes in ?key= rather than x-goog-api-key, since the proxy's
+    // forwarded-header allowlist doesn't include that header.
     var res = await fetch(proxyUrl('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=' + encodeURIComponent(apiKey)), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1333,8 +1251,7 @@
   }
 
   // Decodes a plain base64 string (no data: prefix) into a Blob — used for
-  // Cloud TTS, which — unlike Gemini's generateContent — hands back audio
-  // already encoded as real MP3 bytes, so no PCM/WAV wrapping is needed here.
+  // Cloud TTS, which hands back real MP3 bytes directly, no PCM/WAV wrapping.
   function base64ToBlob(base64, mimeType) {
     var binary = atob(base64);
     var bytes = new Uint8Array(binary.length);
@@ -1343,15 +1260,11 @@
   }
 
   // Google Cloud Text-to-Speech (Chirp 3: HD) — a separate product from the
-  // Gemini API above: different auth key (needs a GCP project with the
-  // Text-to-Speech API enabled + a billing account, not just an AI Studio
-  // key), different domain (texttospeech.googleapis.com), but a much more
-  // generous *monthly* free quota instead of Gemini's per-minute rate limit.
-  // Voice names follow "<languageCode>-Chirp3-HD-<Persona>", e.g.
-  // "de-DE-Chirp3-HD-Aoede" — languageCode comes from opts.lang (the same
-  // BCP-47 code used for STT, see vs.sttLang) since Cloud TTS needs the
-  // voice to actually match the target language.
-  // See: https://cloud.google.com/text-to-speech/docs/chirp3-hd
+  // Gemini API above: different auth (GCP project + billing, not an AI
+  // Studio key), different domain, generous monthly free quota instead of
+  // Gemini's per-minute limit. Voice names follow
+  // "<languageCode>-Chirp3-HD-<Persona>"; languageCode comes from opts.lang
+  // (same BCP-47 code used for STT). See: cloud.google.com/text-to-speech/docs/chirp3-hd
   async function fetchGcloudTtsBlob(text, opts) {
     var apiKey = audioProviderKey('gcloud');
     if (!apiKey) throw new Error('no-key');
@@ -1372,26 +1285,24 @@
     return base64ToBlob(data.audioContent, 'audio/mp3');
   }
 
-  // ══════════════════════════════════════════════════════════════════
-  // STT engines — one per provider, common interface:
+  // STT engines, one per provider, common interface:
   //   start(opts, {onstart, oninterim, onend, onerror}) → {stop()}
-  // Groq/Whisper has no streaming API, so oninterim is never called for it
-  // (a "recognizing…" placeholder is shown in the textarea instead — see
-  // startStt() below); the transcript only arrives once, in onend().
-  // ══════════════════════════════════════════════════════════════════
+  // Groq/Whisper has no streaming API, so oninterim never fires for it (a
+  // "recognizing…" placeholder shows instead — see startStt() below); the
+  // transcript arrives once, in onend().
   var sttEngines = {
     browser: {
       start: function (opts, cbs) {
         var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
-          showToast('⚠️ ' + t('voice.sttUnavailable', 'Web Speech API not available.'));
+          showToast('⚠️ ' + t('voice.sttUnavailable'));
           if (cbs.onerror) cbs.onerror('unavailable');
           return { stop: function () {} };
         }
         var rec = new SR();
-        // continuous=true + our own silence timer (instead of the browser's
-        // built-in, non-configurable, often-too-short end-of-speech cutoff)
-        // so vs.sttSilenceMs actually governs when listening stops.
+        // continuous=true + our own silence timer, instead of the browser's
+        // non-configurable end-of-speech cutoff, so vs.sttSilenceMs governs
+        // when listening actually stops.
         rec.continuous     = true;
         rec.interimResults = true;
         rec.lang           = opts.lang;
@@ -1426,10 +1337,9 @@
           if (cbs.onend) cbs.onend(finalText.trim());
         };
         rec.onerror = function (e) {
-          // 'no-speech' fires naturally with continuous=true whenever the
-          // engine briefly hears nothing; our own silence timer already
-          // handles the "stop after N seconds of quiet" behavior, so treat
-          // a no-speech error as a normal end rather than a real failure.
+          // 'no-speech' fires naturally with continuous=true on brief
+          // silence; our own timer already handles "stop after N seconds
+          // quiet", so treat this as a normal end, not a real failure.
           if (e.error === 'no-speech') return;
           if (silenceTimer) clearTimeout(silenceTimer);
           if (maxTimer) clearTimeout(maxTimer);
@@ -1444,11 +1354,10 @@
     gemini: createRecorderSttEngine(transcribeWithGemini),
   };
 
-  // Shared "record with mic-level silence detection, then send the whole
-  // clip to an HTTP transcription endpoint" engine — used by both Groq
-  // (Whisper) and Gemini (no dedicated STT endpoint, so it's fed the audio
-  // via a normal multimodal generateContent call instead). `transcribeFn`
-  // is `(blob, lang) => Promise<string>`.
+  // Shared "record with mic-level silence detection, send the whole clip to
+  // an HTTP transcription endpoint" engine — used by Groq (Whisper) and
+  // Gemini (fed via a multimodal generateContent call instead of a
+  // dedicated STT endpoint). `transcribeFn` is `(blob, lang) => Promise<string>`.
   function createRecorderSttEngine(transcribeFn) {
     return {
       start: function (opts, cbs) {
@@ -1464,11 +1373,10 @@
           else if (stream) stream.getTracks().forEach(function (tr) { tr.stop(); });
         }
 
-        // Groq's transcription endpoint has no streaming/VAD of its own — the
-        // MediaRecorder would otherwise just record forever until the mic
-        // button is clicked. We run a small Web Audio API level meter on the
-        // live stream and auto-stop once volume has stayed under a quiet
-        // threshold for vs.sttSilenceMs.
+        // Groq's transcription endpoint has no streaming/VAD — without this,
+        // MediaRecorder would record forever until clicked again. A small
+        // Web Audio API level meter auto-stops once volume stays under a
+        // quiet threshold for vs.sttSilenceMs.
         function startSilenceDetection(liveStream) {
           try {
             var Ctx = window.AudioContext || window.webkitAudioContext;
@@ -1575,10 +1483,9 @@
     });
   }
 
-  // Gemini has no dedicated transcription endpoint (unlike Groq/Whisper) —
-  // the recorded clip is sent as an inline audio part in a normal multimodal
-  // generateContent call, with a prompt instructing the model to return only
-  // the transcript. See: https://ai.google.dev/gemini-api/docs/audio
+  // Gemini has no dedicated transcription endpoint — the clip is sent as an
+  // inline audio part in a multimodal generateContent call, prompting the
+  // model to return only the transcript. See: ai.google.dev/gemini-api/docs/audio
   async function transcribeWithGemini(blob, lang) {
     var apiKey = audioProviderKey('gemini');
     if (!apiKey) throw new Error('no-key');
@@ -1604,7 +1511,7 @@
     return text.trim();
   }
 
-  // ── STT (provider-agnostic entry points) ────────────────────────
+  // STT (provider-agnostic entry points)
   var currentSttSession = null;
 
   function toggleStt() {
@@ -1623,7 +1530,7 @@
     if (provider !== 'browser' && ta) {
       // No streaming STT for HTTP providers → show a placeholder instead of
       // live interim text, replaced with the real transcript in onend().
-      ta.value = base + (base ? ' ' : '') + '⏺ ' + t('voice.recognizing', 'recognizing…');
+      ta.value = base + (base ? ' ' : '') + '⏺ ' + t('voice.recognizing');
       if (typeof autoResize === 'function') autoResize(ta);
     }
 
@@ -1660,10 +1567,10 @@
         currentSttSession = null;
         var el = getTextarea();
         if (el) delete el.dataset.voiceBase;
-        if      (err === 'not-allowed' || err === 'mic-denied') showToast('🎤 ' + t('voice.micDenied', 'Microphone access denied.'));
-        else if (err === 'no-speech')                           showToast('🔇 ' + t('voice.noSpeech',  'No speech detected.'));
+        if      (err === 'not-allowed' || err === 'mic-denied') showToast('🎤 ' + t('voice.micDenied'));
+        else if (err === 'no-speech')                           showToast('🔇 ' + t('voice.noSpeech'));
         else if (err === 'no-key')                               noKeyToast('🎤');
-        else if (err === 'unavailable')                          showToast('⚠️ ' + t('voice.sttUnavailable', 'Speech recognition not available.'));
+        else if (err === 'unavailable')                          showToast('⚠️ ' + t('voice.sttUnavailable'));
         else                                                     showToast('STT: ' + err);
       },
     });
@@ -1674,7 +1581,7 @@
     setMicState(false);
   }
 
-  // ── TTS (provider-agnostic entry points) ─────────────────────────
+  // TTS (provider-agnostic entry points)
   var _currentTtsController = null;
 
   function stopCurrentTtsController() {
@@ -1682,11 +1589,10 @@
     _currentTtsController = null;
   }
 
-  // Speaks `text` with whatever provider is currently selected (vs.ttsProvider),
-  // routing pause/resume/stop through whichever engine ends up handling it.
-  // Any previously playing TTS (browser or HTTP) is stopped first — only one
-  // thing can read aloud at a time, same as the original speechSynthesis-only
-  // behavior.
+  // Speaks `text` with the currently selected provider (vs.ttsProvider),
+  // routing pause/resume/stop through whichever engine handles it. Any
+  // previously playing TTS is stopped first — only one thing reads aloud
+  // at a time.
   function speakTextWithCurrentProvider(text, cbs) {
     stopCurrentTtsController();
     var provider = vs.ttsProvider || 'browser';
@@ -1705,12 +1611,10 @@
     return _currentTtsController;
   }
 
-  // Surfaces TTS failures that would otherwise fail silently (previously
-  // onerror just reset UI state with no user-visible feedback). Decodes
+  // Surfaces TTS failures that would otherwise fail silently. Decodes
   // 'tts-http-<code>::<detail>' (see ttsHttpError above) into a readable
-  // message, including the provider's own error text when available —
-  // also logged to console in full, since the toast auto-hides quickly and
-  // long provider messages get truncated there.
+  // message, also logged to console in full since the toast auto-hides
+  // quickly and truncates long provider messages.
   function ttsErrorToast(provider, err) {
     if (!err || err === 'no-key') return; // 'no-key' is already toasted by noKeyToast() before the engine even runs
     var httpMatch = /^tts-http-(\d+)(?:::([\s\S]*))?$/.exec(err);
@@ -1720,25 +1624,24 @@
       if (detail) console.error('[TTS ' + provider + '] HTTP ' + code + ':', detail);
       var suffix = detail ? ' — ' + (detail.length > 140 ? detail.slice(0, 140) + '…' : detail) : '';
       if (code === '429') {
-        showToast('⏳ ' + tv('voice.ttsQuota', 'TTS ({provider}): quota/balance exhausted (429).{suffix}', { provider, suffix }));
+        showToast('⏳ ' + tv('voice.ttsQuota', { provider, suffix }));
       } else if (code === '401' || code === '403') {
-        showToast('🔑 ' + tv('voice.ttsAuth', 'TTS ({provider}): API key invalid or rejected ({code}).{suffix}', { provider, code, suffix }));
+        showToast('🔑 ' + tv('voice.ttsAuth', { provider, code, suffix }));
       } else if (code === '400') {
-        showToast('⚠️ ' + tv('voice.ttsBadRequest', 'TTS ({provider}): request rejected (400){suffix}.', { provider, suffix: suffix || ' — check model/parameters' }));
+        showToast('⚠️ ' + tv('voice.ttsBadRequest', { provider, suffix: suffix || ' — check model/parameters' }));
       } else {
-        showToast('⚠️ ' + tv('voice.ttsHttpError', 'TTS ({provider}): error HTTP {code}.{suffix}', { provider, code, suffix }));
+        showToast('⚠️ ' + tv('voice.ttsHttpError', { provider, code, suffix }));
       }
       return;
     }
     if (err === 'audio-play-blocked') {
-      showToast('🔇 ' + t('voice.ttsBlocked', 'Playback blocked — please click the page and try again.'));
+      showToast('🔇 ' + t('voice.ttsBlocked'));
     } else if (err === 'audio-playback-error') {
-      showToast('⚠️ ' + t('voice.ttsPlaybackError', 'Audio playback error.'));
+      showToast('⚠️ ' + t('voice.ttsPlaybackError'));
     } else if (err.indexOf('speechSynthesis-error:') === 0) {
-      // Unexpected external cancellation (see utter.onerror above) — the
-      // plain 'speechSynthesis-error' (our own intentional stop/pause) is
-      // still silent on purpose.
-      showToast('⚠️ ' + tv('voice.ttsInterrupted', 'Speech output was interrupted from outside the app ({reason}).', { reason: err.slice('speechSynthesis-error:'.length) }));
+      // Unexpected external cancellation (see utter.onerror above) — our
+      // own intentional stop/pause stays silent on purpose.
+      showToast('⚠️ ' + tv('voice.ttsInterrupted', { reason: err.slice('speechSynthesis-error:'.length) }));
     } else if (err !== 'unavailable' && err !== 'speechSynthesis-error') {
       showToast('⚠️ TTS (' + provider + '): ' + err);
     }
@@ -1760,14 +1663,11 @@
     var bubble = rows[rows.length - 1].querySelector('.bubble');
     if (!bubble) return '';
     var clone = bubble.cloneNode(true);
-    // .math-inline/.math-block hold raw LaTeX source (\frac{}{}, \int, _, ^, …)
-    // until/unless MathJax has fully typeset them — and even the typeset
-    // MathJax output can carry an assistive-MathML annotation with that same
-    // raw source in its text content. Either way this garbles TTS input and,
-    // for longer formula-heavy replies, has been seen to make Chrome's
-    // network-based Google voices abort the whole utterance silently (while
-    // Edge's local Microsoft voices just mangle through it audibly) — so we
-    // strip formulas the same way code blocks are already stripped.
+    // .math-inline/.math-block hold raw LaTeX until MathJax typesets them,
+    // and even typeset output can carry raw LaTeX in an assistive-MathML
+    // annotation. Either way this garbles TTS and can make Chrome's network
+    // voices abort the whole utterance on formula-heavy replies — so strip
+    // formulas the same way code blocks are already stripped.
     clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .math-inline, .math-block').forEach(function (el) { el.remove(); });
     return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
   }
@@ -1775,7 +1675,7 @@
   function speakLastAssistantMessage(onEnd) {
     var text = getLastAssistantText();
     if (!text) {
-      showToast(t('voice.noReply', 'No reply found to read aloud.'));
+      showToast(t('voice.noReply'));
       return;
     }
     var ctrl = speakTextWithCurrentProvider(text, {
@@ -1786,11 +1686,10 @@
     if (!ctrl) syncTtsUi('idle', null);
   }
 
-  // ── Bubble TTS (per-bubble voice controls) ───────────────────────
-  // Mirrors the main input-row control's design: a 🔊 button that starts
-  // playback and, while active, doubles as Stop — plus a small Pause/Resume
-  // button that only appears during playback. Both this and the main
-  // button stay mirrored via syncTtsUi() above.
+  // Bubble TTS (per-bubble voice controls). Mirrors the main input-row
+  // control: a 🔊 button that starts playback and doubles as Stop while
+  // active, plus a Pause/Resume button shown only during playback. Both
+  // stay mirrored via syncTtsUi() above.
 
   var _currentBubbleCtrl = null;
 
@@ -1807,13 +1706,13 @@
     var active = state !== 'idle';
     if (btn) {
       btn.classList.toggle('playing', active);
-      btn.title = active ? t('voice.ttsStop', 'Stop speech output') : t('voice.readAloud', 'Read aloud');
+      btn.title = active ? t('voice.ttsStop') : t('voice.readAloud');
     }
     if (pause) {
       pause.style.display = active ? '' : 'none';
       var paused = state === 'paused';
       pause.innerHTML = paused ? SVG_RESUME : SVG_PAUSE;
-      pause.title = paused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
+      pause.title = paused ? t('voice.ttsResume') : t('voice.ttsPause');
     }
   }
 
@@ -1829,7 +1728,7 @@
 
   function speakBubble(voiceCtrlEl) {
     var text = getBubbleText(voiceCtrlEl);
-    if (!text) { showToast(t('voice.noTextToRead', 'No text to read.')); return; }
+    if (!text) { showToast(t('voice.noTextToRead')); return; }
 
     var ctrl = speakTextWithCurrentProvider(text, {
       onstart: function () { syncTtsUi('playing', voiceCtrlEl); },
@@ -1874,9 +1773,8 @@
     });
   }
 
-  // ── Dialog mode ─────────────────────────────────────────────────
-  // Watches the chat: as soon as a new AI bubble is complete,
-  // it will be read aloud and the microphone restarted afterwards.
+  // Dialog mode: watches the chat, and as soon as a new AI bubble is
+  // complete, reads it aloud and restarts the microphone afterwards.
   function hookDialogMode() {
     var messagesEl = document.getElementById('messages');
     if (!messagesEl) return;
@@ -1922,7 +1820,7 @@
     }, true);
   }
 
-  // ── Init ─────────────────────────────────────────────────────────
+  // Init
   function init() {
     injectStyles();
     waitForElement('sendBtn', function () {
@@ -1951,19 +1849,19 @@
     if (panel) { _retranslatePanelDom(panel); renderAudioEngineSection(panel); }
     // Update button titles
     if (btnMic) {
-      btnMic.title = sttActive ? t('voice.micStop', 'Stop recording') : t('voice.micStart', 'Start voice input');
+      btnMic.title = sttActive ? t('voice.micStop') : t('voice.micStart');
     }
     if (btnTts) {
-      btnTts.title = ttsActive ? t('voice.ttsStop', 'Stop speech output') : t('voice.ttsStart', 'Read last reply aloud');
+      btnTts.title = ttsActive ? t('voice.ttsStop') : t('voice.ttsStart');
     }
     if (btnTtsPause && btnTtsPause.style.display !== 'none') {
-      btnTtsPause.title = ttsPaused ? t('voice.ttsResume', 'Resume speech output') : t('voice.ttsPause', 'Pause speech output');
+      btnTtsPause.title = ttsPaused ? t('voice.ttsResume') : t('voice.ttsPause');
     }
     if (btnVoiceSettings) {
-      btnVoiceSettings.title = t('voice.settingsTitle', 'Voice Settings');
+      btnVoiceSettings.title = t('voice.settingsTitle');
     }
     var badge = document.getElementById('voiceDialogBadge');
-    if (badge) badge.title = t('voice.dialogStop', 'Stop dialog mode – click to stop');
+    if (badge) badge.title = t('voice.dialogStop');
   };
   
 })();
