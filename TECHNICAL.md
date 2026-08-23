@@ -6,7 +6,9 @@ This file contains the technical details of Ki-Connect. A general, non-technical
 
 ## Overview
 
-Ki-Connect is a locally-run, client-side-encrypted chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, DeepSeek, KI Connect NRW, and any OpenAI-compatible server). The underlying application (Python + a web front end) is platform-independent, but this release is packaged and tested for Windows: the provided start scripts (`START.bat`, `START_portable.bat`, `update.bat`) are Windows batch files and will not run as-is on macOS or Linux. The application supports multiple local, separately encrypted accounts on the same installation, which makes it suitable for a small group of trusted users sharing one machine; it is not intended as a multi-tenant deployment for a company with many independent, mutually untrusted users, since all accounts share the same server process and host machine.
+Ki-Connect is a locally-run, client-side-encrypted chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, DeepSeek, MiniMax, Zhipu AI/Z.ai (GLM), Moonshot AI (Kimi), KI Connect NRW, and any OpenAI-compatible server). The underlying application (Python + a web front end) is platform-independent, but this release is packaged and tested for Windows: the provided start scripts (`START.bat`, `START_portable.bat`, `update.bat`) are Windows batch files and will not run as-is on macOS or Linux. The application supports multiple local, separately encrypted accounts on the same installation, which makes it suitable for a small group of trusted users sharing one machine; it is not intended as a multi-tenant deployment for a company with many independent, mutually untrusted users, since all accounts share the same server process and host machine.
+
+> As of v4.0.0, the front end is organized as ~20 ES modules under `comm/js/` instead of one large `kiconnect.js` file plus loosely-coupled bolt-on scripts; this was a "no functional change" internal refactor. See "File structure" below and `comm/ARCHITECTURE.md` for details.
 
 ---
 
@@ -16,10 +18,11 @@ Ki-Connect is a locally-run, client-side-encrypted chat client for various AI pr
 - Password-protected multi-account sessions via PBKDF2 (600,000 iterations, random salt per account)
 - Brute-force protection: exponential lockout starting at the 5th failed attempt (30s → 60s → 120s → …), not bypassable by clearing the cache
 - Browser-independent persistence: data lives in `./datas/` on the local server; any browser (Chrome, Firefox, Edge, …) accesses the same accounts
-- Extended Thinking / Reasoning for supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.)
-  - Anthropic Claude 4+ (Opus, Sonnet, Haiku): Adaptive Thinking with effort levels (low/medium/high) via the `output_config` API
+- Extended Thinking / Reasoning for supported models (Claude 3.7 and up, GPT-5.x thinking variants, Grok, DeepSeek R1, Gemini 2.5+, MiniMax, GLM, Kimi K2-Thinking/K3, etc.)
+  - Anthropic Claude 4+ (Opus, Sonnet, Haiku, Fable): Adaptive Thinking with effort levels (low/medium/high) via the `output_config` API
   - Anthropic Claude 3.7: legacy token budget (1k-32k) plus prompt caching (roughly 90% fewer tokens)
-  - OpenAI: reasoning effort (low/medium/high)
+  - OpenAI and most other providers: discrete reasoning-effort levels (low/medium/high)
+  - Fixed-thinking models (e.g. MiniMax): on/off only, no effort slider
 - Optional, user-activated web search: when enabled via the web-search toggle in the toolbar, messages are augmented with live web results before being sent to the AI. It is off by default and only runs when the user turns it on (or sets it to "Always")
   - Modes: manual button, Auto (for current-events queries), Always, or Off
   - Free engines (no key required): DuckDuckGo, Startpage, SearXNG, Qwant, Yahoo - with automatic fallback chaining
@@ -60,7 +63,8 @@ Ki-Connect is a locally-run, client-side-encrypted chat client for various AI pr
 - Responsive design with adjustable chat width and a resizable sidebar
 - Agent profiles with individual system prompts, temperatures, and model limits
 - Branching & regeneration: branch from any message; regenerated replies are stored as siblings with full history preserved
-- **Coding agent** (`kiconnect-agent.js`): any sidebar folder can be linked to a real folder on disk and focused as a "project." The focused chat's messages then run through an agentic tool loop (read/write/edit/search/move files, list/browse folders, optional shell execution) using the same model/provider/thinking settings already selected in the header - see "Coding agent" below
+- **Coding agent** (`js/agent.js`): any sidebar folder can be linked to a real folder on disk and focused as a "project." The focused chat's messages then run through an agentic tool loop (read/write/edit/copy/move files, list/browse folders, optional shell execution) using the same model/provider/thinking settings already selected in the header - see "Coding agent" below. Optional per-project git checkpoints snapshot the working folder before each mutating tool call.
+- **Knowledge base / RAG** (`js/db.js`): index a folder or an explicit set of files (`.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, and more) into a locally stored, encrypted, searchable knowledge base, then pull the most relevant chunks into a chat automatically - see "Knowledge base" below
 
 ---
 
@@ -77,11 +81,13 @@ Ki-Connect no longer loads its JS libraries from a CDN. All required libraries a
 
 An internet connection is still required once, to download `_render.zip` on first launch (or when the `_render` folder is empty). After that, the application can run fully offline with respect to these libraries.
 
-On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (for server-side AES-GCM encryption/decryption of the agent project registry under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config). It additionally uses `pypdf`, `python-docx`, `python-pptx`, `openpyxl`, and `numpy` for the knowledge base (RAG) feature - these degrade gracefully (that part of the feature is simply unavailable) if missing, rather than preventing the proxy from starting. `START.bat`/`START_portable.bat` install all nine automatically; manual installs must include them explicitly.
+On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (mandatory - the proxy exits at startup if any is missing) for server-side AES-GCM encryption/decryption of the agent/knowledge-base registries under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config. It additionally uses `pypdf`, `python-docx`, `python-pptx`, and `openpyxl` for text extraction from the corresponding file types in the knowledge base, and `numpy` for faster embedding similarity search - each is checked individually at import time and the knowledge base feature degrades gracefully per file/feature (clear error, rather than a crash) if one is missing, and the proxy itself still starts fine without any of them. `START.bat`/`START_portable.bat` install all nine packages automatically; manual installs can use `pip install -r requirements.txt` for the four mandatory ones, then uncomment whichever optional knowledge-base extras are needed.
 
 ---
 
 ## File structure
+
+As of v4.0.0, the front end is a set of real ES modules under `comm/js/` rather than one monolithic script. `kiconnect.js`, `kiconnect-agent.js`, `kiconnect-voice.js`, and `kiconnect-db.js` no longer exist - don't look for them; if a code comment still mentions one, it's a historical "extracted from kiconnect.js" attribution, not a sign the file survived.
 
 ```
 kiconnect/
@@ -90,18 +96,31 @@ kiconnect/
 ├── update.bat                   (fetches the latest program files from GitHub)
 ├── python/                      (portable use only: embedded Python)
 └── comm/
-    ├── kiconnect.html
-    ├── kiconnect.css
-    ├── kiconnect.js
-    ├── kiconnect-agent.js           (coding-agent module, bolt-on like kiconnect-voice.js)
+    ├── kiconnect.html               (entry point; loads the module scripts below)
+    ├── kiconnect.css                (~2,100 lines, all styling)
     ├── kiconnect-mathjax-config.js  (MathJax config, must load before _render/latex/tex-chtml.js)
-    ├── kiconnect-proxy.py
-    ├── kiconnect-languages-i18n.js
-    ├── kiconnect-voice.js
+    ├── kiconnect-languages-i18n.js  (classic script; translation tables shared with every module)
+    ├── kiconnect-proxy.py           (local Flask/Waitress server: static files, /proxy, /store, /agent, /kb)
+    ├── requirements.txt
+    ├── js/
+    │   ├── core/        boot.js, state.js, theme.js, i18n.js
+    │   ├── auth/         crypto.js, accounts.js, storage.js
+    │   ├── providers/    provider-crud.js, provider-models.js
+    │   ├── chat/         chat-sidebar.js, chat-render.js, chat-send.js, chat-attachments.js
+    │   ├── websearch/    web-search.js
+    │   ├── ui/           profiles.js, tour.js, misc-ui.js
+    │   ├── voice.js       (speech input/output, formerly kiconnect-voice.js)
+    │   ├── agent.js       (coding-agent module, formerly kiconnect-agent.js)
+    │   └── db.js          (knowledge-base/RAG module, formerly kiconnect-db.js)
+    ├── _lang/                (per-language translation files)
     └── _render/              (bundled local libraries: MathJax, marked.js, DOMPurify, PDF.js)
 ```
 
-The old standalone PDF.js worker-init script has been folded directly into `kiconnect.js` (it doesn't need to run before anything else, unlike the MathJax config).
+`kiconnect.html` loads four `<script type="module">` tags - `js/core/boot.js` (the application itself), `js/voice.js`, `js/agent.js`, and `js/db.js` - plus `kiconnect-languages-i18n.js` as a classic (non-module) script beforehand, so its translation tables are visible to every module as ordinary shared-realm globals. Everything else is pulled in transitively via `import`.
+
+`js/voice.js`, `js/agent.js`, and `js/db.js` no longer bolt onto the host app by reassigning its functions or writing to `window.X` (that pattern doesn't work with ES modules). Instead they register into it through an explicit hook API owned by the file that defines the extended behavior - `registerSendMessageOverride`/`registerRegenerateOverride` (`js/chat/chat-send.js`), `onRenderSidebar` (`js/chat/chat-sidebar.js`), `onSessionUnlock`/`onSessionRekey`/`onSessionLock` (`js/auth/accounts.js`), and `onLanguageChange` (`js/ui/misc-ui.js`). See `ARCHITECTURE.md` in `comm/` for the full file-by-file map.
+
+The old standalone PDF.js worker-init script is folded directly into `js/chat/chat-attachments.js` (it doesn't need to run before anything else, unlike the MathJax config).
 
 ---
 
@@ -114,13 +133,16 @@ Checks whether Python is available on the system, calls `update.bat` to refresh 
 Intended for users without an installed Python. Expects a self-contained, embedded Python environment at `python\python.exe`. If needed, it sets up `pip` inside that environment (uncommenting `#import site` in the `._pth` file and fetching `get-pip.py`), checks and installs the required packages, and then starts the proxy. It also calls `update.bat`.
 
 ### update.bat
-Downloads the current program files directly from the GitHub repository (`Waldemar-Koch-git/KiConnect`), provided an internet connection is available:
-- `comm/kiconnect.css`, `.html`, `.js`, `-languages-i18n.js`, `-proxy.py`, `-voice.js`
-- all `comm/_lang/*.js` files (the folder is created automatically if it doesn't exist yet, e.g. on older installs)
-- `update.bat` itself
-- additionally checks whether the `comm/_render` folder exists and has content; if it is empty or missing, `_render.zip` is downloaded and extracted automatically
+Provided an internet connection is available:
+1. Asks the GitHub API for the current commit hash on `main` (a few hundred bytes) and compares it against the hash saved from the last update (`kiconnect_version.txt`). If they match, nothing is downloaded - the run only re-checks that `comm/_render` is present (see below) and exits.
+2. If the version differs (or the check itself failed, in which case it syncs anyway to be safe), it first fetches a fresh copy of `update.bat` itself from GitHub and, if different, replaces the file on disk for the *next* run - this run keeps executing the version already loaded in memory rather than restarting itself.
+3. Downloads the entire repository as a single zip (`archive/refs/heads/main.zip`), extracts it to a temp folder, and copies `KiConnect/comm/` from the archive into the local `comm/` folder with Robocopy. This only adds and overwrites files - it never deletes anything on its own, and explicitly excludes `comm/_render` and `comm/datas` from being touched, so vendored libraries and (still relevant on older installs) local account data are left alone.
+4. Removes a short, explicitly-named list of retired files that Robocopy's add/overwrite-only behavior wouldn't clean up by itself - currently `comm/kiconnect.js`, `comm/kiconnect-agent.js`, `comm/kiconnect-voice.js`, `comm/kiconnect-db.js` (the pre-v4.0.0 monolith and bolt-ons, superseded by `comm/js/**`).
+5. Deletes the temp folder and records the new commit hash for next time.
 
-If there is no internet connection, the update step is skipped without blocking startup.
+Separately, on every run (whether or not a sync happened), it makes sure `comm/_render` exists and has content: if the folder is empty or missing, it downloads and extracts `_render.zip` (the bundled MathJax/marked.js/DOMPurify/PDF.js libraries).
+
+If there is no internet connection, the entire update step is skipped without blocking startup. Earlier versions of this script re-launched themselves mid-run with a hidden flag to pick up a freshly-downloaded copy of themselves immediately; that pattern is exactly what triggers some antivirus heuristics (e.g. Kaspersky's `PDM:Trojan.Win32.Generic`), so it was removed in favor of the "save for next run" approach in step 2.
 
 ---
 
@@ -176,8 +198,9 @@ This manual method works on any operating system with Python installed (Windows,
    - **xAI Grok**: API key from [console.x.ai](https://console.x.ai)
    - **Groq**: API key from [console.groq.com](https://console.groq.com) - ultra-fast inference
    - **DeepSeek**: API key from [platform.deepseek.com](https://platform.deepseek.com) - including DeepSeek 4 & reasoning
-   - **MiniMax**: Api key from [platform.minimax.io](https://platform.minimax.io/console/access)
-   - **GLM**: API key from [z.ai](https://z.ai/manage-apikey/apikey-list)
+   - **MiniMax**: API key from [platform.minimax.io](https://platform.minimax.io/console/access)
+   - **Zhipu AI / Z.ai (GLM)**: API key from [z.ai](https://z.ai/manage-apikey/apikey-list)
+   - **Moonshot AI (Kimi)**: API key from [platform.moonshot.ai](https://platform.moonshot.ai) - OpenAI-compatible, long context, optional thinking on K2-Thinking/K3
    - **Custom server**: any OpenAI-compatible API (server URL + optional API key)
 3. Select a model - live model lists from providers (brain icon = thinking-capable)
 4. Optional: create a user profile for different personas/roles
@@ -225,6 +248,9 @@ A sidebar folder becomes a "project" by linking it (via `agentProject`) to a rea
 
 Shell command execution is a separate, explicit opt-in per project and is off by default regardless of access mode.
 
+### Checkpoints (optional, per project)
+If enabled for a project and Git is available on the machine, the proxy stages and commits the current state of the project folder right before each mutating tool call (write, delete, move, copy, shell exec) executes - not in Simulate mode, and not if checkpoints are off. This gives a rollback point per agent action without the user needing to manage Git themselves. The `checkpoints` flag is re-checked server-side on every checkpoint request rather than trusted from the caller, the same way the `shell` flag is re-checked before `/agent/exec` runs.
+
 ### Agent-API (proxy, requires an unlocked session)
 | Endpoint | Method(s) | Purpose |
 |---|---|---|
@@ -235,13 +261,16 @@ Shell command execution is a separate, explicit opt-in per project and is off by
 | `/agent/projects` | GET/POST | List / register a project folder |
 | `/agent/projects/<id>` | DELETE | Unregister a project (files on disk are left untouched) |
 | `/agent/projects/<id>/shell` | PUT | Enable/disable shell execution for a project |
+| `/agent/projects/<id>/checkpoints` | PUT | Enable/disable Git checkpoints for a project |
 | `/agent/projects/<id>/path` | PUT | Re-point a project at a different folder |
+| `/agent/checkpoint/<id>` | POST | Stage + commit the project's current state (only if checkpoints are enabled) |
 | `/agent/exec/<id>` | POST | Run a shell command inside the project folder (only if shell is enabled) |
 | `/agent/tree/<id>` | GET | Recursive file listing |
 | `/agent/search/<id>` | GET | grep-style text search across the project |
 | `/agent/file/<id>/<path>` | GET/PUT/DELETE | Read / write / delete a file |
 | `/agent/dir/<id>/<path>` | POST/DELETE | Create / delete a folder |
 | `/agent/move/<id>` | POST | Move or rename a file/folder |
+| `/agent/copy/<id>` | POST | Copy a file/folder |
 
 Project registries are encrypted with a key derived client-side from the account password and a dedicated salt, separate from the config/providers/chats encryption key, so a leak of one does not expose the other.
 
@@ -254,6 +283,35 @@ Project registries are encrypted with a key derived client-side from the account
 - Output capped at 200,000 characters per stream, 45-second execution timeout
 
 Registering a folder outside a safe path (drive/system root, or the app's own installation folder) is rejected outright.
+
+---
+
+## Knowledge base
+
+A knowledge base indexes a folder or an explicit list of files into locally stored, encrypted, searchable chunks that can be pulled into a chat as context automatically. It reuses the same unlocked Agent session as the coding agent rather than requiring a separate unlock.
+
+- **Source**: either a whole folder (recursively) or a hand-picked file list
+- **Supported file types**: `.txt`, `.md`/`.markdown`, `.csv`, `.tsv`, `.log`, `.json`, `.yaml`/`.yml`, and (via the corresponding optional Python packages) `.pdf`, `.docx`, `.pptx`, `.xlsx`
+- **Indexing**: files are split into overlapping chunks (default 512 tokens per chunk, configurable overlap) and embedded via any OpenAI-compatible embeddings endpoint the user configures (base URL + model name); indexing runs as a background job with per-file progress and failure reporting
+- **Storage**: each knowledge base is its own local SQLite database; chunk text is stored AES-GCM-encrypted (same server-side key material as the agent project registry), alongside its embedding vector and a content hash
+- **Search**: cosine similarity over the stored embeddings (accelerated with `numpy` if installed, otherwise a pure-Python fallback), returning the most relevant chunks for a query
+- **Management**: list, re-index, add/remove source files, delete, export, and import knowledge bases; per-knowledge-base settings (chunk size, overlap, etc.) can be changed after creation
+
+### Knowledge-base API (proxy, requires an unlocked session)
+| Endpoint | Method(s) | Purpose |
+|---|---|---|
+| `/kb/create` | POST | Register a folder or file list as a new knowledge base and start indexing |
+| `/kb/list` | GET | List knowledge bases |
+| `/kb/<id>/status` | GET | Indexing progress / result |
+| `/kb/<id>/sources` | GET/DELETE | List / remove source files |
+| `/kb/<id>/add-files` | POST | Add files by path to an existing knowledge base |
+| `/kb/<id>/upload-files` | POST | Upload and add files directly |
+| `/kb/<id>/reindex` | POST | Re-run indexing (e.g. after settings or source changes) |
+| `/kb/<id>/search` | POST | Query the knowledge base for relevant chunks |
+| `/kb/<id>/settings` | PATCH | Update chunk size/overlap and other settings |
+| `/kb/<id>/export` | GET | Export a knowledge base |
+| `/kb/import` | POST | Import a previously exported knowledge base |
+| `/kb/<id>` | DELETE | Delete a knowledge base |
 
 ---
 
@@ -280,12 +338,15 @@ Chrome, Firefox, and Edge on the same PC access the same accounts and chats with
 
 ## Thinking / reasoning mode
 
-For supported models (Claude 3.7+/4, o1/o3/o4, Grok 3, DeepSeek R1, etc.):
+For supported models (Claude 3.7 and up, GPT-5.x thinking variants, Grok, DeepSeek R1, Gemini 2.5+, and other reasoning-capable models across providers):
 
-- **Anthropic Claude 4+** (Opus 4.6, Sonnet 4.6, Haiku 4.5): adaptive thinking - three effort levels (low/medium/high) using the new `output_config.effort` API. Temperature is automatically omitted for these models.
+- **Anthropic Claude 4+** (Opus 4.8, Sonnet 5, Haiku 4.5, Fable 5, and the legacy 4.6 line): adaptive thinking - three effort levels (low/medium/high) using the `output_config.effort` API. Temperature is automatically omitted for these models.
 - **Anthropic Claude 3.7**: legacy mode - continuous token budget (1,024-32,000 tokens)
-- **OpenAI**: discrete levels (low/medium/high) for reasoning effort
+- **OpenAI and most other providers**: discrete levels (low/medium/high) for reasoning effort
+- **Fixed-thinking models** (e.g. MiniMax): on/off toggle only, no effort slider
 - **Display**: collapsible "thinking process" block above the response
+
+> Model catalogs (`js/providers/provider-models.js`) are updated as providers retire and release models - check that file for the current default list; most providers also load their live model list from the API once a key is added.
 
 ---
 
@@ -330,12 +391,12 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 | Feature | Implementation | Protects against |
 |---|---|---|
 | Data storage | AES-GCM-256 in browser (chats, config, providers, profiles, folders), stored in `./datas/` | Data access without password |
-| Agent project registry | AES-GCM-256 server-side (`cryptography`/AESGCM), key derived from account password + a dedicated salt, separate from the browser-side key | Data access without password, cross-key exposure |
+| Agent project registry & knowledge-base chunks | AES-GCM-256 server-side (`cryptography`/AESGCM), key derived from account password + a dedicated salt, separate from the browser-side key | Data access without password, cross-key exposure |
 | Login / password | PBKDF2-HMAC-SHA256, 600k iterations, random salt per account | Brute-force, rainbow tables |
 | Brute-force (login) | Exponential lockout from the 5th failed attempt, RAM-only | Offline and online password guessing |
 | Session | Encrypted token in sessionStorage (no plaintext password) | Password theft from browser storage |
 | XSS | DOMPurify (bundled locally), strict CSP with no `'unsafe-inline'` in `script-src` (all former inline scripts, e.g. the MathJax config, now live in their own files) | Reflected & stored XSS |
-| SSRF | Domain allowlist + private IP filter in the proxy | Server-side request forgery |
+| SSRF | No fixed domain allowlist (any OpenAI-compatible endpoint is allowed), but a tiered check on where the target address actually points: reserved/blocked ranges are rejected outright, LAN addresses require a one-time explicit confirmation, loopback/public proceed. The vetted IP is then DNS-pinned for the request's duration, so a low-TTL DNS answer can't rebind the target after the check ran | Server-side request forgery, DNS rebinding |
 | CORS | Strict origin/host check, localhost-only | Unwanted cross-origin requests |
 | Rate limiting | Thread-safe (lock), 120 requests/60s per IP | DoS, brute-force |
 | File writing | Atomic write via `.tmp` + `os.replace()` | Data loss on proxy crash |
@@ -358,12 +419,14 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 flowchart LR
     B["<b>Browser</b><br/>━━━━━━━━━━<br/>AES-GCM-256<br><i>(encryption in browser)</i><br/>PBKDF2 (600k)<br/>DOMPurify <i>(local)</i><br/>marked.js <i>(local)<br/>MathJax <i>(local)<br/>PDF.js <i>(local)<br/>Brute-Force Lock"]
     P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API + Agent-API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O<br/>AES-GCM-256 <i>(cryptography, server-side)</i>"]
-    A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i>"]
-    F["<b>Local filesystem</b><br/>project folder(s)<br/>━━━━━━━━━━<br/>read / write / search / move<br/>optional shell exec <i>(sandboxed, opt-in)</i>"]
+    A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i><br/>DNS-pinned"]
+    F["<b>Local filesystem</b><br/>project folder(s)<br/>━━━━━━━━━━<br/>read / write / copy / move / search<br/>optional shell exec <i>(sandboxed, opt-in)</i><br/>optional git checkpoints"]
+    K["<b>Knowledge base</b><br/>SQLite + AES-GCM-256<br/>━━━━━━━━━━<br/>chunk + embed + search<br/>./datas/&lt;accountId&gt;/"]
 
     B <--> P
     P <--> A
     P <-- unlocked agent session --> F
+    P <-- unlocked agent session --> K
 
     N["🔒 Password-protected<br/>PBKDF2 + session token<br/>No plaintext in storage"]
     B <-.- N
@@ -372,6 +435,7 @@ flowchart LR
     style P fill:#fef9c3,stroke:#ca8a04,color:#000000
     style A fill:#dcfce7,stroke:#16a34a,color:#000000
     style F fill:#ede9fe,stroke:#7c3aed,color:#000000
+    style K fill:#ffedd5,stroke:#ea580c,color:#000000
     style N fill:#fee2e2,stroke:#dc2626,color:#000000,stroke-dasharray: 3 3
 ```
 

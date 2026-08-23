@@ -14,7 +14,8 @@ Ki-Connect supports multiple local accounts on the same installation, but it is 
 - **Stored encrypted.** Everything that's saved is encrypted and only accessible with your password.
 - **Several accounts on one installation.** Multiple people who share the same computer can each keep their own password-protected, separately encrypted account.
 - **Many AI providers in one place.** Switch between providers and models without needing several different programs.
-- **Built-in coding agent.** Turn any chat into an agent working on a real folder on your computer - it can read, write, search, and move files, and (only if you switch it on) run shell commands, with a choice of autonomy levels from "ask before every step" to "just do it."
+- **Built-in coding agent.** Turn any chat into an agent working on a real folder on your computer - it can read, write, search, copy, and move files, and (only if you switch it on) run shell commands, with a choice of autonomy levels from "ask before every step" to "just do it." Optionally, it can save a checkpoint (a Git commit) before every change, so you can always roll back.
+- **Knowledge base.** Point Ki-Connect at a folder or a set of files (text, Markdown, PDF, Word, PowerPoint, Excel, and more) and it builds a local, encrypted, searchable knowledge base it can pull relevant context from automatically while you chat.
 - **Optional web search.** If you turn it on, the AI can look things up on the internet before answering.
 - **Images and PDFs.** You can paste images or upload PDF files so the AI can read them.
 - **Speak instead of type.** There's voice input as well as a read-aloud function for replies.
@@ -95,10 +96,17 @@ Any sidebar folder can be turned into a **project**: point it at a real folder o
   - **Confirm** - asks before every file change or command
   - **Auto** - makes changes on its own
 - **Shell commands are off by default** for every new project and must be explicitly switched on per project - even in Auto mode, this is a separate opt-in.
-- Every tool call (read, write, search, move, run command, etc.) is shown as a collapsible step in the chat, so you can always see what happened.
+- **Checkpoints (optional)** - if turned on for a project and Git is available on your machine, Ki-Connect commits the folder's current state before every change the agent makes, so you always have a rollback point.
+- Every tool call (read, write, search, move, copy, run command, etc.) is shown as a collapsible step in the chat, so you can always see what happened.
 - Deleting a project only removes it from Ki-Connect - the files on disk are left untouched.
 
 > Shell execution runs commands with best-effort sandboxing (resource limits, its own process group, optional network isolation where supported), but it is not a hard security boundary. Only enable it for projects and folders you trust, ideally on a machine you don't mind an errant command touching.
+
+---
+
+## Knowledge base
+
+Any project folder or a hand-picked set of files can be indexed into a **knowledge base**: Ki-Connect splits the content into chunks, embeds them via an OpenAI-compatible embeddings endpoint you configure, and stores everything locally as encrypted, searchable data. Once built, the AI can pull the most relevant chunks into a chat automatically instead of you having to paste the source material in yourself. Supported file types include plain text, Markdown, CSV/TSV, JSON/YAML, PDF, Word, PowerPoint, and Excel.
 
 ---
 
