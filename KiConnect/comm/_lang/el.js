@@ -676,6 +676,7 @@ registerLanguage('el', { label: 'Ελληνικά', code: 'EL' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[Η δημιουργία διακόπηκε]',
+    'battle.active': 'Ενεργό',
     'battle.cancel': 'Ακύρωση',
     'battle.chooseWinner': '✓ Χρήση αυτού',
     'battle.defaultBanner': 'Δεν έχει επιλεγεί νικητής ακόμη — το «{model}» θα χρησιμοποιείται από προεπιλογή μέχρι να επιλέξετε.',

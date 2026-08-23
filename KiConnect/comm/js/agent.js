@@ -1,19 +1,37 @@
-// kiconnect-agent.js – Coding-Agent module (v3.0), self-contained bolt-on
-// (like kiconnect-voice.js). A "project" is a sidebar folder with an extra
+// js/agent.js (formerly kiconnect-agent.js) – Coding-Agent module (v3.0)
+// (like js/voice.js). A "project" is a sidebar folder with an extra
 // `agentProject` field pointing at a filesystem folder on the proxy; a chat
 // filed into it runs the agent's tool loop, rendered as collapsed <details>
 // cards. One shared model picker app-wide; only autonomy mode is per-project.
+// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from an
+// IIFE bolt-on coupling via monkey-patching (`sendMessage = ...`) and
+// `window.X` to a real ES module using the explicit hook-registration API
+// js/chat/chat-send.js and js/chat/chat-sidebar.js now expose (registerSendMessageOverride/registerRegenerateOverride/
+// onRenderSidebar/onLanguageChange) — reassigning an imported binding is not
+// legal in ES modules, so the old monkey-patch pattern could not simply move
+// as-is; this is the real fix, not a cosmetic rename.
+import { state } from './core/state.js';
+import { agentSessionHeader, logoutNow } from './auth/accounts.js';
+import { save } from './auth/storage.js';
+import { buildAttachmentContent, clearAttachments, extractPdfText } from './chat/chat-attachments.js';
+import { _finalizeAIRowInPlace, appendEmptyAI, appendToMessages, buildMsgEl, formatText, getBubbleRow, renderMessages, scrollToBottom, typesetMath, updateChatTokenTotal } from './chat/chat-render.js';
+import { _makeRunId, _runBubbleEl, _toAnthropicContent, _toOpenAIContent, activeRuns, autoGenerateChatTitle, CLAUDE_BUDGET, isChatStreaming, OAI_EFFORT, registerRegenerateOverride, registerSendMessageOverride, stopStreaming, syncComposerStreamingUI } from './chat/chat-send.js';
+import { currentChat, getActiveContainer, getActivePath, newChat, onRenderSidebar, renderSidebar } from './chat/chat-sidebar.js';
+import { autoResize } from './core/boot.js';
+import { tf as hostTf } from './core/i18n.js';
+import { getProviderEndpoint, proxyUrl } from './providers/provider-crud.js';
+import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
+import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
+import { activeProfile } from './ui/profiles.js';
+import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
-(function () {
-  'use strict';
-
-  // ── i18n helper (falls back to the given text if no TRANSLATIONS
+// ── i18n helper (falls back to the given text if no TRANSLATIONS
   // entry exists — this module doesn't require editing the i18n file) ─
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[currentLang] || TRANSLATIONS.en || {};
+      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
+        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS.en || {};
         const val = lang[key] ?? (TRANSLATIONS.en || {})[key];
         if (val != null) return val;
       }
@@ -24,15 +42,15 @@
   // All English text lives in _lang/<code>.js — t()'s own key-fallback (see
   // above) covers the case where a key is somehow missing there.
   function tf(key, vars) {
-    if (typeof window.tf === 'function' && window.tf !== tf) {
-      return window.tf(key, vars);
+    if (typeof hostTf === 'function') {
+      return hostTf(key, vars);
     }
     let s = t(key);
     if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
     return s;
   }
   function showToast(msg) {
-    if (typeof window.toast === 'function') { window.toast(msg); return; }
+    if (typeof hostToast === 'function') { hostToast(msg); return; }
     console.log('[Agent]', msg);
   }
   function esc(s) {
@@ -54,7 +72,7 @@
   }
   let settings = { autonomy: 'confirm', ...loadSettings() };
 
-  // Runtime state. No single global run/abortController pair: kiconnect.js's
+  // Runtime state. No single global run/abortController pair: js/chat/chat-send.js's
   // isChatStreaming/runsForChat read the same activeRuns registry this module
   // writes into (kind:'agent'), so several project chats can run at once.
   // `pendingConfirm` is still a single global, so two simultaneous
@@ -243,7 +261,7 @@
 
   // Backend calls: /agent/* on the local proxy. Every call goes through this
   // wrapper so it carries the current agent-session token (see
-  // kiconnect.js: unlockAgentSession()/agentSessionHeader()). A 401 (project
+  // js/auth/accounts.js: unlockAgentSession()/agentSessionHeader()). A 401 (project
   // registry can't be decrypted) is treated as an expired session and sends
   // the user back to login, like any other expired session.
   /* global agentSessionHeader, logoutNow, toast */
@@ -255,7 +273,7 @@
     // Same as kiconnect-db.js's kbFetch(): a 401 with no token sent just
     // means "not logged in yet", not an expired session.
     if (res.status === 401 && Object.keys(sessionHeaders).length) {
-      if (typeof toast === 'function') toast(t('agent.err.sessionExpired'));
+      if (typeof hostToast === 'function') hostToast(t('agent.err.sessionExpired'));
       if (typeof logoutNow === 'function') logoutNow();
     }
     return res;
@@ -317,7 +335,7 @@
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     const data = await res.json();
     // PDFs come back as binary (content_b64) since they're not valid UTF-8
-    // text. extractPdfText() reuses the same pdf.js extraction kiconnect.js
+    // text. extractPdfText() reuses the same pdf.js extraction js/chat/chat-attachments.js
     // uses for PDF chat attachments, instead of giving up on any project
     // PDF. Falls through to the raw binary response if pdf.js isn't loaded
     // or extraction fails (e.g. a scanned image-only PDF).
@@ -543,7 +561,7 @@
   ]);
   const _checkpointWarned = new Set(); // project ids already warned about missing git this session
   function projectCheckpointsEnabled(projectId) {
-    const f = folders.find(x => x.agentProject === projectId);
+    const f = state.folders.find(x => x.agentProject === projectId);
     return !!(f && f.agentCheckpointsEnabled);
   }
   function checkpointMessage(name, args) {
@@ -754,10 +772,10 @@
     if (pendingConfirm) { pendingConfirm.resolve(false); pendingConfirm = null; }
   }
   // Stops the agent run for one chat (default: chat on screen) — mirrors
-  // kiconnect.js's stopStreaming(chatId), reusing the same activeRuns
+  // js/chat/chat-send.js's stopStreaming(chatId), reusing the same activeRuns
   // registry, plus closes the confirm bar if it belonged to this run.
   function stopAgent(chatId) {
-    chatId = chatId || currentChatId;
+    chatId = chatId || state.currentChatId;
     stopStreaming(chatId);
     hideConfirmBar();
   }
@@ -854,7 +872,7 @@
     if (!provider) throw new Error(t('agent.noModelHdr'));
     if (!provider.apiKey) throw new Error(t('agent.err.noApiKey'));
     if (provider.enabled === false) throw new Error(t('agent.err.providerDisabled'));
-    const modelId = splitModelId(config.model).modelId;
+    const modelId = splitModelId(state.config.model).modelId;
 
     if (provider.type === 'anthropic') {
       const { system, messages } = toAnthropicHistory(history);
@@ -890,7 +908,7 @@
       // so it doesn't bust the prompt cache. Only kicks in past the token
       // trigger below. Beta API; worst case if it changes is a surfaced 400,
       // not silent data loss (nothing local is changed, only what's sent).
-      if (config.anthropicContextEditing !== false) {
+      if (state.config.anthropicContextEditing !== false) {
         body.context_management = {
           edits: [{
             type: 'clear_tool_uses_20250919',
@@ -899,14 +917,14 @@
           }],
         };
       }
-      if (isTemperatureSupported(modelId)) body.temperature = config.temperature;
-      if (config.thinkingEnabled && isThinkingCapable(modelId)) {
+      if (isTemperatureSupported(modelId)) body.temperature = state.config.temperature;
+      if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
         if (isAdaptiveThinkingModel(modelId)) {
           body.thinking = { type: 'adaptive' };
-          body.output_config = { effort: OAI_EFFORT[config.thinkingIntensity || 2] };
+          body.output_config = { effort: OAI_EFFORT[state.config.thinkingIntensity || 2] };
           delete body.temperature;
         } else {
-          const budget = usesTokenBudget(modelId) ? (config.thinkingBudget || 8000) : CLAUDE_BUDGET[config.thinkingIntensity || 2];
+          const budget = usesTokenBudget(modelId) ? (state.config.thinkingBudget || 8000) : CLAUDE_BUDGET[state.config.thinkingIntensity || 2];
           body.thinking = { type: 'enabled', budget_tokens: budget };
           body.temperature = 1;
           body.max_tokens = Math.max(body.max_tokens, budget + 2000);
@@ -919,7 +937,7 @@
           'anthropic-version': '2023-06-01',
           // prompt-caching-2024-07-31 no longer needed — caching (incl. ttl:'1h')
           // is GA. context-management-2025-06-27 opts into context_management above.
-          ...(config.anthropicContextEditing !== false ? { 'anthropic-beta': 'context-management-2025-06-27' } : {}),
+          ...(state.config.anthropicContextEditing !== false ? { 'anthropic-beta': 'context-management-2025-06-27' } : {}),
           'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify(body), signal,
@@ -938,8 +956,8 @@
     // Same reasoning-model shape fix as the main chat path: GPT-5 behaves
     // like the o-series here (no temperature, max_completion_tokens).
     const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
-    if (!isOSeries) reqBody.temperature = config.temperature;
-    if (config.thinkingEnabled && isThinkingCapable(modelId)) {
+    if (!isOSeries) reqBody.temperature = state.config.temperature;
+    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
       if (provider.type === 'zhipu') reqBody.thinking = { type: 'enabled' };
       // MiniMax has no reasoning_effort levels (on/off only, on by default,
       // M2.x can't disable). Agent UI doesn't surface reasoning trace, so no
@@ -952,7 +970,7 @@
         if (isMistralAdjustableThinkingModel(modelId)) reqBody.reasoning_effort = 'high';
         else delete reqBody.reasoning_effort;
       }
-      else reqBody.reasoning_effort = OAI_EFFORT[config.thinkingIntensity || 2];
+      else reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
     } else if (provider.type === 'mistral' && isMistralNativeThinkingModel(modelId)) {
       // Native Magistral always reasons regardless of thinkingEnabled —
       // nothing to send; just avoid a stray reasoning_effort field.
@@ -1052,7 +1070,7 @@
   // `_agentRun(chatId)` is a convenience default for callers that just mean
   // "whichever run belongs to the chat on screen right now".
   function _agentRun(chatId) {
-    chatId = chatId || currentChatId;
+    chatId = chatId || state.currentChatId;
     for (const run of activeRuns.values()) {
       if (run.chatId === chatId && run.kind === 'agent' && run.status === 'running') return run;
     }
@@ -1114,8 +1132,8 @@
     liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
     typesetMath(liveBubble);
     // Only auto-scroll to the bottom if the user hasn't scrolled away
-    // (pinnedToBottom, tracked in kiconnect.js).
-    if (pinnedToBottom) scrollToBottom();
+    // (pinnedToBottom, tracked in js/core/state.js).
+    if (state.pinnedToBottom) scrollToBottom();
   }
   function renderRunMarkdown(steps) {
     return steps.map(step => {
@@ -1359,7 +1377,7 @@
     const priorHistory = buildPriorHistory(chat);
 
     // Same attachment → content-block conversion normal chat uses (see
-    // buildAttachmentContent() in kiconnect.js) — previously this module
+    // buildAttachmentContent() in js/chat/chat-attachments.js) — previously this module
     // only read the typed text and silently dropped attached files.
     const { userContent, fileNames } = buildAttachmentContent(task, att || []);
 
@@ -1388,7 +1406,7 @@
   // of falling back to a plain, tool-less completion.
   async function agentRegenerate(idx) {
     const chat = currentChat(); if (!chat) return;
-    const folder = folders.find(f => f.id === chat.folderId);
+    const folder = state.folders.find(f => f.id === chat.folderId);
     if (!folder || !folder.agentProject) return false;
     if (isChatStreaming(chat.id)) { showToast(t('agent.stillRunning')); return true; }
     const path = getActivePath(chat);
@@ -1428,7 +1446,7 @@
   // upgrades the bubble to its interactive form. Shared by send/regenerate.
   async function runAgentCompletion(chat, folder, container, priorHistory, task, content) {
     if (!folder.agentAutonomy) folder.agentAutonomy = 'confirm';
-    const provider = providerForModel(config.model);
+    const provider = providerForModel(state.config.model);
     if (!provider) {
       showToast(t('agent.noModelHdr'));
       return;
@@ -1445,24 +1463,24 @@
       chatId: chat.id,
       kind: 'agent',
       provider: provider.type,
-      model: config.model,       // frozen now, same reasoning as the chat-stream side
+      model: state.config.model,       // frozen now, same reasoning as the chat-stream side
       abortController: new AbortController(),
       steps,                     // authoritative state — rerenderCurrentRun() reads this,
                                   // not a separate run.text/thinkingText pair
       usage: null,
       status: 'running',
       bubbleEl: null,
-      // Reattach hook for kiconnect.js's renderMessages(): builds a fresh
+      // Reattach hook for js/chat/chat-render.js's renderMessages(): builds a fresh
       // row from run.steps/run.usage on switching back mid-run, instead of
       // the generic chat-bubble builder (which knows nothing about traces).
       buildLiveEl: () => _buildAgentRowSkeleton(run),
     };
     activeRuns.set(runId, run);
-    // Sidebar live-dot, same choke point kiconnect.js's _streamAIResponse
+    // Sidebar live-dot, same choke point js/chat/chat-send.js's _streamAIResponse
     // uses for chat streaming, so a background agent run shows the same way.
     renderSidebar();
 
-    const aiRow = appendEmptyAI(config.model, runId);
+    const aiRow = appendEmptyAI(state.config.model, runId);
     run.bubbleEl = aiRow;
     const bubble = aiRow.querySelector('.bubble');
     // Sibling of .bubble inside .bubble-wrap, not a child of bubble —
@@ -1566,7 +1584,7 @@
 
       // Only touch #messages if this chat is still on screen — if the run
       // finished on a different chat, the reply is already saved and renders
-      // normally next time this chat opens (matching guard in kiconnect.js's
+      // normally next time this chat opens (matching guard in js/chat/chat-send.js's
       // _attachAIActions()).
       if (chat === currentChat()) {
         // Upgrade the just-finished live bubble into its final interactive
@@ -1606,7 +1624,7 @@
     // deletion failed, leaving an invisible registration — reuse that
     // matching server-side project instead of rejecting its folder.
     const normalizedPath = String(path).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    const localMatch = folders.find(f => f.agentProject && String(f.agentProjectPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
+    const localMatch = state.folders.find(f => f.agentProject && String(f.agentProjectPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
     if (localMatch) throw new Error(t('agent.projectAlreadyAdded'));
     const remoteMatch = (await apiListProjects()).find(p => String(p.path || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
     const reg = remoteMatch || await apiCreateProject(name, path, create);
@@ -1614,19 +1632,19 @@
       id: 'proj_' + Date.now(), name, collapsed: false, agentProject: reg.id, agentProjectPath: reg.path,
       agentAutonomy: settings.autonomy || 'confirm',
     };
-    folders.push(folder);
+    state.folders.push(folder);
     save(); renderSidebar();
     return folder;
   }
   function currentProjectFolder() {
     const chat = currentChat();
     if (!chat || !chat.folderId) return null;
-    const folder = folders.find(f => f.id === chat.folderId);
+    const folder = state.folders.find(f => f.id === chat.folderId);
     return (folder && folder.agentProject) ? folder : null;
   }
   async function deleteProjectFolder(folder) {
     if (!folder || !folder.agentProject) return;
-    const inside = chats.filter(c => c.folderId === folder.id);
+    const inside = state.chats.filter(c => c.folderId === folder.id);
     if (!confirm(tf('agent.confirmDeleteProject', { name: folder.name, n: inside.length }))) return;
     try {
       await apiDeleteProject(folder.agentProject);
@@ -1639,12 +1657,12 @@
     }
     // Deleting a project deletes its chats too (previously only unlinked
     // them, leaving them as regular chats despite the confirm dialog).
-    chats = chats.filter(c => c.folderId !== folder.id);
-    folders = folders.filter(f => f.id !== folder.id);
-    if (typeof activeFolderId !== 'undefined' && activeFolderId === folder.id) activeFolderId = null;
-    if (currentChatId && !chats.some(c => c.id === currentChatId)) {
-      currentChatId = chats[0]?.id || null;
-      if (currentChatId) renderMessages(currentChat().messages);
+    state.chats = state.chats.filter(c => c.folderId !== folder.id);
+    state.folders = state.folders.filter(f => f.id !== folder.id);
+    if (typeof state.activeFolderId !== 'undefined' && state.activeFolderId === folder.id) state.activeFolderId = null;
+    if (state.currentChatId && !state.chats.some(c => c.id === state.currentChatId)) {
+      state.currentChatId = state.chats[0]?.id || null;
+      if (state.currentChatId) renderMessages(currentChat().messages);
       else { const c = document.getElementById('messages'); c.innerHTML = ''; const e = document.getElementById('emptyState'); if (e) { c.appendChild(e); e.style.display = ''; } syncComposerStreamingUI(); }
     }
     save(); renderSidebar();
@@ -1820,8 +1838,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   function renderContextMenu() {
     const menu = document.getElementById('agentContextMenu');
     const chat = currentChat();
-    const curFolder = chat && folders.find(f => f.id === chat.folderId);
-    const projectFolders = folders.filter(f => f.agentProject);
+    const curFolder = chat && state.folders.find(f => f.id === chat.folderId);
+    const projectFolders = state.folders.filter(f => f.agentProject);
     menu.innerHTML = '';
     const addItem = (label, onClick, active) => {
       const div = document.createElement('div');
@@ -1863,7 +1881,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const hdrBtn = document.getElementById('agentHeaderToggle');
     const hdrLabel = document.getElementById('agentHeaderToggleLabel');
     const chat = currentChat();
-    const folder = chat && folders.find(f => f.id === chat.folderId);
+    const folder = chat && state.folders.find(f => f.id === chat.folderId);
     const focused = !!(folder && folder.agentProject);
     if (chip && label) {
       chip.classList.toggle('agent-focused', focused);
@@ -2152,7 +2170,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   async function renderProjectList() {
     const list = document.getElementById('agentProjList');
     if (!list) return;
-    const projectFolders = folders.filter(f => f.agentProject);
+    const projectFolders = state.folders.filter(f => f.agentProject);
     let missingIds = new Set();
     try {
       (await apiListProjects()).forEach(p => {
@@ -2205,7 +2223,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       }
     });
   }
-  function openAgentSettingsPanel() {
+  export function openAgentSettingsPanel() {
     const panel = document.getElementById('agentSettingsPanel');
     if (!panel) return;
     panel.classList.add('open');
@@ -2222,46 +2240,40 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const panel = document.getElementById('agentSettingsPanel');
     if (panel && panel.classList.contains('open')) positionAgentSettingsPanel();
   });
-  window.openAgentSettingsPanel = openAgentSettingsPanel;
-
   //  Wiring into the host app (send interception, sidebar icons)
   function installHooks() {
     // sendMessage(): route to the agent loop when the active chat is
     // filed under a project folder; otherwise defer to the original.
-    const _origSendMessage = sendMessage;
-    sendMessage = async function () {
+    registerSendMessageOverride(async function (orig) {
       const chat = currentChat();
-      const folder = chat && folders.find(f => f.id === chat.folderId);
+      const folder = chat && state.folders.find(f => f.id === chat.folderId);
       if (folder && folder.agentProject) {
         const input = document.getElementById('messageInput');
         const text = (input.value || '').trim();
-        if (!text && !attachments.length) return;
+        if (!text && !state.attachments.length) return;
         input.value = '';
         try { autoResize(input); } catch (e) {}
-        const att = [...attachments];
+        const att = [...state.attachments];
         clearAttachments();
         await runAgentChatTurn(text, folder, att);
         return;
       }
-      return _origSendMessage.apply(this, arguments);
-    };
+      return orig();
+    });
 
     // regenerate(): a project chat's "Regenerieren" button should re-run
     // the agent loop, not fall back to a tool-less completion.
-    const _origRegenerate = regenerate;
-    regenerate = async function (idx) {
+    registerRegenerateOverride(async function (orig, idx) {
       if (await agentRegenerate(idx)) return;
-      return _origRegenerate.apply(this, arguments);
-    };
+      return orig(idx);
+    });
 
     // renderSidebar(): mark project folders + keep the composer chip in
     // sync whenever redrawn — covers newChat()/switchChat() too, since both
     // call renderSidebar() internally.
-    const _origRenderSidebar = renderSidebar;
-    renderSidebar = function () {
-      _origRenderSidebar.apply(this, arguments);
+    onRenderSidebar(function () {
       document.querySelectorAll('#folderContainer .folder[data-folder-id]').forEach(div => {
-        const f = folders.find(x => x.id === div.dataset.folderId);
+        const f = state.folders.find(x => x.id === div.dataset.folderId);
         if (f && f.agentProject) {
           div.classList.add('agent-project-folder');
           const icon = div.querySelector('.folder-icon');
@@ -2269,14 +2281,14 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         }
       });
       syncComposerChip();
-    };
+    });
   }
 
-  // Language change hook, called by kiconnect.js's setLang() (same pattern
-  // as kiconnect-voice.js's window._kicVoiceRetranslate). Re-reads
+  // Language change hook, called by js/core/i18n.js's setLang() (same pattern
+  // as kiconnect-voice.js's onLanguageChange). Re-reads
   // translated text/title/placeholder in place so open panels and
   // in-progress runs update immediately, not just on next re-render.
-  window._kicAgentRetranslate = function () {
+  onLanguageChange(function () {
     // Composer chip + gear
     syncComposerChip();
     const gearBtn = document.getElementById('agentGearBtn');
@@ -2359,7 +2371,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     // from its stored `_agentSteps` and persist the translated markdown so a
     // reload shows the new language too.
     retranslateAgentHistory();
-  };
+  });
 
   function retranslateAgentHistory() {
     const chat = currentChat();
@@ -2398,6 +2410,13 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (tries > 150) return;
     setTimeout(() => waitForHost(tries + 1), 100);
   }
+  // Deferred via setTimeout(0) even on the "DOM already ready" branch: with
+  // ES modules, this file's own evaluation order (set by the import
+  // dependency graph, not script-tag order) is no longer guaranteed to run
+  // after every other module has initialized just because the static HTML
+  // is already parsed - especially given the circular import back to
+  // core/state.js et al. A macrotask boundary guarantees the whole
+  // synchronous module-evaluation pass has completed first. Found via the
+  // dry-run harness during Phase 4 of the v3.5.1→v4.0.0 modularization.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
-  else waitForHost();
-})();
+  else setTimeout(waitForHost, 0);

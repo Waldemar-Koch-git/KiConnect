@@ -676,6 +676,7 @@ registerLanguage('hi', { label: 'हिन्दी', code: 'HI' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[जनरेशन रोका गया]',
+    'battle.active': 'सक्रिय',
     'battle.cancel': 'रद्द करें',
     'battle.chooseWinner': '✓ इसे उपयोग करें',
     'battle.defaultBanner': 'अभी तक कोई विजेता नहीं चुना गया — जब तक आप एक न चुनें, डिफ़ॉल्ट रूप से "{model}" उपयोग किया जाएगा।',

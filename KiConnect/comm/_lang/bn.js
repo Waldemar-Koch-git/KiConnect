@@ -676,6 +676,7 @@ registerLanguage('bn', { label: 'বাংলা', code: 'BN' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[জেনারেশন থামানো হয়েছে]',
+    'battle.active': 'সক্রিয়',
     'battle.cancel': 'বাতিল করুন',
     'battle.chooseWinner': '✓ এটি ব্যবহার করুন',
     'battle.defaultBanner': 'এখনো কোনো বিজয়ী নির্বাচিত হয়নি — আপনি একটি না বাছা পর্যন্ত ডিফল্টভাবে "{model}" ব্যবহৃত হবে।',

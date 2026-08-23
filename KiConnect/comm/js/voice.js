@@ -1,10 +1,15 @@
-// kiconnect-voice.js  –  Speech input & speech output (Web Speech API)
+// js/voice.js (formerly kiconnect-voice.js) – Speech input & speech output (Web Speech API)
 // Version 2.1 – fully revised
+// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from an
+// IIFE bolt-on coupling via `window.X` to a real ES module with explicit
+// imports/exports. No IIFE wrapper needed — a module already has its own scope.
+import { state } from './core/state.js';
+import { sendMessage } from './chat/chat-send.js';
+import { autoResize } from './core/boot.js';
+import { proxyUrl } from './providers/provider-crud.js';
+import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc-ui.js';
 
-(function () {
-  'use strict';
-
-  // Settings
+// Settings
   const STORAGE_KEY = 'kic_voice_settings';
 
   function loadSettings() {
@@ -36,15 +41,15 @@
   // detection somehow never fires. Not user-configurable — it's a backstop.
   var STT_MAX_LISTEN_MS = 90000;
 
-  // Bridge to the Tuning panel's Audio section (kiconnect.js). Provider
+  // Bridge to the Tuning panel's Audio section (js/providers/provider-crud.js). Provider
   // choices live in `vs` (localStorage); API keys stay encrypted in
   // config.audioProviders and are only read here, never written.
-  window.kicVoiceGetSetting = function (key) { return vs[key]; };
-  window.kicVoiceSetSetting = function (key, value) {
+  export function kicVoiceGetSetting(key) { return vs[key]; }
+  export function kicVoiceSetSetting(key, value) {
     vs[key] = value;
     saveSettings({ [key]: value });
     if (key === 'dialogMode') updateDialogBadge();
-  };
+  }
 
   // State
   let sttActive     = false;
@@ -58,8 +63,8 @@
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[currentLang] || TRANSLATIONS['en'] || {};
+      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
+        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS['en'] || {};
         const val = lang[key] ?? (TRANSLATIONS['en'] || {})[key];
         if (val != null) return val;
       }
@@ -85,7 +90,7 @@
   function getTextarea()  { return document.getElementById('messageInput'); }
 
   function showToast(msg) {
-    if (typeof window.toast === 'function') { window.toast(msg); return; }
+    if (typeof hostToast === 'function') { hostToast(msg); return; }
     const el = document.getElementById('toast');
     if (!el) return;
     el.textContent = msg;
@@ -739,12 +744,12 @@
     if (panel) panel.classList.remove('open');
   }
 
-  // Access to config.audioProviders (kiconnect.js, read-only). `config` is
-  // not declared locally — it resolves to kiconnect.js's top-level `let
+  // Access to config.audioProviders (js/core/state.js, read-only). `config` is
+  // not declared locally — it resolves to state.js's top-level `let
   // config`, a global lexical binding shared across script tags (same
-  // mechanism as TRANSLATIONS/currentLang above); kiconnect.js loads first.
+  // mechanism as TRANSLATIONS/currentLang above); js/core/i18n.js loads first.
   function audioProviderKey(provider) {
-    try { return (config && config.audioProviders && config.audioProviders[provider] && config.audioProviders[provider].apiKey) || ''; }
+    try { return (state.config && state.config.audioProviders && state.config.audioProviders[provider] && state.config.audioProviders[provider].apiKey) || ''; }
     catch (e) { return ''; }
   }
   function hasAudioProviderKey(provider) {
@@ -1176,7 +1181,7 @@
   async function fetchElevenLabsTtsBlob(text) {
     var apiKey = audioProviderKey('elevenlabs');
     if (!apiKey) throw new Error('no-key');
-    var voiceId = ((config && config.audioProviders && config.audioProviders.elevenlabs && config.audioProviders.elevenlabs.voiceId) || '21m00Tcm4TlvDq8ikWAM').trim();
+    var voiceId = ((state.config && state.config.audioProviders && state.config.audioProviders.elevenlabs && state.config.audioProviders.elevenlabs.voiceId) || '21m00Tcm4TlvDq8ikWAM').trim();
     var res = await fetch(proxyUrl('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(voiceId)), {
       method: 'POST',
       headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
@@ -1844,7 +1849,7 @@
   });
 
   // Language change hook — no panel rebuild, DOM update only via data-i18n
-  window._kicVoiceRetranslate = function () {
+  onLanguageChange(function () {
     var panel = document.getElementById('voiceSettingsPanel');
     if (panel) { _retranslatePanelDom(panel); renderAudioEngineSection(panel); }
     // Update button titles
@@ -1862,6 +1867,4 @@
     }
     var badge = document.getElementById('voiceDialogBadge');
     if (badge) badge.title = t('voice.dialogStop');
-  };
-  
-})();
+  });

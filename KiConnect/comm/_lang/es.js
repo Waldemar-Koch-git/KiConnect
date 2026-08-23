@@ -676,6 +676,7 @@ registerLanguage('es', { label: 'Español', code: 'ES' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[Generación detenida]',
+    'battle.active': 'Activo',
     'battle.cancel': 'Cancelar',
     'battle.chooseWinner': '✓ Usar esta',
     'battle.defaultBanner': 'Aún no se ha elegido un ganador — "{model}" se usará por defecto hasta que elijas uno.',

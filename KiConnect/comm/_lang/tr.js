@@ -676,6 +676,7 @@ registerLanguage('tr', { label: 'Türkçe', code: 'TR' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[Üretim durduruldu]',
+    'battle.active': 'Aktif',
     'battle.cancel': 'İptal',
     'battle.chooseWinner': '✓ Bunu kullan',
     'battle.defaultBanner': 'Henüz bir kazanan seçilmedi — siz birini seçene kadar varsayılan olarak "{model}" kullanılacak.',

@@ -676,6 +676,7 @@ registerLanguage('pa', { label: 'ਪੰਜਾਬੀ', code: 'PA' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[ਜਨਰੇਸ਼ਨ ਰੋਕੀ ਗਈ]',
+    'battle.active': 'ਸਰਗਰਮ',
     'battle.cancel': 'ਰੱਦ ਕਰੋ',
     'battle.chooseWinner': '✓ ਇਹ ਵਰਤੋ',
     'battle.defaultBanner': 'ਹਾਲੇ ਤੱਕ ਕੋਈ ਜੇਤੂ ਨਹੀਂ ਚੁਣਿਆ ਗਿਆ — ਜਦੋਂ ਤੱਕ ਤੁਸੀਂ ਇੱਕ ਨਹੀਂ ਚੁਣਦੇ, ਮੂਲ ਰੂਪ ਵਿੱਚ "{model}" ਵਰਤਿਆ ਜਾਵੇਗਾ।',

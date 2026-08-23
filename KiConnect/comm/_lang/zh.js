@@ -676,6 +676,7 @@ registerLanguage('zh', { label: '简体中文', code: 'ZH' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[生成已停止]',
+    'battle.active': '已启用',
     'battle.cancel': '取消',
     'battle.chooseWinner': '✓ 使用这个',
     'battle.defaultBanner': '尚未选择获胜者——在你选择之前，将默认使用「{model}」。',

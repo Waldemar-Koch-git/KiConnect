@@ -676,6 +676,7 @@ registerLanguage('en', { label: 'English', code: 'EN' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[Generation stopped]',
+    'battle.active': 'Active',
     'battle.cancel': 'Cancel',
     'battle.chooseWinner': '✓ Use this one',
     'battle.defaultBanner': 'No winner chosen yet — "{model}" will be used by default until you pick one.',

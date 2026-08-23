@@ -676,6 +676,7 @@ registerLanguage('it', { label: 'Italiano', code: 'IT' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[Generazione interrotta]',
+    'battle.active': 'Attivo',
     'battle.cancel': 'Annulla',
     'battle.chooseWinner': '✓ Usa questa',
     'battle.defaultBanner': 'Nessun vincitore scelto ancora — "{model}" sarà usato di default finché non ne scegli uno.',

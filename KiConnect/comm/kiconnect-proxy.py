@@ -237,7 +237,7 @@ def _agent_session_or_401():
 
 def _agent_decrypt(key_bytes, b64_blob):
     """Decrypt a base64(iv[12] || AES-GCM ciphertext+tag) blob - same format
-    encryptStr()/encryptObj() in kiconnect.js produce."""
+    encryptStr()/encryptObj() in js/auth/crypto.js produce."""
     raw = base64.b64decode(b64_blob)
     iv, ct = raw[:12], raw[12:]
     plaintext = AESGCM(key_bytes).decrypt(iv, ct, None)
@@ -363,7 +363,7 @@ def _agent_authed(fn):
     return wrapper
 
 # /agent/session/unlock - hand the server a per-account agent key. Called
-# once after a normal password login (see kiconnect.js
+# once after a normal password login (see js/auth/accounts.js
 # unlockAgentSession()). Key is derived client-side from the password + a
 # dedicated salt, independent of the config/providers/chats key - a leak of
 # one doesn't expose the other.
@@ -1829,7 +1829,7 @@ def kb_reindex(sess, kb_id):
 # browser turns into a download. Deliberately NOT encrypted: the point is
 # portability to a *different* account/password, whose key can't decrypt
 # this one's bytes. Frontend must warn "this file is unencrypted" before
-# download (kiconnect.js). Embedding apiKey is never included - it's a
+# download (js/db.js). Embedding apiKey is never included - it's a
 # per-account credential, not KB data.
 EXPORT_FORMAT_VERSION = 1
 
@@ -2469,7 +2469,7 @@ def _proxy_request(target_url):
 
     # "kic_lan_confirm=1" is a marker the frontend appends to the proxy URL
     # (never the upstream one) for an address double-confirmed in the
-    # Provider editor (see confirmLanAddress() in kiconnect.js). Strip it
+    # Provider editor (see confirmLanAddress() in js/providers/provider-crud.js). Strip it
     # before forwarding so it never reaches the upstream API.
     fwd_params = request.args.copy()
     lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'

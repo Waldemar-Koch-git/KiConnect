@@ -19,8 +19,8 @@ const LANG_MANIFEST = [
   'ar', 'hi', 'ta', 'bn', 'pa', 'ur', 'fa',
 ];
 
-// document.write for synchronous, ordered loading (kiconnect.js needs
-// LANGUAGES/TRANSLATIONS populated immediately on startup).
+// document.write for synchronous, ordered loading (the app's js/core/i18n.js
+// needs LANGUAGES/TRANSLATIONS populated immediately on startup).
 LANG_MANIFEST.forEach(function(code) {
   document.write('<script src="_lang/' + code + '.js"><\/script>');
 });

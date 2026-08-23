@@ -676,6 +676,7 @@ registerLanguage('ta', { label: 'தமிழ்', code: 'TA' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[உருவாக்கம் நிறுத்தப்பட்டது]',
+    'battle.active': 'செயலில்',
     'battle.cancel': 'ரத்து செய்',
     'battle.chooseWinner': '✓ இதைப் பயன்படுத்து',
     'battle.defaultBanner': 'இன்னும் வெற்றியாளர் தேர்ந்தெடுக்கப்படவில்லை — நீங்கள் ஒன்றைத் தேர்ந்தெடுக்கும் வரை இயல்பாக "{model}" பயன்படுத்தப்படும்.',

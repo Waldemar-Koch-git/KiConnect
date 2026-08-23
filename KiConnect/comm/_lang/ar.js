@@ -676,6 +676,7 @@ registerLanguage('ar', { label: 'العربية', code: 'AR' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[تم إيقاف التوليد]',
+    'battle.active': 'نشط',
     'battle.cancel': 'إلغاء',
     'battle.chooseWinner': '✓ استخدام هذا',
     'battle.defaultBanner': 'لم يتم اختيار فائز بعد — سيُستخدم "{model}" افتراضيًا حتى تختار واحدًا.',

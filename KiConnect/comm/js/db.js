@@ -1,13 +1,28 @@
-// kiconnect-db.js - Knowledge base / RAG module. Self-contained bolt-on
-// (like kiconnect-agent.js/kiconnect-voice.js): API client for /kb/* on the
-// local proxy plus its own composer UI, exposing only
-// window.kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow.
+// js/db.js (formerly kiconnect-db.js) - Knowledge base / RAG module.
+// (like js/agent.js/js/voice.js): API client for /kb/* on the
+// local proxy plus its own composer UI, exporting
+// kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow /
+// kbClearActiveSelection as real ES module exports.
 //
 // Auth reuses the Agent session (agentSessionHeader()) instead of a
 // separate unlock. Embedding provider is any OpenAI-compatible base
 // URL + model name.
+//
+// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from
+// an IIFE bolt-on coupling via `window.X` and monkey-patching
+// (window.unlockAgentSession = ...) to a real ES module. Note the circular
+// import with js/auth/accounts.js and js/core/i18n.js: those modules call
+// this module's KB functions at send-time, and this module calls their
+// session/i18n hooks.
+// This is safe because every cross-reference here resolves to a hoisted
+// function declaration used only at runtime, never at module-evaluation
+// time.
+import { state } from './core/state.js';
+import { agentSessionHeader, logoutNow, onSessionLock, onSessionRekey, onSessionUnlock } from './auth/accounts.js';
+import { tf as hostTf } from './core/i18n.js';
+import { getProviderEndpoint, listEmbeddingProviders } from './providers/provider-crud.js';
+import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
 
-(function () {
   'use strict';
 
   // i18n helper: falls back to the given English text if no TRANSLATIONS
@@ -15,8 +30,8 @@
   function t(key, fallback) {
     try {
       /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[currentLang] || TRANSLATIONS.en || {};
+      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
+        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS.en || {};
         const val = lang[key] ?? (TRANSLATIONS.en || {})[key];
         if (val != null) return val;
       }
@@ -26,8 +41,8 @@
   // All English text lives in _lang/<code>.js — t()'s own key-fallback (see
   // above) covers the case where a key is somehow missing there.
   function tf(key, vars) {
-    if (typeof window.tf === 'function' && window.tf !== tf) {
-      const v = window.tf(key, vars);
+    if (typeof hostTf === 'function') {
+      const v = hostTf(key, vars);
       if (v && v !== key) return v;
     }
     let s = t(key);
@@ -35,7 +50,7 @@
     return s;
   }
   function showToast(msg) {
-    if (typeof window.toast === 'function') { window.toast(msg); return; }
+    if (typeof hostToast === 'function') { hostToast(msg); return; }
     console.log('[KB]', msg);
   }
   function esc(s) {
@@ -256,7 +271,7 @@
     return _kbList;
   }
 
-  // Retrieval + prompt augmentation - extension points kiconnect.js's
+  // Retrieval + prompt augmentation - extension points js/chat/chat-send.js's
   // sendMessageCore() calls (RAG hook, after the web-search block).
   const KB_TOP_K_FALLBACK = 8; // only used if a KB predates the topK setting
 
@@ -292,7 +307,7 @@
   // Called by sendMessageCore() before the request is sent, when at least
   // one KB is toggled on. Each active KB is searched for its own configured
   // topK, so results are additive across KBs, not a single shared number.
-  window.kbRetrieveForQuery = async function (query) {
+  export async function kbRetrieveForQuery(query) {
     const activeIds = [..._activeKbIds];
     if (!activeIds.length) return null;
     const perKb = await Promise.all(activeIds.map(async id => {
@@ -322,32 +337,32 @@
       snippet: (r.text || '').slice(0, 320), text: r.text,
     }));
     return { sources };
-  };
+  }
 
   // A selected knowledge base applies to the next prompt only.
-  window.kbClearActiveSelection = function () {
+  export function kbClearActiveSelection() {
     if (!_activeKbIds.size) return;
     _activeKbIds.clear();
     saveActiveIds();
     syncComposerButton();
     renderComposerPopover();
-  };
+  }
 
   // Prepends the formatted KB context block to the outgoing message - same
   // shape as buildWebAugmentedContent/buildLinkedPageAugmentedContent,
   // marked `_kbAugment` so it's skipped on render/re-serialization.
-  window.buildKbAugmentedContent = function (originalContent, kbResult) {
+  export function buildKbAugmentedContent(originalContent, kbResult) {
     const block = formatKbBlock(kbResult);
     if (!block) return originalContent;
     const kbPart = { type: 'text', text: `${block}\n\n---\n\nUser question:`, _kbAugment: true };
     if (Array.isArray(originalContent)) return [kbPart, ...originalContent];
     return [kbPart, { type: 'text', text: originalContent || '' }];
-  };
+  }
 
   // Builds the row of clickable "[1] file.pdf, p. 4" source chips shown
   // under a message that used a knowledge base; click expands the chunk
   // text inline (no URL to link to for a local file).
-  window.buildKbSourcesRow = function (kbSources) {
+  export function buildKbSourcesRow(kbSources) {
     const wrap = document.createElement('div');
     wrap.className = 'kb-sources';
     kbSources.forEach(src => {
@@ -369,7 +384,7 @@
       wrap.appendChild(chip);
     });
     return wrap;
-  };
+  }
 
   // UI - composer button + popover (list/toggle/manage), create modal,
   // folder picker. Own "kb-*" class names so this module works standalone
@@ -730,7 +745,7 @@
     const select = document.getElementById(prefix + 'EmbedProviderSelect');
     if (select && select.value.startsWith('prov:')) {
       const id = select.value.slice(5);
-      const p = (providers || []).find(x => x.id === id);
+      const p = (state.providers || []).find(x => x.id === id);
       if (!p) { errEl.hidden = false; errEl.textContent = tf('kb.embedSourceNone'); return null; }
       return { baseUrl: getProviderEndpoint(p) || p.serverUrl || '', model: p.embeddingModel || '', apiKey: p.apiKey || '' };
     }
@@ -742,7 +757,7 @@
   }
   function findMatchingEmbeddingProvider(embedding) {
     const normalizeUrl = value => (value || '').trim().replace(/\/+$/, '').toLowerCase();
-    return (providers || []).find(p => p.enabled !== false && (p.embeddingModel || '').trim() === (embedding.model || '').trim()
+    return (state.providers || []).find(p => p.enabled !== false && (p.embeddingModel || '').trim() === (embedding.model || '').trim()
       && normalizeUrl(getProviderEndpoint(p) || p.serverUrl) === normalizeUrl(embedding.baseUrl));
   }
   function embedSourceFieldsHtml(prefix) {
@@ -1402,41 +1417,23 @@
     }
   }
 
-  // Language change hook (same pattern as kiconnect-agent.js's window._kicAgentRetranslate).
-  window._kicDbRetranslate = function () {
+  // Language change hook (same pattern as js/agent.js's onLanguageChange).
+  onLanguageChange(function () {
     syncComposerButton();
     renderComposerPopover();
     const btn = document.getElementById('kbBtn');
     if (btn) btn.title = tf('kb.button.title');
-  };
+  });
 
   // Session lifecycle: refresh the KB list when the agent session unlocks,
   // clear it on lock/logout - same session kiconnect-agent.js reuses.
   function installHooks() {
-    if (typeof window.unlockAgentSession === 'function') {
-      const _origUnlock = window.unlockAgentSession;
-      window.unlockAgentSession = async function () {
-        const r = await _origUnlock.apply(this, arguments);
-        refreshKbList();
-        return r;
-      };
-    }
-    if (typeof window.rekeyAgentSession === 'function') {
-      const _origRekey = window.rekeyAgentSession;
-      window.rekeyAgentSession = async function () {
-        const r = await _origRekey.apply(this, arguments);
-        refreshKbList();
-        return r;
-      };
-    }
-    if (typeof window.lockAgentSession === 'function') {
-      const _origLock = window.lockAgentSession;
-      window.lockAgentSession = function () {
-        _kbList = []; _pollTimer && clearInterval(_pollTimer); _pollTimer = null;
-        closeComposerPopover();
-        return _origLock.apply(this, arguments);
-      };
-    }
+    onSessionUnlock(function () { refreshKbList(); });
+    onSessionRekey(function () { refreshKbList(); });
+    onSessionLock(function () {
+      _kbList = []; _pollTimer && clearInterval(_pollTimer); _pollTimer = null;
+      closeComposerPopover();
+    });
   }
 
   // Boot
@@ -1457,6 +1454,7 @@
     if (tries > 150) return;
     setTimeout(() => waitForHost(tries + 1), 100);
   }
+  // Deferred via setTimeout(0) even on the "DOM already ready" branch - same
+  // reasoning as js/agent.js, see that file's comment / Phase 4 commit notes.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
-  else waitForHost();
-})();
+  else setTimeout(waitForHost, 0);

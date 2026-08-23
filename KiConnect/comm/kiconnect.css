@@ -747,7 +747,7 @@ header {
   text-transform: uppercase; letter-spacing: 1px;
   font-family: 'IBM Plex Mono', monospace;
 }
-/* Generic collapse/expand for panel sections; applied at runtime by initPanelSectionCollapse() in kiconnect.js. */
+/* Generic collapse/expand for panel sections; applied at runtime by initPanelSectionCollapse() in js/core/boot.js. */
 .section-header.tuning-collapsible {
   cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;
 }
@@ -1866,10 +1866,26 @@ textarea::placeholder { color: var(--muted); }
   background: var(--surface);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
 }
+.battle-popover-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 8px;
+}
 .battle-popover-title {
   font-size: 12px; font-weight: 700; color: var(--text);
-  margin-bottom: 8px;
 }
+.battle-popover-header .battle-popover-title { margin-bottom: 0; }
+/* Quick on/off for Battle-Modus, independent of the picked models — lets
+   you disable it without clearing battleSelectedModels, so re-enabling
+   later doesn't require re-picking the same models. Only shown once >=2
+   models are selected (below that, Battle-Modus can't run anyway and
+   turning it "on" would have nothing to do). */
+.battle-active-switch-wrap {
+  display: flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0;
+}
+.battle-active-switch-label {
+  font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--muted);
+}
+.battle-active-switch-wrap.on .battle-active-switch-label { color: var(--accent2); }
 .battle-search {
   width: 100%;
   background: var(--surface2);
@@ -2087,7 +2103,7 @@ textarea::placeholder { color: var(--muted); }
   .note-print:empty       { display: none !important; }
   .note-print:before      { content: "🗒️ " attr(data-label); display: block; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #a9821f !important; margin-bottom: 3pt; }
 
-  /* Single-bubble print (printSingleBubble() in kiconnect.js): show only
+  /* Single-bubble print (printSingleBubble() in js/ui/misc-ui.js): show only
      the preview overlay's already-rendered content. */
   body.printing-single-bubble > *:not(#printSingleOverlay) { display: none !important; }
   body.printing-single-bubble #printSingleOverlay {

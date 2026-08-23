@@ -676,6 +676,7 @@ registerLanguage('fa', { label: 'فارسی', code: 'FA' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[تولید متوقف شد]',
+    'battle.active': 'فعال',
     'battle.cancel': 'لغو',
     'battle.chooseWinner': '✓ استفاده از این',
     'battle.defaultBanner': 'هنوز برنده‌ای انتخاب نشده — تا انتخاب شما، «{model}» به‌طور پیش‌فرض استفاده می‌شود.',

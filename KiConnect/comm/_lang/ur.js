@@ -676,6 +676,7 @@ registerLanguage('ur', { label: 'اردو', code: 'UR' }, {
 
     // ── Battle mode (compare several models on the same message) ──
     'battle.aborted': '[تخلیق روک دی گئی]',
+    'battle.active': 'فعال',
     'battle.cancel': 'منسوخ کریں',
     'battle.chooseWinner': '✓ یہ استعمال کریں',
     'battle.defaultBanner': 'ابھی تک کوئی فاتح منتخب نہیں کیا گیا — جب تک آپ ایک نہ چنیں، بطور ڈیفالٹ "{model}" استعمال ہوگا۔',
