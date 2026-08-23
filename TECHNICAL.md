@@ -93,7 +93,10 @@ As of v4.0.0, the front end is a set of real ES modules under `comm/js/` rather 
 kiconnect/
 ├── START.bat                    (Windows start using system Python, incl. auto-update)
 ├── START_portable.bat           (Windows start using the bundled portable Python)
-├── update.bat                   (fetches the latest program files from GitHub)
+├── update.bat                   (checks for updates, then syncs only changed files via kiconnect_sync.ps1)
+├── kiconnect_sync.ps1           (does the actual tree-diff download/delete for update.bat)
+├── kiconnect_manifest.json      (created automatically: last-synced path -> GitHub blob SHA, per file)
+├── kiconnect_version.txt        (created automatically: last-synced commit hash, cheap "anything changed?" gate)
 ├── python/                      (portable use only: embedded Python)
 └── comm/
     ├── kiconnect.html               (entry point; loads the module scripts below)
@@ -133,16 +136,25 @@ Checks whether Python is available on the system, calls `update.bat` to refresh 
 Intended for users without an installed Python. Expects a self-contained, embedded Python environment at `python\python.exe`. If needed, it sets up `pip` inside that environment (uncommenting `#import site` in the `._pth` file and fetching `get-pip.py`), checks and installs the required packages, and then starts the proxy. It also calls `update.bat`.
 
 ### update.bat
-Provided an internet connection is available:
-1. Asks the GitHub API for the current commit hash on `main` (a few hundred bytes) and compares it against the hash saved from the last update (`kiconnect_version.txt`). If they match, nothing is downloaded - the run only re-checks that `comm/_render` is present (see below) and exits.
-2. If the version differs (or the check itself failed, in which case it syncs anyway to be safe), it first fetches a fresh copy of `update.bat` itself from GitHub and, if different, replaces the file on disk for the *next* run - this run keeps executing the version already loaded in memory rather than restarting itself.
-3. Downloads the entire repository as a single zip (`archive/refs/heads/main.zip`), extracts it to a temp folder, and copies `KiConnect/comm/` from the archive into the local `comm/` folder with Robocopy. This only adds and overwrites files - it never deletes anything on its own, and explicitly excludes `comm/_render` and `comm/datas` from being touched, so vendored libraries and (still relevant on older installs) local account data are left alone.
-4. Removes a short, explicitly-named list of retired files that Robocopy's add/overwrite-only behavior wouldn't clean up by itself - currently `comm/kiconnect.js`, `comm/kiconnect-agent.js`, `comm/kiconnect-voice.js`, `comm/kiconnect-db.js` (the pre-v4.0.0 monolith and bolt-ons, superseded by `comm/js/**`).
-5. Deletes the temp folder and records the new commit hash for next time.
+Initial installs are expected to come from a packaged GitHub Release; `update.bat`'s job on every subsequent start is to sync only what actually changed, not to re-download the whole project each time. Provided an internet connection is available:
+
+1. Asks the GitHub API for the current commit hash on `main` (a few hundred bytes) and compares it against the hash saved from the last update (`kiconnect_version.txt`). If they match, nothing else runs - just a re-check that `comm/_render` is present (see below) - and the script exits.
+2. If the version differs (or the check itself failed, in which case it syncs anyway to be safe): refreshes `update.bat`, `START.bat`, and `START_portable.bat` from GitHub if they changed. These are fetched to `<name>.new`, byte-compared, and moved over the original in place - this run keeps executing whatever `cmd.exe` already has buffered; the new content only takes effect the next time that file is invoked. (Same reasoning update.bat already applied to itself before this was generalized to all three launcher scripts.)
+3. Makes sure `kiconnect_sync.ps1` - the helper that does the real work - is current, by fetching and byte-comparing it the same way (safe to overwrite immediately here, since it hasn't been launched yet this run).
+4. Runs `kiconnect_sync.ps1`, which:
+   - asks GitHub's Git Trees API for the full file tree of `main`, recursively, in one call (path + blob SHA per file, no file contents - `git/trees/main?recursive=1`),
+   - compares each file's hash against a local manifest (`kiconnect_manifest.json`) saved from the previous sync,
+   - downloads only files that are new or whose hash changed,
+   - deletes local files under `comm/` that no longer exist in the tree upstream, based on what's actually on disk right now rather than trusting the old manifest - so it also self-heals a stale/missing manifest and, on the first run of this mechanism, automatically cleans up pre-v4.0.0 leftovers like `comm/kiconnect.js`, `comm/kiconnect-agent.js`, `comm/kiconnect-voice.js`, `comm/kiconnect-db.js`,
+   - never touches anything under `comm/datas/` or `comm/_render/`, regardless of what the tree looks like,
+   - writes the updated manifest back so the next run only needs the one cheap tree-diff call.
+5. Records the new commit hash for next time.
+
+If the tree lookup is unavailable or GitHub reports it as truncated, `update.bat` falls back to the previous method (download the whole repo as a zip, Robocopy the `comm/` contents in, remove the same short list of retired legacy files) as a safety net; that fallback also clears the local manifest, so the next successful tree sync does a full reconcile instead of trusting hashes that may now be stale.
 
 Separately, on every run (whether or not a sync happened), it makes sure `comm/_render` exists and has content: if the folder is empty or missing, it downloads and extracts `_render.zip` (the bundled MathJax/marked.js/DOMPurify/PDF.js libraries).
 
-If there is no internet connection, the entire update step is skipped without blocking startup. Earlier versions of this script re-launched themselves mid-run with a hidden flag to pick up a freshly-downloaded copy of themselves immediately; that pattern is exactly what triggers some antivirus heuristics (e.g. Kaspersky's `PDM:Trojan.Win32.Generic`), so it was removed in favor of the "save for next run" approach in step 2.
+If there is no internet connection, the entire update step is skipped without blocking startup. Batch launcher files are never overwritten by re-launching a running script with a hidden flag - that pattern is exactly what triggers some antivirus heuristics (e.g. Kaspersky's `PDM:Trojan.Win32.Generic`).
 
 ---
 
