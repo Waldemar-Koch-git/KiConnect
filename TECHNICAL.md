@@ -8,7 +8,34 @@ This file contains the technical details of Ki-Connect. A general, non-technical
 
 Ki-Connect is a locally-run, client-side-encrypted chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, DeepSeek, MiniMax, Zhipu AI/Z.ai (GLM), Moonshot AI (Kimi), KI Connect NRW, and any OpenAI-compatible server). The underlying application (Python + a web front end) is platform-independent, but this release is packaged and tested for Windows: the provided start scripts (`START.bat`, `START_portable.bat`, `update.bat`) are Windows batch files and will not run as-is on macOS or Linux. The application supports multiple local, separately encrypted accounts on the same installation, which makes it suitable for a small group of trusted users sharing one machine; it is not intended as a multi-tenant deployment for a company with many independent, mutually untrusted users, since all accounts share the same server process and host machine.
 
-> As of v4.0.0, the front end is organized as ~20 ES modules under `comm/js/` instead of one large `kiconnect.js` file plus loosely-coupled bolt-on scripts; this was a "no functional change" internal refactor. See "File structure" below and `comm/ARCHITECTURE.md` for details.
+> As of v4.0.0, the front end is organized as ~20 ES modules under `comm/js/` instead of one large `kiconnect.js` file plus loosely-coupled bolt-on scripts; this was a "no functional change" internal refactor. See "File structure" below for details.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    B["<b>Browser</b><br/>━━━━━━━━━━<br/>AES-GCM-256<br><i>(encryption in browser)</i><br/>PBKDF2 (600k)<br/>DOMPurify <i>(local)</i><br/>marked.js <i>(local)<br/>MathJax <i>(local)<br/>PDF.js <i>(local)<br/>Brute-Force Lock"]
+    P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API + Agent-API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O<br/>AES-GCM-256 <i>(cryptography, server-side)</i>"]
+    A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i><br/>DNS-pinned"]
+    F["<b>Local filesystem</b><br/>project folder(s)<br/>━━━━━━━━━━<br/>read / write / copy / move / search<br/>optional shell exec <i>(sandboxed, opt-in)</i><br/>optional git checkpoints"]
+    K["<b>Knowledge base</b><br/>SQLite + AES-GCM-256<br/>━━━━━━━━━━<br/>chunk + embed + search<br/>./datas/&lt;accountId&gt;/"]
+
+    B <--> P
+    P <--> A
+    P <-- unlocked agent session --> F
+    P <-- unlocked agent session --> K
+
+    N["🔒 Password-protected<br/>PBKDF2 + session token<br/>No plaintext in storage"]
+    B <-.- N
+
+    style B fill:#e0f2fe,stroke:#0284c7,color:#000000
+    style P fill:#fef9c3,stroke:#ca8a04,color:#000000
+    style A fill:#dcfce7,stroke:#16a34a,color:#000000
+    style F fill:#ede9fe,stroke:#7c3aed,color:#000000
+    style K fill:#ffedd5,stroke:#ea580c,color:#000000
+    style N fill:#fee2e2,stroke:#dc2626,color:#000000,stroke-dasharray: 3 3
+```
+
 
 ---
 
@@ -121,7 +148,7 @@ kiconnect/
 
 `kiconnect.html` loads four `<script type="module">` tags - `js/core/boot.js` (the application itself), `js/voice.js`, `js/agent.js`, and `js/db.js` - plus `kiconnect-languages-i18n.js` as a classic (non-module) script beforehand, so its translation tables are visible to every module as ordinary shared-realm globals. Everything else is pulled in transitively via `import`.
 
-`js/voice.js`, `js/agent.js`, and `js/db.js` no longer bolt onto the host app by reassigning its functions or writing to `window.X` (that pattern doesn't work with ES modules). Instead they register into it through an explicit hook API owned by the file that defines the extended behavior - `registerSendMessageOverride`/`registerRegenerateOverride` (`js/chat/chat-send.js`), `onRenderSidebar` (`js/chat/chat-sidebar.js`), `onSessionUnlock`/`onSessionRekey`/`onSessionLock` (`js/auth/accounts.js`), and `onLanguageChange` (`js/ui/misc-ui.js`). See `ARCHITECTURE.md` in `comm/` for the full file-by-file map.
+`js/voice.js`, `js/agent.js`, and `js/db.js` no longer bolt onto the host app by reassigning its functions or writing to `window.X` (that pattern doesn't work with ES modules). Instead they register into it through an explicit hook API owned by the file that defines the extended behavior - `registerSendMessageOverride`/`registerRegenerateOverride` (`js/chat/chat-send.js`), `onRenderSidebar` (`js/chat/chat-sidebar.js`), `onSessionUnlock`/`onSessionRekey`/`onSessionLock` (`js/auth/accounts.js`), and `onLanguageChange` (`js/ui/misc-ui.js`).
 
 The old standalone PDF.js worker-init script is folded directly into `js/chat/chat-attachments.js` (it doesn't need to run before anything else, unlike the MathJax config).
 
@@ -425,31 +452,6 @@ Translations are located in `kiconnect-languages-i18n.js`. To add a new language
 | Denial-of-service | 50 MB body limit (proxy), 100 MB per storage entry, rate limiting in place | Not sufficient for multi-tenant operation |
 | Account isolation | Multiple accounts are encrypted separately, but all run under the same server process and OS user | Suitable for a small trusted group on one machine, not for mutually untrusted users |
 
-### Architecture
-
-```mermaid
-flowchart LR
-    B["<b>Browser</b><br/>━━━━━━━━━━<br/>AES-GCM-256<br><i>(encryption in browser)</i><br/>PBKDF2 (600k)<br/>DOMPurify <i>(local)</i><br/>marked.js <i>(local)<br/>MathJax <i>(local)<br/>PDF.js <i>(local)<br/>Brute-Force Lock"]
-    P["<b>kiconnect-proxy.py</b><br/>127.0.0.1:5000<br/>━━━━━━━━━━<br/>CORS Proxy + Storage API + Agent-API<br/>./datas/ <i>(encrypted)</i><br/>Thread-safe, atomic I/O<br/>AES-GCM-256 <i>(cryptography, server-side)</i>"]
-    A["<b>API Provider</b><br/>OpenAI etc.<br/>━━━━━━━━━━<br/>HTTPS<br/><i>no TLS termination</i><br/>DNS-pinned"]
-    F["<b>Local filesystem</b><br/>project folder(s)<br/>━━━━━━━━━━<br/>read / write / copy / move / search<br/>optional shell exec <i>(sandboxed, opt-in)</i><br/>optional git checkpoints"]
-    K["<b>Knowledge base</b><br/>SQLite + AES-GCM-256<br/>━━━━━━━━━━<br/>chunk + embed + search<br/>./datas/&lt;accountId&gt;/"]
-
-    B <--> P
-    P <--> A
-    P <-- unlocked agent session --> F
-    P <-- unlocked agent session --> K
-
-    N["🔒 Password-protected<br/>PBKDF2 + session token<br/>No plaintext in storage"]
-    B <-.- N
-
-    style B fill:#e0f2fe,stroke:#0284c7,color:#000000
-    style P fill:#fef9c3,stroke:#ca8a04,color:#000000
-    style A fill:#dcfce7,stroke:#16a34a,color:#000000
-    style F fill:#ede9fe,stroke:#7c3aed,color:#000000
-    style K fill:#ffedd5,stroke:#ea580c,color:#000000
-    style N fill:#fee2e2,stroke:#dc2626,color:#000000,stroke-dasharray: 3 3
-```
 
 ---
 
