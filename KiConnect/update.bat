@@ -137,7 +137,16 @@ if not exist "%SYNC_SCRIPT%" (
 
 echo  Syncing changed files (this only downloads/removes what actually changed)...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SYNC_SCRIPT%" -LocalRoot "%~dp0" -ManifestPath "%MANIFEST_FILE%"
+REM -- Strip the trailing backslash from %~dp0 before quoting it. -----
+REM A quoted path ending in "\" (e.g. "C:\foo\") makes cmd.exe's
+REM argument parser treat the backslash as escaping the closing quote,
+REM so the whole rest of the command line (including -ManifestPath and
+REM its value) gets swallowed into -LocalRoot. PowerShell then never
+REM sees -ManifestPath and prompts for it interactively, which is what
+REM produced the "ManifestPath:" prompt.
+set "LOCAL_ROOT=%~dp0"
+if "%LOCAL_ROOT:~-1%"=="\" set "LOCAL_ROOT=%LOCAL_ROOT:~0,-1%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SYNC_SCRIPT%" -LocalRoot "%LOCAL_ROOT%" -ManifestPath "%MANIFEST_FILE%"
 set SYNC_RC=%ERRORLEVEL%
 
 if "%SYNC_RC%"=="2" (

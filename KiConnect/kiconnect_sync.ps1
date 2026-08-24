@@ -55,6 +55,10 @@ param(
     [Parameter(Mandatory = $true)][string]$ManifestPath
 )
 
+if ($LocalRoot.Length -gt 1 -and ($LocalRoot.EndsWith('\') -or $LocalRoot.EndsWith('/'))) {
+    $LocalRoot = $LocalRoot.TrimEnd('\', '/')
+}
+
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'   # avoid slow progress-bar rendering on downloads
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
