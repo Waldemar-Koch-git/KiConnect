@@ -8,7 +8,7 @@ This file contains the technical details of Ki-Connect. A general, non-technical
 
 Ki-Connect is a locally-run, client-side-encrypted chat client for various AI providers (OpenAI, Anthropic/Claude, OpenRouter, Mistral, Google Gemini, xAI Grok, Groq, DeepSeek, MiniMax, Zhipu AI/Z.ai (GLM), Moonshot AI (Kimi), KI Connect NRW, and any OpenAI-compatible server). The underlying application (Python + a web front end) is platform-independent, but this release is packaged and tested for Windows: the provided start scripts (`START.bat`, `START_portable.bat`, `update.bat`) are Windows batch files and will not run as-is on macOS or Linux. The application supports multiple local, separately encrypted accounts on the same installation, which makes it suitable for a small group of trusted users sharing one machine; it is not intended as a multi-tenant deployment for a company with many independent, mutually untrusted users, since all accounts share the same server process and host machine.
 
-> As of v4.0.0, the front end is organized as ~20 ES modules under `comm/js/` instead of one large `kiconnect.js` file plus loosely-coupled bolt-on scripts; this was a "no functional change" internal refactor. See "File structure" below for details.
+> As of v4.0.0, the front end is organized as ~20 ES modules under `comm/_js/` instead of one large `kiconnect.js` file plus loosely-coupled bolt-on scripts; this was a "no functional change" internal refactor. See "File structure" below for details.
 
 ## Architecture
 
@@ -90,8 +90,8 @@ flowchart LR
 - Responsive design with adjustable chat width and a resizable sidebar
 - Agent profiles with individual system prompts, temperatures, and model limits
 - Branching & regeneration: branch from any message; regenerated replies are stored as siblings with full history preserved
-- **Coding agent** (`js/agent.js`): any sidebar folder can be linked to a real folder on disk and focused as a "project." The focused chat's messages then run through an agentic tool loop (read/write/edit/copy/move files, list/browse folders, optional shell execution) using the same model/provider/thinking settings already selected in the header - see "Coding agent" below. Optional per-project git checkpoints snapshot the working folder before each mutating tool call.
-- **Knowledge base / RAG** (`js/db.js`): index a folder or an explicit set of files (`.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, and more) into a locally stored, encrypted, searchable knowledge base, then pull the most relevant chunks into a chat automatically - see "Knowledge base" below
+- **Coding agent** (`_js/agent.js`): any sidebar folder can be linked to a real folder on disk and focused as a "project." The focused chat's messages then run through an agentic tool loop (read/write/edit/copy/move files, list/browse folders, optional shell execution) using the same model/provider/thinking settings already selected in the header - see "Coding agent" below. Optional per-project git checkpoints snapshot the working folder before each mutating tool call.
+- **Knowledge base / RAG** (`_js/db.js`): index a folder or an explicit set of files (`.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.pdf`, `.docx`, `.pptx`, `.xlsx`, and more) into a locally stored, encrypted, searchable knowledge base, then pull the most relevant chunks into a chat automatically - see "Knowledge base" below
 
 ---
 
@@ -114,7 +114,7 @@ On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress
 
 ## File structure
 
-As of v4.0.0, the front end is a set of real ES modules under `comm/js/` rather than one monolithic script. `kiconnect.js`, `kiconnect-agent.js`, `kiconnect-voice.js`, and `kiconnect-db.js` no longer exist - don't look for them; if a code comment still mentions one, it's a historical "extracted from kiconnect.js" attribution, not a sign the file survived.
+As of v4.0.0, the front end is a set of real ES modules under `comm/_js/` rather than one monolithic script. `kiconnect.js`, `kiconnect-agent.js`, `kiconnect-voice.js`, and `kiconnect-db.js` no longer exist - don't look for them; if a code comment still mentions one, it's a historical "extracted from kiconnect.js" attribution, not a sign the file survived.
 
 ```
 kiconnect/
@@ -132,7 +132,7 @@ kiconnect/
     ├── kiconnect-languages-i18n.js  (classic script; translation tables shared with every module)
     ├── kiconnect-proxy.py           (local Flask/Waitress server: static files, /proxy, /store, /agent, /kb)
     ├── requirements.txt
-    ├── js/
+    ├── _js/
     │   ├── core/        boot.js, state.js, theme.js, i18n.js
     │   ├── auth/         crypto.js, accounts.js, storage.js
     │   ├── providers/    provider-crud.js, provider-models.js
@@ -146,11 +146,11 @@ kiconnect/
     └── _render/              (bundled local libraries: MathJax, marked.js, DOMPurify, PDF.js)
 ```
 
-`kiconnect.html` loads four `<script type="module">` tags - `js/core/boot.js` (the application itself), `js/voice.js`, `js/agent.js`, and `js/db.js` - plus `kiconnect-languages-i18n.js` as a classic (non-module) script beforehand, so its translation tables are visible to every module as ordinary shared-realm globals. Everything else is pulled in transitively via `import`.
+`kiconnect.html` loads four `<script type="module">` tags - `_js/core/boot.js` (the application itself), `_js/voice.js`, `_js/agent.js`, and `_js/db.js` - plus `kiconnect-languages-i18n.js` as a classic (non-module) script beforehand, so its translation tables are visible to every module as ordinary shared-realm globals. Everything else is pulled in transitively via `import`.
 
-`js/voice.js`, `js/agent.js`, and `js/db.js` no longer bolt onto the host app by reassigning its functions or writing to `window.X` (that pattern doesn't work with ES modules). Instead they register into it through an explicit hook API owned by the file that defines the extended behavior - `registerSendMessageOverride`/`registerRegenerateOverride` (`js/chat/chat-send.js`), `onRenderSidebar` (`js/chat/chat-sidebar.js`), `onSessionUnlock`/`onSessionRekey`/`onSessionLock` (`js/auth/accounts.js`), and `onLanguageChange` (`js/ui/misc-ui.js`).
+`_js/voice.js`, `_js/agent.js`, and `_js/db.js` no longer bolt onto the host app by reassigning its functions or writing to `window.X` (that pattern doesn't work with ES modules). Instead they register into it through an explicit hook API owned by the file that defines the extended behavior - `registerSendMessageOverride`/`registerRegenerateOverride` (`_js/chat/chat-send.js`), `onRenderSidebar` (`_js/chat/chat-sidebar.js`), `onSessionUnlock`/`onSessionRekey`/`onSessionLock` (`_js/auth/accounts.js`), and `onLanguageChange` (`_js/ui/misc-ui.js`).
 
-The old standalone PDF.js worker-init script is folded directly into `js/chat/chat-attachments.js` (it doesn't need to run before anything else, unlike the MathJax config).
+The old standalone PDF.js worker-init script is folded directly into `_js/chat/chat-attachments.js` (it doesn't need to run before anything else, unlike the MathJax config).
 
 ---
 
@@ -385,7 +385,7 @@ For supported models (Claude 3.7 and up, GPT-5.x thinking variants, Grok, DeepSe
 - **Fixed-thinking models** (e.g. MiniMax): on/off toggle only, no effort slider
 - **Display**: collapsible "thinking process" block above the response
 
-> Model catalogs (`js/providers/provider-models.js`) are updated as providers retire and release models - check that file for the current default list; most providers also load their live model list from the API once a key is added.
+> Model catalogs (`_js/providers/provider-models.js`) are updated as providers retire and release models - check that file for the current default list; most providers also load their live model list from the API once a key is added.
 
 ---
 
