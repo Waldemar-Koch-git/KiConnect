@@ -876,9 +876,15 @@ export function ensureDompurifyNoopenerHook() {
 export function formatText(raw) {
   if (!raw) return '';
   const blocks = [];
-  // Placeholder: HTML comments that marked passes through unchanged
-  const PH = (i) => `<!--KICBLK${i}-->`;
-  const PH_RE = /<!--KICBLK(\d+)-->/g;
+  // Placeholder: plain alnum sentinel (NOT HTML) so it survives even if a
+  // fallback path below ends up escHtml()-ing `s` — HTML comments like
+  // "<!--KICBLK0-->" get mangled into "&lt;!--KICBLK0--&gt;" by escHtml(),
+  // which then no longer matches PH_RE in Step 3 and leaks into the
+  // rendered message as visible text. A char-class-free token can't be
+  // corrupted by HTML-escaping.
+  const PH_TOKEN = 'KICBLK' + Math.random().toString(36).slice(2, 10);
+  const PH = (i) => `${PH_TOKEN}${i}x`;
+  const PH_RE = new RegExp(`${PH_TOKEN}(\\d+)x`, 'g');
   let s = raw;
 
   // Builds one collapsible code-block's HTML, pushes it onto `blocks`, and
@@ -892,17 +898,37 @@ export function formatText(raw) {
     return i;
   }
 
+  // Strips up to `indent`'s worth of leading whitespace from every line of
+  // a fenced code block's content — fences nested inside list items or
+  // blockquotes are written indented to match their container, and that
+  // indentation is part of the surrounding structure, not the code itself.
+  function _stripFenceIndent(code, indent) {
+    if (!indent) return code;
+    const re = new RegExp('^' + indent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return code.split('\n').map(line => line.replace(re, '')).join('\n');
+  }
+
   // Step 1: Code and LaTeX blocks VOR protect from marked
 
   // 4+-Backtick-Fences
-  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$/gm, (_, fence, lang, code) => PH(pushCodeBlock(lang, code)));
+  // Leading [ \t]* tolerates fences indented under a list item or
+  // blockquote (very common — e.g. "- Beispiel:\n    ```js\n    ...\n
+  // ```"). Without it, an indented fence isn't recognized as a fence HERE,
+  // so its content falls through to the inline-code regex below and gets
+  // its backticks replaced by placeholders while still raw markdown text —
+  // but marked.js DOES recognize the indented fence per CommonMark's list
+  // rules, wraps that already-placeholder-corrupted text in a NEW code
+  // block, and the single-pass placeholder restore in Step 3 can't reach
+  // the now doubly-nested placeholders inside it. Matching the fence here
+  // first (before inline-code) avoids the whole nesting problem.
+  s = s.replace(/^([ \t]*)(`{4,})([^\n]*)\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm, (_, indent, fence, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
 
   // 3-Backtick-Fences
-  s = s.replace(/^```([^\n`]*)\n([\s\S]*?)^```[ \t]*$/gm, (_, lang, code) => PH(pushCodeBlock(lang, code)));
+  s = s.replace(/^([ \t]*)```([^\n`]*)\n([\s\S]*?)^[ \t]*```[ \t]*$/gm, (_, indent, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
 
   // Not-closed Fences (Fallback)
-  s = s.replace(/^(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, fence, lang, code) => PH(pushCodeBlock(lang, code)));
-  s = s.replace(/^```([^\n`]*)\n([\s\S]*)$/gm, (_, lang, code) => PH(pushCodeBlock(lang, code)));
+  s = s.replace(/^([ \t]*)(`{4,})([^\n]*)\n([\s\S]*)$/gm, (_, indent, fence, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
+  s = s.replace(/^([ \t]*)```([^\n`]*)\n([\s\S]*)$/gm, (_, indent, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
 
   // Inline-Code
   s = s.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -943,6 +969,49 @@ export function formatText(raw) {
     return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
+  // Step 1a: cap pathological blockquote/list nesting depth
+  // marked's block-level parser recurses once per nesting level. Input with
+  // very deep leading ">" chains (or chained "- "/"1. " list markers) makes
+  // it recurse hundreds/thousands of levels deep, which can throw
+  // "Maximum call stack size exceeded" — or, worse, blow up memory and
+  // crash the whole tab/process before any catch() even runs (reproduced
+  // with ~2000 lines of incrementally deeper ">" nesting). A try/catch
+  // around marked.parse() cannot protect against that, so nesting depth is
+  // capped here, before marked ever sees the text: markers beyond
+  // MAX_NEST_DEPTH on a line are escaped to literal characters, which stops
+  // marked from recursing further on that line while leaving normal
+  // (realistic) nesting completely untouched.
+  {
+    const MAX_NEST_DEPTH = 20;
+    // Lists can also nest purely via indentation, one marker per line but
+    // each line indented further than the last (no same-line marker chain
+    // to catch) — that recurses just as deep and must be capped too, via a
+    // hard ceiling on leading whitespace (indentation drives list nesting
+    // level in CommonMark, so bounding it bounds nesting depth).
+    const MAX_INDENT = MAX_NEST_DEPTH * 4;
+    const markerRe = /^(>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)/;
+    const indentRe = /^[ \t]+/;
+    s = s.split('\n').map(line => {
+      const im = indentRe.exec(line);
+      if (im && im[0].length > MAX_INDENT) {
+        line = line.slice(0, MAX_INDENT) + line.slice(im[0].length);
+      }
+      let rest = line, prefix = '', depth = 0;
+      while (depth < MAX_NEST_DEPTH) {
+        const m = markerRe.exec(rest);
+        if (!m) return line; // never hit the cap - leave line untouched
+        prefix += m[0];
+        rest = rest.slice(m[0].length);
+        depth++;
+      }
+      // One more marker would push us past the cap: escape it to literal
+      // text so marked stops treating the rest of the line as nested
+      // block structure (CommonMark backslash-escapes `\>`/`\-`/`\*`/`\+`).
+      if (markerRe.test(rest)) rest = rest.replace(/^([>\-*+])/, '\\$1');
+      return prefix + rest;
+    }).join('\n');
+  }
+
   // Step 1b: ensure a blank line precedes list blocks
   // CommonMark/marked only starts a list at the start of the text or after
   // a blank line — without it, "-"/"*"/"1." lines get pulled into the
@@ -981,7 +1050,10 @@ export function formatText(raw) {
     try {
       s = marked.parse(s, { renderer, gfm: true, breaks: false });
     } catch(e) {
-      // Fallback falls marked fails
+      // Fallback falls marked fails (e.g. "Maximum call stack size exceeded"
+      // from pathologically deep blockquote/list nesting). Logged so the
+      // underlying malformed input is diagnosable instead of silently eaten.
+      console.error('[KIC] marked.parse failed, using plain-text fallback', e);
       s = escHtml(s).replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
       s = '<p>' + s + '</p>';
     }
