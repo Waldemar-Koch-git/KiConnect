@@ -212,6 +212,11 @@ AGENT_IGNORE_DIRS = {
 AGENT_BLOCKED_SUFFIXES = ('.env', '.key', '.pem', '.pfx', '.p12', '.crt')
 AGENT_BLOCKED_NAMES = {'.env', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
 _SAFE_PROJECT_ID_RE = re.compile(r'^p_[A-Za-z0-9]{1,64}$')
+# A commit-ish the endpoints below will accept: a (possibly abbreviated) hex
+# sha, optionally with a trailing ~N (parent-of) suffix - e.g. "a1b2c3d~1".
+# Deliberately rejects anything else (branch names, "HEAD", "--upload-pack"
+# style flags, ...) since these values flow into `git` subprocess argv.
+_SAFE_GIT_REF_RE = re.compile(r'^[0-9a-fA-F]{4,40}(~[0-9]+)?$')
 
 # Agent Session (per-account, in-RAM only). The AES-256 key for a project
 # registry is derived client-side from the password and handed to the
@@ -237,7 +242,7 @@ def _agent_session_or_401():
 
 def _agent_decrypt(key_bytes, b64_blob):
     """Decrypt a base64(iv[12] || AES-GCM ciphertext+tag) blob - same format
-    encryptStr()/encryptObj() in js/auth/crypto.js produce."""
+    encryptStr()/encryptObj() in _js/auth/crypto.js produce."""
     raw = base64.b64decode(b64_blob)
     iv, ct = raw[:12], raw[12:]
     plaintext = AESGCM(key_bytes).decrypt(iv, ct, None)
@@ -363,7 +368,7 @@ def _agent_authed(fn):
     return wrapper
 
 # /agent/session/unlock - hand the server a per-account agent key. Called
-# once after a normal password login (see js/auth/accounts.js
+# once after a normal password login (see _js/auth/accounts.js
 # unlockAgentSession()). Key is derived client-side from the password + a
 # dedicated salt, independent of the config/providers/chats key - a leak of
 # one doesn't expose the other.
@@ -567,14 +572,20 @@ def agent_projects(sess):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'name': name, 'path': target})
 
-# Git checkpointing: best-effort safety net for destructive agent operations
-# (write_file, delete_file(s), edit_file, replace_in_files, move/copy
-# overwrites, ...). When a project has 'checkpoints' enabled, the frontend
-# calls POST /agent/checkpoint/<id> once before each mutating tool call (see
+# Git checkpointing: best-effort safety net for agent file operations
+# (create/write/edit/delete/move/copy - see MUTATING_TOOL_NAMES in
+# kiconnect-agent.js). When a project has 'checkpoints' enabled, the frontend
+# calls POST /agent/checkpoint/<id> once before each such tool call (see
 # apiCheckpoint()/executeTool() in kiconnect-agent.js) - stages and commits
 # whatever changed since the last checkpoint, using the project's own (or a
-# fresh) git repo. Not a replacement for the user's own git workflow: never
-# touches branches/remotes/history, only commits to the checked-out branch.
+# fresh) git repo. The checkpoints PUT endpoint below also fires one
+# immediately on enable, so a freshly scaffolded project gets a repo and a
+# baseline commit right away instead of waiting for the next tool call.
+# Everything here is 100% local: only `git init` / `git config` (repo-local,
+# never --global) / `git add` / `git commit` / `git gc --auto` (see
+# _git_checkpoint()'s auto-housekeeping below) are ever run. Nothing here
+# ever runs `git push`, `git remote`, or touches any remote/branch - not a
+# replacement for the user's own git workflow, purely a local undo trail.
 # A failed git operation is swallowed and reported as {ok:false} rather than
 # blocking the tool call - a missing safety net shouldn't stop the agent.
 _git_available_cache = None
@@ -609,14 +620,36 @@ def _git_checkpoint(pdir, message):
                           cwd=pdir, capture_output=True, timeout=30, text=True)
         if commit.returncode != 0:
             return {'ok': False, 'reason': (commit.stderr or 'commit failed')[:200]}
+        # `--auto` is git's own built-in threshold check (default: >6700 loose
+        # objects or >50 packfiles) - below that it's a near-instant no-op,
+        # so calling it after every checkpoint is cheap. This is deliberately
+        # NOT the same as the 🧹 button in the history modal (agent_git_gc()
+        # below), which forces a full `--aggressive --prune=now` repack on
+        # demand: doing that unconditionally on every single checkpoint would
+        # make each turn redo a full repack of the *entire* repo instead of
+        # just the objects added since the last one (O(n²) over a long
+        # session), and --aggressive's deep delta search is explicitly meant
+        # to be run occasionally, not on a tight loop. This call is purely to
+        # stop loose objects from piling up unbounded over a very long
+        # session - failure here is swallowed, same as everything else in
+        # this function; it must never turn a successful checkpoint into a
+        # failed one.
+        try:
+            _sp.run(['git', 'gc', '--auto', '-q'], cwd=pdir, capture_output=True, timeout=60)
+        except Exception:
+            pass
         return {'ok': True, 'committed': True}
     except Exception as e:
         return {'ok': False, 'reason': str(e)[:200]}
 
 # /agent/projects/<id>/checkpoints - enable/disable git checkpoints. Off by
-# default, same opt-in pattern as shell execution below. Enabling it doesn't
-# immediately create a commit - the first checkpoint happens before the
-# next mutating tool call.
+# default, same opt-in pattern as shell execution below. Enabling it takes an
+# immediate baseline checkpoint (see _git_checkpoint() call below) so a repo
+# exists and today's on-disk state is captured right away, rather than
+# waiting for the first mutating tool call - important for projects that
+# were just scaffolded via create_file/create_directory(ies), which don't
+# themselves trigger a checkpoint (see MUTATING_TOOL_NAMES in
+# kiconnect-agent.js).
 @app.route('/agent/projects/<pid>/checkpoints', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_checkpoints(sess, pid):
@@ -630,7 +663,12 @@ def agent_set_checkpoints(sess, pid):
             return _agent_error('Project not found.', 404)
         entry['checkpoints'] = enabled
         _save_agent_registry(sess, registry)
-    return _agent_ok({'id': pid, 'checkpoints': enabled, 'gitAvailable': _git_available()})
+    result = {'id': pid, 'checkpoints': enabled, 'gitAvailable': _git_available()}
+    if enabled:
+        pdir = _project_root_for_id(pid, sess)
+        if pdir:
+            result['initial'] = _git_checkpoint(pdir, 'Initial checkpoint (checkpoints enabled)')
+    return _agent_ok(result)
 
 # /agent/checkpoint/<id> - stage+commit current changes. Called by the
 # frontend right before a mutating tool call executes (not in simulate mode,
@@ -652,6 +690,292 @@ def agent_checkpoint(sess, pid):
     except Exception: body = {}
     message = (body.get('message') or 'Agent checkpoint').strip()[:200] or 'Agent checkpoint'
     return _agent_ok(_git_checkpoint(pdir, message))
+
+# ── Git history / restore ────────────────────────────────────────────────
+# Read-only browsing (log/commit/file-at/deleted) plus one write op
+# (restore), all scoped to a single project's own local repo via
+# _project_root_for_id()/_safe_rel_path() - same confinement every other
+# /agent/* file endpoint uses. Restore is deliberately non-destructive: it
+# never runs `git reset --hard` or rewrites history, it only checks out old
+# content into the working tree and makes a brand-new checkpoint commit out
+# of it - so a restore can itself always be undone the same way.
+
+def _run_git(pdir, args, timeout=30, text=True):
+    import subprocess as _sp
+    return _sp.run(['git'] + args, cwd=pdir, capture_output=True, timeout=timeout, text=text)
+
+def _require_git_ref(raw):
+    raw = (raw or '').strip()
+    if not _SAFE_GIT_REF_RE.match(raw):
+        return None
+    return raw
+
+# /agent/git/<id>/log - checkpoint history, newest first. Optional
+# ?path=<rel path> to only show commits that touched one file (used to
+# find/restore a specific file's older versions, including ones later
+# deleted). Optional ?limit= (default 200, capped at 500).
+@app.route('/agent/git/<pid>/log', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_log(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available():
+        return _agent_error('git is not installed on this machine.', 400)
+    if not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_ok({'commits': []})
+    try:
+        limit = min(max(int(request.args.get('limit', 200)), 1), 500)
+    except (TypeError, ValueError):
+        limit = 200
+    # %b (body) is included so a "Run: <id>" trailer line - appended by
+    # checkpointMessage() in agent.js to tag every checkpoint made during
+    # the same agent turn - can be parsed back out below. Lets the 🕘 modal
+    # group a turn's checkpoints instead of showing one flat row per
+    # tool call. Older/manual commits simply have no trailer -> no runId,
+    # and render as their own one-commit group (see renderGhGroups()).
+    args = ['log', f'-{limit}', '--pretty=format:%x01%H%x02%h%x02%ci%x02%s%x03%b', '--date=iso']
+    scope = (request.args.get('path') or '').strip()
+    if scope:
+        resolved = _safe_rel_path(pdir, scope)
+        if not resolved:
+            return _agent_error(f'Invalid path "{scope}".')
+        rel = os.path.relpath(resolved, pdir).replace(os.sep, '/')
+        args += ['--', rel]
+    res = _run_git(pdir, args)
+    if res.returncode != 0:
+        # Empty repo (no commits yet) exits non-zero; anything else is a
+        # genuine failure worth surfacing.
+        if 'does not have any commits' in (res.stderr or '') or 'unknown revision' in (res.stderr or ''):
+            return _agent_ok({'commits': []})
+        return _agent_error((res.stderr or 'git log failed')[:300])
+    commits = []
+    for line in res.stdout.split('\x01'):
+        line = line.strip('\n')
+        if not line:
+            continue
+        parts = line.split('\x02', 3)
+        if len(parts) != 4:
+            continue
+        full_hash, short_hash, date, rest = parts
+        subject, _, body = rest.partition('\x03')
+        run_match = re.search(r'^Run:\s*(\S+)\s*$', body, re.MULTILINE)
+        commit = {'hash': full_hash, 'shortHash': short_hash, 'date': date, 'message': subject}
+        if run_match:
+            commit['runId'] = run_match.group(1)
+        commits.append(commit)
+    return _agent_ok({'commits': commits})
+
+# /agent/git/<id>/commit/<hash> - which files a checkpoint touched, and how
+# (Added/Modified/Deleted/Renamed), for the "expand a checkpoint" view.
+@app.route('/agent/git/<pid>/commit/<hash_>', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_commit(sess, pid, hash_):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    ref = _require_git_ref(hash_)
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    res = _run_git(pdir, ['show', '--pretty=format:%H%x02%ci%x02%s', '--name-status', ref])
+    if res.returncode != 0:
+        return _agent_error(f'Commit not found: {(res.stderr or "")[:200]}', 404)
+    lines = res.stdout.splitlines()
+    if not lines:
+        return _agent_error('Commit not found.', 404)
+    full_hash, date, subject = (lines[0].split('\x02', 2) + ['', '', ''])[:3]
+    files = []
+    STATUS_NAMES = {'A': 'added', 'M': 'modified', 'D': 'deleted'}
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        cols = line.split('\t')
+        code = cols[0]
+        if code.startswith('R'):  # rename, e.g. "R100\told\tnew"
+            if len(cols) >= 3:
+                files.append({'path': cols[2], 'oldPath': cols[1], 'status': 'renamed'})
+            continue
+        if len(cols) < 2:
+            continue
+        files.append({'path': cols[1], 'status': STATUS_NAMES.get(code[:1], code)})
+    return _agent_ok({'hash': full_hash, 'date': date, 'message': subject, 'files': files})
+
+# /agent/git/<id>/file-at?hash=&path= - a file's content as of a given
+# checkpoint, for previewing before restoring it. hash may be "<sha>~1" to
+# mean "right before that commit" (used for restoring deleted files, see
+# /agent/git/<id>/deleted below).
+@app.route('/agent/git/<pid>/file-at', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_file_at(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    ref = _require_git_ref(request.args.get('hash'))
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    rel_in = (request.args.get('path') or '').strip()
+    resolved = _safe_rel_path(pdir, rel_in)
+    if not resolved:
+        return _agent_error(f'Invalid path "{rel_in}".')
+    rel = os.path.relpath(resolved, pdir).replace(os.sep, '/')
+    res = _run_git(pdir, ['show', f'{ref}:{rel}'], text=False)
+    if res.returncode != 0:
+        return _agent_error('That file did not exist at this checkpoint.', 404)
+    try:
+        content = res.stdout.decode('utf-8')
+        return _agent_ok({'path': rel, 'hash': ref, 'content': content, 'binary': False})
+    except UnicodeDecodeError:
+        return _agent_ok({'path': rel, 'hash': ref, 'content_b64': base64.b64encode(res.stdout).decode('ascii'), 'binary': True})
+
+# /agent/git/<id>/deleted - files that were deleted at some point and are
+# still missing now (recreated files are excluded), newest deletion first.
+# Each entry carries restoreHash = "<delete-commit>~1", the ref one restore
+# call needs to bring that exact file back.
+@app.route('/agent/git/<pid>/deleted', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_deleted(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_ok({'files': []})
+    res = _run_git(pdir, ['log', '--diff-filter=D', '--name-status', '--pretty=format:%x01%H%x02%ci'])
+    if res.returncode != 0:
+        return _agent_ok({'files': []})
+    seen = {}
+    cur_hash, cur_date = None, None
+    for line in res.stdout.split('\n'):
+        if line.startswith('\x01'):
+            cur_hash, cur_date = line[1:].split('\x02', 1)
+        elif line.startswith('D\t'):
+            path = line[2:]
+            if path not in seen:  # log is newest-first, so first hit = most recent deletion
+                seen[path] = {'deleteCommit': cur_hash, 'deletedAt': cur_date}
+    out = []
+    for path, info in seen.items():
+        if os.path.exists(os.path.join(pdir, path)):
+            continue  # recreated since - not "deleted" from the user's POV anymore
+        out.append({'path': path, 'deletedAt': info['deletedAt'], 'restoreHash': f"{info['deleteCommit']}~1"})
+    out.sort(key=lambda r: r['deletedAt'], reverse=True)
+    return _agent_ok({'files': out})
+
+# /agent/git/<id>/restore - bring back an old checkpoint's content. Two
+# modes, chosen by whether `paths` is given:
+#   - paths: [...]   restore just those files/folders to their state at
+#     `hash` (recreates deleted ones too) - everything else untouched.
+#   - no paths        restore the ENTIRE project to its state at `hash`:
+#     every file gets that snapshot's content, and anything that didn't
+#     exist yet at `hash` is removed.
+# Either way this ends by taking a fresh checkpoint of the result, so the
+# restore itself becomes an undoable step rather than lost history.
+@app.route('/agent/git/<pid>/restore', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_restore(sess, pid):
+    registry = _load_agent_registry(sess)
+    entry = next((p for p in registry['projects'] if p.get('id') == pid), None)
+    if not entry:
+        return _agent_error('Project not found.', 404)
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_error('This project has no checkpoint history yet.', 400)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    ref = _require_git_ref(body.get('hash'))
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    raw_paths = body.get('paths')
+
+    if raw_paths:  # ── single/multi-file restore ──
+        if not isinstance(raw_paths, list) or not raw_paths:
+            return _agent_error('paths must be a non-empty array.')
+        rels = []
+        for p in raw_paths:
+            resolved = _safe_rel_path(pdir, str(p))
+            if not resolved:
+                return _agent_error(f'Invalid path "{p}".')
+            rels.append(os.path.relpath(resolved, pdir).replace(os.sep, '/'))
+        checkout = _run_git(pdir, ['checkout', ref, '--'] + rels)
+        if checkout.returncode != 0:
+            return _agent_error(f'Restore failed: {(checkout.stderr or "")[:300]}')
+        label = rels[0] if len(rels) == 1 else f'{len(rels)} files'
+        cp = _git_checkpoint(pdir, f'Restored {label} from {ref[:12]}')
+        return _agent_ok({'restored': rels, 'checkpoint': cp})
+
+    # ── whole-project restore ──
+    tree = _run_git(pdir, ['ls-tree', '-r', '--name-only', ref])
+    if tree.returncode != 0:
+        return _agent_error(f'Unknown checkpoint: {(tree.stderr or "")[:200]}', 404)
+    target_files = set(l for l in tree.stdout.split('\n') if l)
+    checkout = _run_git(pdir, ['checkout', ref, '--', '.'])
+    if checkout.returncode != 0:
+        return _agent_error(f'Restore failed: {(checkout.stderr or "")[:300]}')
+    # Remove anything present now that didn't exist in the target snapshot
+    # (checkout only ever adds/updates paths that ARE in <ref>'s tree).
+    removed = []
+    for root, dirs, files in os.walk(pdir):
+        dirs[:] = [d for d in dirs if d != '.git']
+        for fname in files:
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, pdir).replace(os.sep, '/')
+            if rel not in target_files:
+                try:
+                    os.remove(full)
+                    removed.append(rel)
+                except OSError:
+                    pass
+    # Clean up now-empty directories left behind by the removals above.
+    for root, dirs, files in os.walk(pdir, topdown=False):
+        if root == pdir or os.path.basename(root) == '.git' or '.git' + os.sep in root:
+            continue
+        try:
+            if not os.listdir(root):
+                os.rmdir(root)
+        except OSError:
+            pass
+    cp = _git_checkpoint(pdir, f'Restored entire project to {ref[:12]}')
+    return _agent_ok({'restoredTo': ref, 'removed': removed, 'checkpoint': cp})
+
+def _dir_size(pdir):
+    """Recursive byte size of a directory (used for .git before/after gc)."""
+    total = 0
+    for root, dirs, files in os.walk(pdir):
+        for fname in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fname))
+            except OSError:
+                pass
+    return total
+
+# /agent/git/<id>/gc - repacks the project's .git into delta-compressed
+# packfiles (`git gc --aggressive --prune=now`, a full forced repack). This
+# is the manual/on-demand counterpart to the lightweight `git gc --auto`
+# that already runs after every checkpoint in _git_checkpoint() (which is a
+# near-instant no-op below git's own loose-object threshold); this endpoint
+# forces the deep, expensive repack regardless of that threshold, for when a
+# user explicitly wants to shrink a project's history right now (e.g. before
+# archiving it). Never touches history or working-tree content, only how
+# it's stored on disk. Reports before/after size of .git so the modal can
+# show whether it actually helped - on a very small repo, packfile overhead
+# can occasionally make it slightly bigger, which is expected and not a bug.
+@app.route('/agent/git/<pid>/gc', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_gc(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available():
+        return _agent_error('git is not installed on this machine.', 400)
+    git_dir = os.path.join(pdir, '.git')
+    if not os.path.isdir(git_dir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
+    before = _dir_size(git_dir)
+    res = _run_git(pdir, ['gc', '--aggressive', '--prune=now'], timeout=120)
+    if res.returncode != 0:
+        return _agent_error(f'git gc failed: {(res.stderr or "")[:300]}')
+    after = _dir_size(git_dir)
+    return _agent_ok({'before': before, 'after': after})
 
 # /agent/projects/<id>/shell - enable/disable shell command execution. Its
 # own explicit endpoint (not folded into general project settings) so
@@ -1829,7 +2153,7 @@ def kb_reindex(sess, kb_id):
 # browser turns into a download. Deliberately NOT encrypted: the point is
 # portability to a *different* account/password, whose key can't decrypt
 # this one's bytes. Frontend must warn "this file is unencrypted" before
-# download (js/db.js). Embedding apiKey is never included - it's a
+# download (_js/db.js). Embedding apiKey is never included - it's a
 # per-account credential, not KB data.
 EXPORT_FORMAT_VERSION = 1
 
@@ -2469,7 +2793,7 @@ def _proxy_request(target_url):
 
     # "kic_lan_confirm=1" is a marker the frontend appends to the proxy URL
     # (never the upstream one) for an address double-confirmed in the
-    # Provider editor (see confirmLanAddress() in js/providers/provider-crud.js). Strip it
+    # Provider editor (see confirmLanAddress() in _js/providers/provider-crud.js). Strip it
     # before forwarding so it never reaches the upstream API.
     fwd_params = request.args.copy()
     lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'

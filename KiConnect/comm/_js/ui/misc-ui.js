@@ -1,4 +1,3 @@
-// js/ui/misc-ui.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { getAccount } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { escHtml, getBubbleRow, getFormulaData, nodeToPlainText, safeIdx, wireCodeCopyButtons } from '../chat/chat-render.js';

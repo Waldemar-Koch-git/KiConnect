@@ -1,4 +1,3 @@
-// js/chat/chat-render.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { toggleCodeBlockCollapse } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { renderEditFileChips } from './chat-attachments.js';

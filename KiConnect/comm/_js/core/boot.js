@@ -1,4 +1,3 @@
-// js/core/boot.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { applySessionDuration, changeAccountName, changeLoginPassword, deleteAccount, doLogin, doSetupPassword, forgotPassword, getAccount, loadSessionSettings, logoutNow, renderAccountGrid, renderNewAccountColorRow, resetSessionNow, startSessionCountdown, updatePwdStrength, verifyAccountPassword } from '../auth/accounts.js';
 import { load, save } from '../auth/storage.js';
 import { clearAttachments, handleDrop, handleEditFileAttach, handleEditImageAttach, handleFileAttach, handleImageAttach, handlePaste } from '../chat/chat-attachments.js';
@@ -109,9 +108,9 @@ export function setupEventListeners(){
   document.getElementById('langToggleBtn').addEventListener('click', toggleLangDropdown);
   document.getElementById('overlay').addEventListener('click', closePanels);
   // Was inline onchange="onEmbedModelSelectChange()" in the HTML — moved
-  // here in Phase 2/3, since inline handlers can't reach a module-scoped
-  // function (`onEmbedModelSelectChange` is no longer a `window` global
-  // now that the app is `type="module"`).
+  // here since inline handlers can't reach a module-scoped function
+  // (`onEmbedModelSelectChange` is no longer a `window` global now that
+  // the app is `type="module"`).
   document.getElementById('pvEmbedModelSelect').addEventListener('change', onEmbedModelSelectChange);
 
   // Tuning Panel

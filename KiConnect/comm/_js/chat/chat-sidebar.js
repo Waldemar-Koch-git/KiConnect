@@ -1,4 +1,3 @@
-// js/chat/chat-sidebar.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { accountKey } from '../auth/accounts.js';
 import { _storePut, save } from '../auth/storage.js';
 import { renderMessages } from './chat-render.js';

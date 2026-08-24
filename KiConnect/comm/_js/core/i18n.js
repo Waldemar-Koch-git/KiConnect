@@ -1,4 +1,3 @@
-// js/core/i18n.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { renderAccountGrid } from '../auth/accounts.js';
 import { escHtml } from '../chat/chat-render.js';
 import { renderSidebar } from '../chat/chat-sidebar.js';

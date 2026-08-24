@@ -1,4 +1,3 @@
-// js/ui/tour.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { accountKey } from '../auth/accounts.js';
 import { closePanels } from '../core/boot.js';
 import { renderLangDropdown, t, tf } from '../core/i18n.js';

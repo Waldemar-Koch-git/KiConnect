@@ -1,4 +1,3 @@
-// js/auth/accounts.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { deriveRawBitsPBKDF2, getCryptoKey, hashPasswordPBKDF2 } from './crypto.js';
 import { _registryPut, _storeDel, _storeDeleteAccountDir, _storeListKeys, loadAccountRegistryAsync, resetSaveCache, save, saveAccountRegistry } from './storage.js';
 import { bootApp, closePanels, setupEventListeners, showView } from '../core/boot.js';
@@ -754,14 +753,13 @@ export async function checkLogin() {
 
 // This IIFE is the application's actual boot trigger (calls setupEventListeners/
 // applyTranslations/checkLogin, which cascades into essentially every other
-// module). Deferred via setTimeout(0) - same reasoning as js/agent.js's and
-// js/db.js's waitForHost() fix: with ES modules, this file's own evaluation
+// module). Deferred via setTimeout(0) - same reasoning as _js/agent.js's and
+// _js/db.js's waitForHost() fix: with ES modules, this file's own evaluation
 // order (set by the import dependency graph, not source position in the old
-// js/core/boot.js) is not guaranteed to run after every other module has
+// _js/core/boot.js) is not guaranteed to run after every other module has
 // initialized. A macrotask boundary guarantees the whole synchronous
 // module-evaluation pass - including the deeply circular core/state.js
-// graph - has completed first. Found via the dry-run harness executing an
-// actual cross-module function call (see Phase 4 commit notes).
+// graph - has completed first.
 setTimeout(async () => {
   // Hide main UI immediately — show only after successful login
   document.querySelector('.main')?.style.setProperty('display','none');

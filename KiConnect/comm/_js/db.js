@@ -1,5 +1,5 @@
-// js/db.js (formerly kiconnect-db.js) - Knowledge base / RAG module.
-// (like js/agent.js/js/voice.js): API client for /kb/* on the
+// _js/db.js (formerly kiconnect-db.js) - Knowledge base / RAG module.
+// (like _js/agent.js/js/voice.js): API client for /kb/* on the
 // local proxy plus its own composer UI, exporting
 // kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow /
 // kbClearActiveSelection as real ES module exports.
@@ -8,15 +8,11 @@
 // separate unlock. Embedding provider is any OpenAI-compatible base
 // URL + model name.
 //
-// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from
-// an IIFE bolt-on coupling via `window.X` and monkey-patching
-// (window.unlockAgentSession = ...) to a real ES module. Note the circular
-// import with js/auth/accounts.js and js/core/i18n.js: those modules call
-// this module's KB functions at send-time, and this module calls their
-// session/i18n hooks.
-// This is safe because every cross-reference here resolves to a hoisted
-// function declaration used only at runtime, never at module-evaluation
-// time.
+// Circular import with _js/auth/accounts.js and _js/core/i18n.js: those
+// modules call this module's KB functions at send-time, and this module
+// calls their session/i18n hooks. Safe because every cross-reference here
+// resolves to a hoisted function declaration used only at runtime, never
+// at module-evaluation time.
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow, onSessionLock, onSessionRekey, onSessionUnlock } from './auth/accounts.js';
 import { tf as hostTf } from './core/i18n.js';
@@ -271,7 +267,7 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     return _kbList;
   }
 
-  // Retrieval + prompt augmentation - extension points js/chat/chat-send.js's
+  // Retrieval + prompt augmentation - extension points _js/chat/chat-send.js's
   // sendMessageCore() calls (RAG hook, after the web-search block).
   const KB_TOP_K_FALLBACK = 8; // only used if a KB predates the topK setting
 
@@ -1417,7 +1413,7 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     }
   }
 
-  // Language change hook (same pattern as js/agent.js's onLanguageChange).
+  // Language change hook (same pattern as _js/agent.js's onLanguageChange).
   onLanguageChange(function () {
     syncComposerButton();
     renderComposerPopover();
@@ -1455,6 +1451,6 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     setTimeout(() => waitForHost(tries + 1), 100);
   }
   // Deferred via setTimeout(0) even on the "DOM already ready" branch - same
-  // reasoning as js/agent.js, see that file's comment / Phase 4 commit notes.
+  // module-evaluation-order reasoning as _js/agent.js's waitForHost().
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
   else setTimeout(waitForHost, 0);

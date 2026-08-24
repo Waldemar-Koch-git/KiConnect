@@ -1,4 +1,3 @@
-// js/auth/storage.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { decryptObj, decryptProvider, encryptObj, encryptProvider } from './crypto.js';
 import { t } from '../core/i18n.js';
 import { freshConfig, state } from '../core/state.js';

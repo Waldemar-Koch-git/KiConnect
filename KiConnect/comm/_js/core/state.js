@@ -1,14 +1,8 @@
-// js/core/state.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { isMessagesNearBottom } from '../chat/chat-render.js';
 import { bt, closeLangDropdown } from './i18n.js';
 import { onLanguageChange, toast } from '../ui/misc-ui.js';
 import { TOUR_STEPS } from '../ui/tour.js';
 
-// NOTE: `export const state = {};` is the original Phase 2 declaration - it
-// lives in this file already (not inside a monolithic script body), so the
-// Phase 4 auto-extraction script never saw it and would have clobbered it;
-// restored by hand and verified via the dry-run harness catching the
-// resulting "does not provide an export named 'state'" error immediately.
 export const state = {};
 
 state.currentLang = localStorage.getItem('kic_lang') || 'en';

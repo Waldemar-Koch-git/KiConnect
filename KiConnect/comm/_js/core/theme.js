@@ -1,5 +1,3 @@
-// js/core/theme.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
-
 export const THEMES = ['dark', 'white', 'nord', 'dracula', 'forest', 'mocha', 'rose', 'solarized', 'dark_oled', 'gold_oled', 'emerald_oled', 'red_oled'];
 
 export const THEME_SWATCHES = [

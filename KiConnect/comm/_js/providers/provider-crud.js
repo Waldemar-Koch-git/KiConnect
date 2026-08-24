@@ -1,4 +1,3 @@
-// js/providers/provider-crud.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { save } from '../auth/storage.js';
 import { t, ta, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';

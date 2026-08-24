@@ -1,4 +1,3 @@
-// js/chat/chat-attachments.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { save } from '../auth/storage.js';
 import { _finalizeAIRowInPlace, appendToMessages, buildMsgEl, escHtml, openImageLightbox, removeTyping, scrollToBottom, typesetMath, updateChatTokenTotal } from './chat-render.js';
 import { _finishLiveStreamUI, _makeRunId, _runBubbleEl, _streamAIResponse, activeRuns, syncComposerStreamingUI } from './chat-send.js';

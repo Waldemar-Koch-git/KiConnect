@@ -1,8 +1,7 @@
-// js/voice.js (formerly kiconnect-voice.js) – Speech input & speech output (Web Speech API)
+// _js/voice.js (formerly kiconnect-voice.js) – Speech input & speech output (Web Speech API)
 // Version 2.1 – fully revised
-// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from an
-// IIFE bolt-on coupling via `window.X` to a real ES module with explicit
-// imports/exports. No IIFE wrapper needed — a module already has its own scope.
+// A real ES module with explicit imports/exports (no IIFE wrapper needed —
+// a module already has its own scope).
 import { state } from './core/state.js';
 import { sendMessage } from './chat/chat-send.js';
 import { autoResize } from './core/boot.js';
@@ -41,7 +40,7 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   // detection somehow never fires. Not user-configurable — it's a backstop.
   var STT_MAX_LISTEN_MS = 90000;
 
-  // Bridge to the Tuning panel's Audio section (js/providers/provider-crud.js). Provider
+  // Bridge to the Tuning panel's Audio section (_js/providers/provider-crud.js). Provider
   // choices live in `vs` (localStorage); API keys stay encrypted in
   // config.audioProviders and are only read here, never written.
   export function kicVoiceGetSetting(key) { return vs[key]; }
@@ -744,10 +743,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     if (panel) panel.classList.remove('open');
   }
 
-  // Access to config.audioProviders (js/core/state.js, read-only). `config` is
+  // Access to config.audioProviders (_js/core/state.js, read-only). `config` is
   // not declared locally — it resolves to state.js's top-level `let
   // config`, a global lexical binding shared across script tags (same
-  // mechanism as TRANSLATIONS/currentLang above); js/core/i18n.js loads first.
+  // mechanism as TRANSLATIONS/currentLang above); _js/core/i18n.js loads first.
   function audioProviderKey(provider) {
     try { return (state.config && state.config.audioProviders && state.config.audioProviders[provider] && state.config.audioProviders[provider].apiKey) || ''; }
     catch (e) { return ''; }

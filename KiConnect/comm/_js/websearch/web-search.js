@@ -1,4 +1,3 @@
-// js/websearch/web-search.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { formatLinkedPagesBlock, formatWebSearchBlock, stripQuotedAndCodeBlocks } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { escHtml } from '../chat/chat-render.js';

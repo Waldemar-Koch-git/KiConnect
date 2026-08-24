@@ -747,7 +747,7 @@ header {
   text-transform: uppercase; letter-spacing: 1px;
   font-family: 'IBM Plex Mono', monospace;
 }
-/* Generic collapse/expand for panel sections; applied at runtime by initPanelSectionCollapse() in js/core/boot.js. */
+/* Generic collapse/expand for panel sections; applied at runtime by initPanelSectionCollapse() in _js/core/boot.js. */
 .section-header.tuning-collapsible {
   cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none;
 }
@@ -2103,7 +2103,7 @@ textarea::placeholder { color: var(--muted); }
   .note-print:empty       { display: none !important; }
   .note-print:before      { content: "🗒️ " attr(data-label); display: block; font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: #a9821f !important; margin-bottom: 3pt; }
 
-  /* Single-bubble print (printSingleBubble() in js/ui/misc-ui.js): show only
+  /* Single-bubble print (printSingleBubble() in _js/ui/misc-ui.js): show only
      the preview overlay's already-rendered content. */
   body.printing-single-bubble > *:not(#printSingleOverlay) { display: none !important; }
   body.printing-single-bubble #printSingleOverlay {

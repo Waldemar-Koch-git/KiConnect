@@ -1,4 +1,3 @@
-// js/chat/chat-send.js — extracted from kiconnect.js (Phase 4 of the v3.5.1→v4.0.0 modularization)
 import { _pullBackForOpenBlock } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { _runStreamAndAttach, buildAttachmentContent, clearAttachments, renderAttachments } from './chat-attachments.js';
@@ -1283,10 +1282,10 @@ export async function sendMessageCore(text, att) {
     }
   }
 
-  // Knowledge-base retrieval (RAG) — js/db.js exports kbRetrieveForQuery()
+  // Knowledge-base retrieval (RAG) — _js/db.js exports kbRetrieveForQuery()
   // (a no-op no KB is toggled on in the composer would just return null),
   // same pattern as the agent module's hooks. Circular import with
-  // js/db.js: safe since these are only called here at runtime, never at
+  // _js/db.js: safe since these are only called here at runtime, never at
   // module-evaluation time.
   let kbResult = null;
   let kbWasRequested = false;
@@ -1341,7 +1340,7 @@ export async function sendMessageCore(text, att) {
       bubbleEl.appendChild(buildWebSourcesRow(webSourceChips));
     }
   }
-  // Same idea for knowledge-base sources (see js/db.js: buildKbSourcesRow).
+  // Same idea for knowledge-base sources (see _js/db.js: buildKbSourcesRow).
   if (kbSourceChips.length && typeof buildKbSourcesRow === 'function') {
     const bubbleEl = previewMsgEl.querySelector('.bubble');
     if (bubbleEl && !bubbleEl.querySelector('.kb-sources')) {

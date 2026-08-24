@@ -1,15 +1,13 @@
-// js/agent.js (formerly kiconnect-agent.js) – Coding-Agent module (v3.0)
-// (like js/voice.js). A "project" is a sidebar folder with an extra
+// _js/agent.js (formerly kiconnect-agent.js) – Coding-Agent module (v3.0)
+// (like _js/voice.js). A "project" is a sidebar folder with an extra
 // `agentProject` field pointing at a filesystem folder on the proxy; a chat
 // filed into it runs the agent's tool loop, rendered as collapsed <details>
 // cards. One shared model picker app-wide; only autonomy mode is per-project.
-// Phase 3 of the v3.5.1→v4.0.0 modularization: converted from an
-// IIFE bolt-on coupling via monkey-patching (`sendMessage = ...`) and
-// `window.X` to a real ES module using the explicit hook-registration API
-// js/chat/chat-send.js and js/chat/chat-sidebar.js now expose (registerSendMessageOverride/registerRegenerateOverride/
-// onRenderSidebar/onLanguageChange) — reassigning an imported binding is not
-// legal in ES modules, so the old monkey-patch pattern could not simply move
-// as-is; this is the real fix, not a cosmetic rename.
+// Hooks into the rest of the app via an explicit registration API
+// (registerSendMessageOverride/registerRegenerateOverride/onRenderSidebar/
+// onLanguageChange, see _js/chat/chat-send.js and _js/chat/chat-sidebar.js)
+// rather than monkey-patching (`sendMessage = ...`) or `window.X` globals —
+// reassigning an imported binding isn't legal in ES modules.
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow } from './auth/accounts.js';
 import { save } from './auth/storage.js';
@@ -72,7 +70,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
   let settings = { autonomy: 'confirm', ...loadSettings() };
 
-  // Runtime state. No single global run/abortController pair: js/chat/chat-send.js's
+  // Runtime state. No single global run/abortController pair: _js/chat/chat-send.js's
   // isChatStreaming/runsForChat read the same activeRuns registry this module
   // writes into (kind:'agent'), so several project chats can run at once.
   // `pendingConfirm` is still a single global, so two simultaneous
@@ -110,7 +108,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
   function compactToolCallLabel(name, args) {
     if (!args) return name;
-    const key = args.path || (Array.isArray(args.paths) && args.paths[0]) || (Array.isArray(args.items) && args.items[0] && args.items[0].from) || args.query || args.command || args.from;
+    const key = args.path || (Array.isArray(args.paths) && args.paths[0]) || (Array.isArray(args.items) && args.items[0] && args.items[0].from) || args.query || args.command || args.from || args.hash;
     return key ? `${name}(${String(key).slice(0, 60)})` : name;
   }
 
@@ -141,6 +139,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     delete_directory: '🗑️📁', delete_directories: '🗑️📁', move_file: '🔀', replace_in_files: '🔁',
     copy_file: '📄', copy_files: '📄',
     web_search: '🌐', fetch_url: '🔗', run_command: '⚡',
+    git_log: '🕘', git_show_commit: '📜', git_file_at: '👁️', git_list_deleted: '🗑️🕘', git_restore: '♻️',
   };
   // Functions, not plain objects, so they read the CURRENT UI language at
   // render time — lets the header language switcher update open tool traces.
@@ -157,6 +156,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       copy_file: t('agent.tool.copy'), copy_files: t('agent.tool.copyMulti'),
       web_search: t('agent.tool.webSearch'), fetch_url: t('agent.tool.fetchUrl'),
       run_command: t('agent.tool.runCommand'),
+      git_log: t('agent.tool.gitLog', 'Git log'), git_show_commit: t('agent.tool.gitShowCommit', 'Show checkpoint'),
+      git_file_at: t('agent.tool.gitFileAt', 'Read file at checkpoint'), git_list_deleted: t('agent.tool.gitListDeleted', 'List deleted files'),
+      git_restore: t('agent.tool.gitRestore', 'Git restore'),
     };
     return LABELS[name] || name;
   }
@@ -178,6 +180,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     const list = Array.isArray(a.paths) ? a.paths : Array.isArray(a.files) ? a.files.map(f => f && f.path)
       : Array.isArray(a.items) ? a.items.map(it => it && it.from && it.to ? `${it.from} → ${it.to}` : (it && it.path)) : null;
     if (list) return list.length <= 3 ? list.filter(Boolean).join(', ') : tf('agent.nItems', { n: list.length });
+    if (a.hash) return String(a.hash).slice(0, 12);
     return '';
   }
 
@@ -214,6 +217,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       { type: 'function', function: { name: 'delete_directories', description: 'Permanently deletes several folders (and their contents) in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
       { type: 'function', function: { name: 'web_search', description: 'Searches the web via the search engine configured in KI Connect and returns title, URL, and short description of the results. Useful for current information, documentation, or library/API research while working on the project.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
       { type: 'function', function: { name: 'fetch_url', description: 'Fetches a single webpage and returns its readable text content (e.g. to read a documentation page or search result more closely).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
+      { type: 'function', function: { name: 'git_log', description: 'Lists this project\'s local checkpoint history (newest first) — every automatic git commit made as files were changed. Use this to see what has changed over time, find a specific earlier state to inspect or restore, or figure out which checkpoint a bug was introduced in. Pass `path` to only show checkpoints that touched one specific file (useful to find that file\'s own history, including checkpoints from before it was later deleted). Each entry has a `hash` (full) and `shortHash` you can pass to git_show_commit, git_file_at, or git_restore. Returns an empty list if checkpointing was never enabled for this project or nothing has changed yet — that is not an error.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Optional: only show checkpoints that touched this file (path relative to the project root).' }, limit: { type: 'integer', description: 'Optional: max number of checkpoints to return (default 200, capped at 500).' } } } } },
+      { type: 'function', function: { name: 'git_show_commit', description: 'Shows the details of one checkpoint (commit): its message, date, and exactly which files it added, modified, deleted, or renamed. Use this after git_log to see what a specific checkpoint actually changed before deciding whether to inspect its files (git_file_at) or restore from it (git_restore).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash from git_log (full or shortHash).' } }, required: ['hash'] } } },
+      { type: 'function', function: { name: 'git_file_at', description: 'Reads a file\'s content exactly as it was at a given checkpoint — without changing anything on disk. Use this to inspect an older version of a file (e.g. to compare it with the current one, or to decide whether it\'s worth restoring) before calling git_restore. Also works for files that have since been deleted, by passing a hash from BEFORE the deletion (e.g. the `restoreHash` from git_list_deleted, or "<deleteCommitHash>~1" for the commit right before a file was removed).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash (full or shortHash), optionally suffixed with "~1" etc. to mean "N commits before this one".' }, path: { type: 'string', description: 'File path relative to the project root.' } }, required: ['hash', 'path'] } } },
+      { type: 'function', function: { name: 'git_list_deleted', description: 'Lists files that were deleted at some point in this project\'s checkpoint history and are still missing now (files that were deleted and later recreated are not included). Each entry includes a ready-to-use `restoreHash` — pass it straight to git_restore (with that file\'s `path`) to bring the file back. Use this whenever the user asks to recover, undelete, or restore a file whose exact name/path you don\'t already know.', parameters: { type: 'object', properties: {} } } },
+      { type: 'function', function: { name: 'git_restore', description: 'Restores content from an earlier checkpoint. This actually changes files on disk (a fresh checkpoint of the result is taken automatically afterwards, so a restore can itself always be undone the same way). Two modes: pass `paths` to restore only those specific files/folders to their state at `hash` (this also recreates files that were deleted — get the right hash from git_list_deleted or git_log first); omit `paths` to restore the ENTIRE project to its state at `hash`, which also removes any file that did not exist yet at that checkpoint. Only use whole-project restore when the user actually wants to roll back everything, not just recover one or two files — prefer the `paths` form whenever possible since it is far less destructive.', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'The checkpoint to restore from (a hash from git_log/git_show_commit/git_list_deleted).' }, paths: { type: 'array', items: { type: 'string' }, description: 'Optional: restore only these files/folders instead of the whole project.' } }, required: ['hash'] } } },
     ];
     // Only offered to the model at all if the user explicitly enabled shell
     // execution for THIS project (⚙ Agent Settings) — see agentExec().
@@ -261,7 +269,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
   // Backend calls: /agent/* on the local proxy. Every call goes through this
   // wrapper so it carries the current agent-session token (see
-  // js/auth/accounts.js: unlockAgentSession()/agentSessionHeader()). A 401 (project
+  // _js/auth/accounts.js: unlockAgentSession()/agentSessionHeader()). A 401 (project
   // registry can't be decrypted) is treated as an expired session and sends
   // the user back to login, like any other expired session.
   /* global agentSessionHeader, logoutNow, toast */
@@ -335,7 +343,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     const data = await res.json();
     // PDFs come back as binary (content_b64) since they're not valid UTF-8
-    // text. extractPdfText() reuses the same pdf.js extraction js/chat/chat-attachments.js
+    // text. extractPdfText() reuses the same pdf.js extraction _js/chat/chat-attachments.js
     // uses for PDF chat attachments, instead of giving up on any project
     // PDF. Falls through to the raw binary response if pdf.js isn't loaded
     // or extraction fails (e.g. a scanned image-only PDF).
@@ -399,6 +407,45 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   async function apiSetCheckpointsEnabled(project, enabled) {
     return agentJson(`/agent/projects/${encodeURIComponent(project)}/checkpoints`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!enabled }),
+    }, true);
+  }
+  // ── Git history / restore (see matching /agent/git/* routes in
+  // kiconnect-proxy.py). All read calls throw on failure (caller shows the
+  // error); apiGitRestore also throws since it's a deliberate user action
+  // that needs a clear success/fail result, not a silently-swallowed one.
+  async function apiGitLog(project, path, limit) {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (limit) params.set('limit', String(limit));
+    const qs = params.toString();
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/log${qs ? `?${qs}` : ''}`, undefined, true);
+  }
+  async function apiGitCommit(project, hash) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/commit/${encodeURIComponent(hash)}`, undefined, true);
+  }
+  async function apiGitFileAt(project, hash, path) {
+    const params = new URLSearchParams({ hash, path });
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/file-at?${params.toString()}`, undefined, true);
+  }
+  async function apiGitDeleted(project) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/deleted`, undefined, true);
+  }
+  // Forces a full, deep repack (`git gc --aggressive --prune=now`, see
+  // agent_git_gc() in kiconnect-proxy.py) — never touches history/content,
+  // only how it's stored on disk. Lighter housekeeping (`git gc --auto`,
+  // near-instant no-op below git's own loose-object threshold) already runs
+  // automatically after every checkpoint server-side; this button is for
+  // when the user wants the expensive deep repack right now regardless of
+  // that threshold. Returns byte counts so the modal can show whether it
+  // actually helped (on a tiny repo, packfile overhead can occasionally
+  // make it slightly larger — expected, not a bug).
+  async function apiGitGc(project) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/gc`, { method: 'POST' }, true);
+  }
+  async function apiGitRestore(project, hash, paths) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/restore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paths ? { hash, paths } : { hash }),
     }, true);
   }
   // Stages+commits whatever changed since the last checkpoint, via the
@@ -553,19 +600,50 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
   // Git checkpoints (opt-in per project, see agentCheckpointsEnabled).
   // Every disk-mutating tool, used to gate the pre-mutation apiCheckpoint()
-  // call below. Excludes create_file/create_directory(ies) since those only
-  // add, never destroy, existing content.
+  // call below. Includes create_file/create_directory(ies): although those
+  // only add rather than destroy existing content, a brand-new project
+  // built by the agent is typically nothing BUT create_file calls, so
+  // excluding them meant checkpoints silently never ran (no repo, no
+  // commits) for the most common case. Committing on create too gives a
+  // restorable snapshot of "what the agent just scaffolded", not just
+  // protection against later overwrites/deletes.
+  // git_restore included too: it writes real content back to disk (and,
+  // unlike the others, can also touch files an earlier checkpoint doesn't
+  // know about yet during a whole-project restore) — it already takes its
+  // own checkpoint of the RESULT server-side (see /agent/git/<id>/restore
+  // in kiconnect-proxy.py), but including it here additionally captures
+  // the state right BEFORE the restore runs, same safety net as every
+  // other mutating tool gets.
+  // run_command included too: it runs arbitrary shell commands with the
+  // same filesystem permissions as the rest of the agent (see apiExec) —
+  // `rm`, `sed -i`, `npm install`, a build script, etc. can all change
+  // files on disk just as much as write_file/delete_file can, so excluding
+  // it left a real gap in the safety net (and in end-of-turn coverage,
+  // since a turn whose only "mutation" was a shell command never set
+  // `run.hadMutation`, so its result was never committed at all). If a
+  // given command happens not to touch the filesystem, the pre-checkpoint
+  // is simply a no-op (nothing staged) — same as calling delete_file on a
+  // path that doesn't exist; harmless either way.
   const MUTATING_TOOL_NAMES = new Set([
     'write_file', 'write_files', 'edit_file', 'delete_file', 'delete_files',
     'move_file', 'copy_file', 'copy_files', 'replace_in_files', 'delete_directory', 'delete_directories',
+    'create_file', 'create_directory', 'create_directories', 'git_restore', 'run_command',
   ]);
   const _checkpointWarned = new Set(); // project ids already warned about missing git this session
   function projectCheckpointsEnabled(projectId) {
     const f = state.folders.find(x => x.agentProject === projectId);
     return !!(f && f.agentCheckpointsEnabled);
   }
-  function checkpointMessage(name, args) {
-    return `Agent: ${compactToolCallLabel(name, args)}`.slice(0, 200);
+  // `runId` (when given) is appended as a "Run: <id>" trailer line in the
+  // commit body, not the subject — keeps the one-line summary clean while
+  // letting agent_git_log() (kiconnect-proxy.py) tag each commit with the
+  // turn it belongs to, so the 🕘 modal can group a turn's checkpoints
+  // instead of showing one flat row per tool call. Commits without a
+  // runId (manual/baseline/restore checkpoints) just render as their own
+  // one-commit group — see renderGhGroups().
+  function checkpointMessage(name, args, runId) {
+    const subject = `Agent: ${compactToolCallLabel(name, args)}`.slice(0, 200);
+    return runId ? `${subject}\n\nRun: ${runId}` : subject;
   }
 
   // Tool execution (respects autonomy mode). `run` is the specific RunState
@@ -617,6 +695,24 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       try { return await fetchLinkedPage(args.url); }
       catch (err) { return { error: err.message }; }
     }
+    // Read-only git history tools — safe to run in every autonomy mode
+    // (including 'confirm', same as list_files/read_file above) since
+    // nothing on disk changes. See matching /agent/git/* routes in
+    // kiconnect-proxy.py for exact response shapes.
+    if (name === 'git_log') {
+      return apiGitLog(project, args.path, args.limit);
+    }
+    if (name === 'git_show_commit') {
+      if (!args.hash) return { error: t('agent.err.missingHash', 'missing hash') };
+      return apiGitCommit(project, args.hash);
+    }
+    if (name === 'git_file_at') {
+      if (!args.hash || !args.path) return { error: t('agent.err.missingHashOrPath', 'missing hash or path') };
+      return apiGitFileAt(project, args.hash, args.path);
+    }
+    if (name === 'git_list_deleted') {
+      return apiGitDeleted(project);
+    }
 
     // A risky overwrite forces the same confirm step as "Confirm" mode,
     // regardless of actual autonomy setting — silently applying it in
@@ -665,6 +761,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       }
       if (name === 'replace_in_files') return { simulated: true, message: tf('agent.sim.replace', { find: args.find, n: Array.isArray(args.paths) ? args.paths.length : 0 }) };
       if (name === 'run_command') return { simulated: true, message: tf('agent.sim.run', { command: args.command }) };
+      if (name === 'git_restore') {
+        const paths = Array.isArray(args.paths) && args.paths.length ? args.paths : null;
+        const target = paths ? (paths.length === 1 ? paths[0] : tf('agent.nItems', { n: paths.length })) : t('agent.gitWholeProject', 'the entire project');
+        return { simulated: true, message: tf('agent.sim.gitRestore', { target, hash: String(args.hash || '').slice(0, 12) }) };
+      }
       if (BATCH_ITEM_KEY[name]) {
         const list = Array.isArray(args.paths) ? args.paths : Array.isArray(args.files) ? args.files.map(f => f && f.path) : [];
         return { files: list.map(p => ({ path: p, simulated: true, message: tf(BATCH_ITEM_KEY[name], { path: p, len: 0 }) })) };
@@ -675,14 +776,38 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     // enabled, so the change stays recoverable via git log/revert. A
     // failed/unavailable git never blocks the tool call; it's surfaced once
     // per project per session instead of silently doing nothing forever.
-    if (MUTATING_TOOL_NAMES.has(name) && project && projectCheckpointsEnabled(project)) {
-      try {
-        const cp = await apiCheckpoint(project, checkpointMessage(name, args));
-        if (cp && cp.error === undefined && cp.ok === false && cp.reason === 'git-not-installed' && !_checkpointWarned.has(project)) {
-          _checkpointWarned.add(project);
-          showToast(t('agent.checkpointNoGit'));
-        }
-      } catch (e) { /* best-effort only, never blocks the actual tool call */ }
+    // `run.hadMutation` is tracked regardless of whether checkpoints are
+    // currently enabled — see runAgentCompletion's `finally` block, which
+    // uses it to decide whether an end-of-turn checkpoint is worth taking.
+    //
+    // Message note: the checkpoint firing HERE (before `name` executes)
+    // actually captures whatever changed on disk since the LAST checkpoint
+    // — i.e. the PREVIOUS mutating call's effect, not this one's (this one
+    // hasn't run yet). So it's labeled with `run._pendingCheckpointMsg`
+    // (set by that previous call below), not with `name`/`args`. Using
+    // `name`/`args` here would label every checkpoint one action late —
+    // e.g. a checkpoint that actually captures a delete_file would show up
+    // in git log as whatever tool call happened to run AFTER it. The
+    // fallback (`run._pendingCheckpointMsg` unset) only matters for the
+    // very first mutating call since checkpoints were enabled/since the
+    // run started — nothing has changed on disk yet at that point, so the
+    // checkpoint is a no-op (nothing staged) and the message is moot.
+    if (MUTATING_TOOL_NAMES.has(name)) {
+      if (run) run.hadMutation = true;
+      if (project && projectCheckpointsEnabled(project)) {
+        const msg = (run && run._pendingCheckpointMsg) || checkpointMessage(name, args, run && run.runId);
+        try {
+          const cp = await apiCheckpoint(project, msg);
+          if (cp && cp.error === undefined && cp.ok === false && cp.reason === 'git-not-installed' && !_checkpointWarned.has(project)) {
+            _checkpointWarned.add(project);
+            showToast(t('agent.checkpointNoGit'));
+          }
+        } catch (e) { /* best-effort only, never blocks the actual tool call */ }
+      }
+      // Describes THIS call, about to actually run below — used to label
+      // whichever checkpoint (the next mutating call's pre-checkpoint, or
+      // the end-of-turn one in runAgentCompletion) ends up capturing it.
+      if (run) run._pendingCheckpointMsg = checkpointMessage(name, args, run.runId);
     }
     // Any mutation invalidates the whole read cache above — coarser than
     // per-path, but guarantees the next read never serves stale content.
@@ -748,6 +873,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       for (const p of paths) results.push({ path: p, ...(await apiRmdir(project, p)) });
       return { files: results };
     }
+    if (name === 'git_restore') {
+      if (!args.hash) return { error: t('agent.err.missingHash', 'missing hash') };
+      const paths = Array.isArray(args.paths) && args.paths.length ? args.paths : undefined;
+      return apiGitRestore(project, args.hash, paths);
+    }
     return { error: tf('agent.err.unknownTool', { name }) };
   }
 
@@ -772,7 +902,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (pendingConfirm) { pendingConfirm.resolve(false); pendingConfirm = null; }
   }
   // Stops the agent run for one chat (default: chat on screen) — mirrors
-  // js/chat/chat-send.js's stopStreaming(chatId), reusing the same activeRuns
+  // _js/chat/chat-send.js's stopStreaming(chatId), reusing the same activeRuns
   // registry, plus closes the confirm bar if it belonged to this run.
   function stopAgent(chatId) {
     chatId = chatId || state.currentChatId;
@@ -1132,7 +1262,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
     typesetMath(liveBubble);
     // Only auto-scroll to the bottom if the user hasn't scrolled away
-    // (pinnedToBottom, tracked in js/core/state.js).
+    // (pinnedToBottom, tracked in _js/core/state.js).
     if (state.pinnedToBottom) scrollToBottom();
   }
   function renderRunMarkdown(steps) {
@@ -1317,6 +1447,59 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
         const mark = resultStatusLine(it) || '✅';
         lines.push(`- \`${esc(it.path)}\`${it.warning ? ` ${mark} ⚠️ ${esc(it.warning)}` : ` ${mark}`}`);
       });
+    } else if (name === 'git_log') {
+      if (result) {
+        if (result.error) lines.push(`❌ ${result.error}`);
+        else if (Array.isArray(result.commits)) {
+          lines.push('```text');
+          lines.push(result.commits.length
+            ? result.commits.map(c => `${c.shortHash}  ${c.date}  ${c.message}`).join('\n')
+            : `(${t('agent.empty')})`);
+          lines.push('```');
+        }
+      }
+    } else if (name === 'git_show_commit') {
+      if (result) {
+        if (result.error) lines.push(`❌ ${result.error}`);
+        else {
+          lines.push(`**${esc(result.hash ? result.hash.slice(0, 12) : '')}** — ${esc(result.message || '')}  _(${esc(result.date || '')})_`);
+          if (Array.isArray(result.files) && result.files.length) {
+            lines.push('```text');
+            lines.push(result.files.map(f => `${STATUS_BADGE[f.status] || '•'} ${f.status}: ${f.oldPath ? `${f.oldPath} → ` : ''}${f.path}`).join('\n'));
+            lines.push('```');
+          }
+        }
+      }
+    } else if (name === 'git_file_at') {
+      if (result) {
+        if (result.error) lines.push(`❌ ${result.error}`);
+        else if (result.binary) lines.push(`_(${t('agent.binaryFile')})_`);
+        else if (typeof result.content === 'string') {
+          const lang = langFromPath(args.path);
+          const preview = result.content.length > 3000 ? result.content.slice(0, 3000) + truncNote() : result.content;
+          lines.push('```' + lang); lines.push(preview); lines.push('```');
+        }
+      }
+    } else if (name === 'git_list_deleted') {
+      if (result) {
+        if (result.error) lines.push(`❌ ${result.error}`);
+        else if (Array.isArray(result.files)) {
+          lines.push('```text');
+          lines.push(result.files.length
+            ? result.files.map(f => `${f.path}  (${t('agent.ghStatusDeleted', 'deleted')} ${f.deletedAt}, restoreHash ${f.restoreHash})`).join('\n')
+            : `(${t('agent.empty')})`);
+          lines.push('```');
+        }
+      }
+    } else if (name === 'git_restore') {
+      const status = resultStatusLine(result);
+      if (status) lines.push(status);
+      else if (result && Array.isArray(result.restored)) {
+        lines.push(`✅ ${result.restored.map(p => '`' + esc(p) + '`').join(', ')}`);
+      } else if (result && result.restoredTo) {
+        lines.push(`✅ ${t('agent.gitRestoredWholeProject', 'Restored entire project')} → ${esc(String(result.restoredTo).slice(0, 12))}` +
+          (result.removed && result.removed.length ? ` (${tf('agent.gitRemovedFilesN', { n: result.removed.length })})` : ''));
+      }
     } else if (name === 'run_command') {
       lines.push('```bash'); lines.push(args.command || ''); lines.push('```');
       if (result) {
@@ -1377,7 +1560,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     const priorHistory = buildPriorHistory(chat);
 
     // Same attachment → content-block conversion normal chat uses (see
-    // buildAttachmentContent() in js/chat/chat-attachments.js) — previously this module
+    // buildAttachmentContent() in _js/chat/chat-attachments.js) — previously this module
     // only read the typed text and silently dropped attached files.
     const { userContent, fileNames } = buildAttachmentContent(task, att || []);
 
@@ -1470,13 +1653,13 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       usage: null,
       status: 'running',
       bubbleEl: null,
-      // Reattach hook for js/chat/chat-render.js's renderMessages(): builds a fresh
+      // Reattach hook for _js/chat/chat-render.js's renderMessages(): builds a fresh
       // row from run.steps/run.usage on switching back mid-run, instead of
       // the generic chat-bubble builder (which knows nothing about traces).
       buildLiveEl: () => _buildAgentRowSkeleton(run),
     };
     activeRuns.set(runId, run);
-    // Sidebar live-dot, same choke point js/chat/chat-send.js's _streamAIResponse
+    // Sidebar live-dot, same choke point _js/chat/chat-send.js's _streamAIResponse
     // uses for chat streaming, so a background agent run shows the same way.
     renderSidebar();
 
@@ -1564,6 +1747,26 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       if (iterations >= MAX_ITERATIONS) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: MAX_ITERATIONS })}` }); rerenderCurrentRun(run); }
       if (aborted) { steps.push({ kind: 'text', text: `⏹ ${t('agent.aborted')}` }); rerenderCurrentRun(run); }
     } finally {
+      // Every real (non-simulated) mutating tool call checkpoints BEFORE
+      // it runs (see MUTATING_TOOL_NAMES handling in executeTool), by
+      // design, so each checkpoint reflects "the state right before this
+      // change" and stays revertable. That means the run's LAST mutation
+      // is never itself committed by that mechanism — it would just sit as
+      // an uncommitted working-tree change until some future mutating call
+      // (possibly a much later session) happens to trigger the next
+      // checkpoint, which would then also misattribute that old change to
+      // whatever new action triggered it. Take one more checkpoint here,
+      // after the loop ends for ANY reason (finished, aborted, error, max
+      // iterations), so the run's true final state always gets its own
+      // commit. This is what makes e.g. a delete_file that happens to be
+      // the last tool call in a turn actually show up in
+      // git_list_deleted/git_log afterwards, instead of silently staying
+      // an untracked change nothing else ever sees.
+      if (run.hadMutation && folder.agentProject && projectCheckpointsEnabled(folder.agentProject)) {
+        const fallbackMsg = run.runId ? `Agent: end of turn\n\nRun: ${run.runId}` : 'Agent: end of turn';
+        try { await apiCheckpoint(folder.agentProject, run._pendingCheckpointMsg || fallbackMsg); }
+        catch (e) { /* best-effort only, never blocks finishing the run */ }
+      }
       // Use the run's CURRENT bubble (may be reattached, or null if the
       // chat isn't on screen) — never the originally-captured locals, which
       // may be long detached from the DOM.
@@ -1584,7 +1787,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
       // Only touch #messages if this chat is still on screen — if the run
       // finished on a different chat, the reply is already saved and renders
-      // normally next time this chat opens (matching guard in js/chat/chat-send.js's
+      // normally next time this chat opens (matching guard in _js/chat/chat-send.js's
       // _attachAIActions()).
       if (chat === currentChat()) {
         // Upgrade the just-finished live bubble into its final interactive
@@ -1757,6 +1960,33 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
 .agent-primary-btn{padding:7px 14px;border-radius:8px;border:none;background:var(--accent,#3d7eff);color:#fff;font-weight:600;cursor:pointer;font-size:12.5px;white-space:nowrap;}
 .agent-primary-btn:hover{filter:brightness(1.08);}
 .fp-error{color:var(--red,#e74c3c);font-size:11.5px;margin-top:2px;}
+.agent-proj-row{position:relative;}
+.agent-proj-history-btn{background:none;border:none;color:var(--muted,#888);cursor:pointer;font-size:12px;}
+.agent-proj-history-btn:hover{color:var(--text,#eee);}
+.gh-tabs{display:flex;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--border,rgba(128,128,128,.2));}
+.gh-tab{padding:6px 10px;border:none;background:none;color:var(--muted,#888);cursor:pointer;font-size:12px;border-bottom:2px solid transparent;margin-bottom:-1px;}
+.gh-tab.active{color:var(--text,#eee);border-bottom-color:var(--accent,#3d7eff);font-weight:600;}
+.gh-body{flex:1;min-height:200px;max-height:56vh;overflow-y:auto;}
+.gh-empty{padding:24px 8px;text-align:center;color:var(--muted,#888);font-size:12px;}
+.gh-commit{border:1px solid var(--border,rgba(128,128,128,.18));border-radius:8px;margin-bottom:6px;overflow:hidden;}
+.gh-commit-head{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;}
+.gh-commit-head:hover{background:var(--surface2,rgba(128,128,128,.08));}
+.gh-commit-main{flex:1;min-width:0;}
+.gh-commit-msg{font-size:12.5px;color:var(--text,#eee);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gh-commit-meta{font-size:10.5px;color:var(--muted,#888);margin-top:2px;}
+.gh-commit-files{border-top:1px solid var(--border,rgba(128,128,128,.15));padding:4px 0;}
+.gh-file-row{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;}
+.gh-file-row:hover{background:var(--surface2,rgba(128,128,128,.06));}
+.gh-file-badge{flex-shrink:0;}
+.gh-file-path{flex:1;min-width:0;word-break:break-all;color:var(--text,#eee);}
+.gh-file-restore,.gh-restore-all{background:none;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:6px;color:var(--text,#eee);cursor:pointer;font-size:13px;padding:2px 8px;flex-shrink:0;}
+.gh-file-restore:hover,.gh-restore-all:hover{border-color:var(--accent,#3d7eff);color:var(--accent,#3d7eff);}
+.gh-deleted-row .gh-commit-meta{margin-top:1px;}
+.gh-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;font-size:11px;color:var(--muted,#888);}
+.gh-toolbar .agent-small-btn{font-size:11px;padding:3px 8px;}
+.gh-group-badge{flex-shrink:0;font-size:10.5px;color:var(--muted,#888);border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;padding:1px 7px;}
+.gh-group-inner{border-top:1px solid var(--border,rgba(128,128,128,.15));padding:6px 8px 2px;display:flex;flex-direction:column;gap:6px;}
+.gh-group-inner .gh-commit{margin-bottom:0;}
 `;
     document.head.appendChild(s);
   }
@@ -1948,6 +2178,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
           <label class="agent-toggle-switch"><input type="checkbox" id="agentCheckpointToggle"><span class="agent-toggle-slider"></span></label>
         </div>
         <div class="agent-hint" id="agentCheckpointHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.checkpointHint'))}</div>
+        <button class="agent-small-btn" id="agentOpenHistoryBtn" style="margin-top:6px;width:100%;padding:6px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:none;color:var(--text,#eee);cursor:pointer;font-size:11.5px;">🕘 ${esc(t('agent.gitHistory'))}</button>
       </div>
       <div class="setting-label" id="agentProjectsLabel" style="margin-top:12px;">${esc(t('agent.projects'))}</div>
       <div id="agentProjList"></div>
@@ -1997,6 +2228,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         box.checked = !box.checked;
         showToast(`❌ ${err.message}`);
       }
+    });
+    document.getElementById('agentOpenHistoryBtn').addEventListener('click', () => {
+      const folder = currentProjectFolder();
+      if (!folder) return;
+      panel.classList.remove('open');
+      openGitHistoryPanel(folder);
     });
     panel.addEventListener('click', e => e.stopPropagation());
     // Close on any click elsewhere (autonomy/shell changes already save()
@@ -2190,7 +2427,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       const row = document.createElement('div');
       row.className = 'agent-proj-row' + (missing ? ' missing' : '');
       const title = missing ? esc(t('agent.projectMissing')) : esc(f.agentProjectPath || '');
-      row.innerHTML = `<span title="${title}">${missing ? '⚠️' : '🤖'} ${esc(f.name)}</span><button class="agent-proj-edit-btn" title="${esc(t('agent.changeFolder'))}">✏️</button><button title="${esc(t('agent.deleteProject'))}">🗑</button>`;
+      row.innerHTML = `<span title="${title}">${missing ? '⚠️' : '🤖'} ${esc(f.name)}</span><button class="agent-proj-history-btn" title="${esc(t('agent.gitHistory'))}">🕘</button><button class="agent-proj-edit-btn" title="${esc(t('agent.changeFolder'))}">✏️</button><button title="${esc(t('agent.deleteProject'))}">🗑</button>`;
+      row.querySelector('.agent-proj-history-btn').addEventListener('click', () => openGitHistoryPanel(f));
       row.querySelector('.agent-proj-edit-btn').addEventListener('click', () => openFolderPickerForEdit(f));
       row.querySelector('button:last-child').addEventListener('click', () => deleteProjectFolder(f).then(renderProjectList));
       list.appendChild(row);
@@ -2202,6 +2440,291 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     addBtn.addEventListener('click', onCreateProjectClick);
     list.appendChild(addBtn);
   }
+  // ── Git history / restore panel ──────────────────────────────────────
+  // Browses a project's local checkpoint history (see /agent/git/* in
+  // kiconnect-proxy.py) and lets the user restore either a single file
+  // (including ones since deleted) or the whole project to any earlier
+  // checkpoint. Every restore itself becomes a new checkpoint server-side,
+  // so nothing here is a one-way door.
+  const STATUS_BADGE = { added: '🟢', modified: '🟡', deleted: '🔴', renamed: '🔀' };
+  const STATUS_LABEL_KEY = { added: 'agent.ghStatusAdded', modified: 'agent.ghStatusModified', deleted: 'agent.ghStatusDeleted', renamed: 'agent.ghStatusRenamed' };
+  function ghStatusLabel(status) {
+    return t(STATUS_LABEL_KEY[status] || status, status);
+  }
+  let _gh = { folder: null, tab: 'log', commits: [], deleted: [], expanded: null, expandedData: null, loading: false, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false };
+  // Strings for this panel go through the same t()/tf() as everything else
+  // in this file — see _lang/*.js's "Git history / restore panel (agent.gh*)"
+  // block for the translated entries.
+
+  function injectGitHistoryModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'agent-modal-overlay';
+    overlay.id = 'agentGitHistoryOverlay';
+    overlay.innerHTML = `
+      <div class="agent-modal" id="agentGitHistoryModal" style="width:560px;">
+        <div class="agent-modal-title"><span>🕘 <span id="ghTitle">${esc(t('agent.gitHistory'))}</span></span><button class="close-btn" id="ghClose">✕</button></div>
+        <div class="gh-tabs">
+          <button class="gh-tab active" data-tab="log" id="ghTabLog">${esc(t('agent.ghTabCheckpoints'))}</button>
+          <button class="gh-tab" data-tab="deleted" id="ghTabDeleted">${esc(t('agent.ghTabDeleted'))}</button>
+        </div>
+        <div class="gh-toolbar" id="ghToolbar">
+          <span id="ghRepoSize"></span>
+          <button class="agent-small-btn" id="ghGcBtn" title="${esc(t('agent.ghGcHint'))}">🧹 ${esc(t('agent.ghGc'))}</button>
+        </div>
+        <div class="gh-body" id="ghBody"></div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById('ghClose').addEventListener('click', closeGitHistoryPanel);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeGitHistoryPanel(); });
+    document.getElementById('ghGcBtn').addEventListener('click', runGhGc);
+    overlay.querySelector('.gh-tabs').addEventListener('click', e => {
+      const btn = e.target.closest('.gh-tab'); if (!btn) return;
+      _gh.tab = btn.dataset.tab; _gh.expanded = null;
+      overlay.querySelectorAll('.gh-tab').forEach(b => b.classList.toggle('active', b === btn));
+      renderGitHistoryBody();
+    });
+  }
+  async function openGitHistoryPanel(folder) {
+    const overlay = document.getElementById('agentGitHistoryOverlay');
+    if (!overlay || !folder) return;
+    _gh = { folder, tab: 'log', commits: [], deleted: [], expanded: null, expandedData: null, loading: true, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false };
+    const sizeElInit = document.getElementById('ghRepoSize');
+    if (sizeElInit) sizeElInit.textContent = '';
+    document.getElementById('ghTitle').textContent = `${t('agent.gitHistory')} — ${folder.name}`;
+    overlay.querySelectorAll('.gh-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'log'));
+    overlay.classList.add('open');
+    renderGitHistoryBody();
+    try {
+      const [logRes, delRes] = await Promise.all([
+        apiGitLog(folder.agentProject),
+        apiGitDeleted(folder.agentProject),
+      ]);
+      _gh.commits = logRes.commits || [];
+      _gh.deleted = delRes.files || [];
+      _gh.noRepo = _gh.commits.length === 0 && _gh.deleted.length === 0;
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+    _gh.loading = false;
+    renderGitHistoryBody();
+  }
+  function closeGitHistoryPanel() {
+    const overlay = document.getElementById('agentGitHistoryOverlay');
+    if (overlay) overlay.classList.remove('open');
+  }
+  function ghFormatDate(iso) {
+    // git's `--date=iso` (%ci) format is "YYYY-MM-DD HH:MM:SS +ZZZZ" — two
+    // spaces, not one. A plain .replace(' ', 'T') (single-arg string, so it
+    // only swaps the *first* match) leaves the space before the timezone
+    // offset in place, which Date() can't parse → "Invalid Date". Strip
+    // both spaces instead, and localize with the app's current language
+    // rather than the browser's default.
+    try {
+      const d = new Date(iso.replace(' ', 'T').replace(' ', ''));
+      if (isNaN(d.getTime())) return iso;
+      return d.toLocaleString(state.currentLang);
+    } catch (e) { return iso; }
+  }
+  function ghFormatBytes(n) {
+    if (typeof n !== 'number' || isNaN(n)) return '?';
+    if (n < 1024) return `${n} B`;
+    const units = ['KB', 'MB', 'GB'];
+    let v = n / 1024, i = 0;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+  }
+  // Groups consecutive commits that share a "Run: <id>" trailer (see
+  // checkpointMessage()) into one collapsible entry for the 🕘 modal,
+  // instead of one flat row per tool call. Commits are already newest-first
+  // from git log, and a run's own checkpoints are always made back-to-back,
+  // so a simple "same runId as the previous one" scan is enough — no need
+  // to bucket by runId across the whole list. Commits without a runId
+  // (manual/baseline/restore checkpoints, or history from before this
+  // feature existed) each become their own one-commit group.
+  function ghGroupCommits(commits) {
+    const groups = [];
+    let cur = null;
+    commits.forEach(c => {
+      if (c.runId && cur && cur.runId === c.runId) {
+        cur.commits.push(c);
+      } else {
+        cur = { runId: c.runId || null, key: c.runId || c.hash, commits: [c] };
+        groups.push(cur);
+      }
+    });
+    return groups;
+  }
+  async function runGhGc() {
+    if (_gh.gcRunning || !_gh.folder) return;
+    _gh.gcRunning = true;
+    const btn = document.getElementById('ghGcBtn');
+    if (btn) { btn.disabled = true; btn.textContent = `⏳ ${esc(t('agent.ghGc'))}`; }
+    try {
+      const res = await apiGitGc(_gh.folder.agentProject);
+      _gh.repoBytes = { before: res.before, after: res.after };
+      const sizeEl = document.getElementById('ghRepoSize');
+      if (sizeEl) sizeEl.textContent = `${ghFormatBytes(res.before)} → ${ghFormatBytes(res.after)}`;
+      showToast(`✅ ${t('agent.ghGcDone')}`);
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    } finally {
+      _gh.gcRunning = false;
+      if (btn) { btn.disabled = false; btn.textContent = `🧹 ${esc(t('agent.ghGc'))}`; }
+    }
+  }
+  function renderGitHistoryBody() {
+    const body = document.getElementById('ghBody');
+    if (!body) return;
+    if (_gh.loading) {
+      body.innerHTML = `<div class="gh-empty">${esc(t('agent.loading'))}</div>`;
+      return;
+    }
+    if (_gh.tab === 'deleted') { renderGhDeletedTab(body); return; }
+    renderGhLogTab(body);
+  }
+  function buildGhCommitRow(c) {
+    const row = document.createElement('div');
+    row.className = 'gh-commit';
+    const expanded = _gh.expanded === c.hash;
+    row.innerHTML = `
+      <div class="gh-commit-head">
+        <div class="gh-commit-main">
+          <div class="gh-commit-msg">${esc(c.message)}</div>
+          <div class="gh-commit-meta">${esc(ghFormatDate(c.date))} · <code>${esc(c.shortHash)}</code></div>
+        </div>
+        <button class="agent-small-btn gh-restore-all" title="${esc(t('agent.ghRestoreWholeProject'))}">⏪</button>
+      </div>
+      <div class="gh-commit-files" ${expanded ? '' : 'hidden'}></div>
+    `;
+    row.querySelector('.gh-commit-head').addEventListener('click', e => {
+      if (e.target.closest('.gh-restore-all')) return;
+      toggleGhCommit(c.hash);
+    });
+    row.querySelector('.gh-restore-all').addEventListener('click', async e => {
+      e.stopPropagation();
+      await confirmAndRestore({ hash: c.hash, label: tf('agent.ghRestoreWholeProjectConfirm', { msg: c.message, date: ghFormatDate(c.date) }) });
+    });
+    if (expanded) renderGhCommitFiles(row.querySelector('.gh-commit-files'), c);
+    return row;
+  }
+  function renderGhLogTab(body) {
+    if (!_gh.commits.length) {
+      body.innerHTML = `<div class="gh-empty">${esc(_gh.folder && _gh.folder.agentCheckpointsEnabled ? t('agent.ghNoCommitsYet') : t('agent.ghCheckpointsOff'))}</div>`;
+      return;
+    }
+    body.innerHTML = '';
+    ghGroupCommits(_gh.commits).forEach(g => {
+      if (g.commits.length === 1) {
+        body.appendChild(buildGhCommitRow(g.commits[0]));
+        return;
+      }
+      // Multi-commit group: newest commit heads the collapsed row (its
+      // content is what "restore whole project" for the group restores to
+      // — restoring to the newest commit already includes every earlier
+      // one in the same run); expanding reveals the individual checkpoints,
+      // each still independently inspectable/restorable as usual.
+      const head = g.commits[0];
+      const wrap = document.createElement('div');
+      wrap.className = 'gh-commit';
+      const isOpen = _gh.expandedGroups.has(g.key);
+      wrap.innerHTML = `
+        <div class="gh-commit-head">
+          <div class="gh-commit-main">
+            <div class="gh-commit-msg">${esc(head.message)}</div>
+            <div class="gh-commit-meta">${esc(ghFormatDate(head.date))} · <span class="gh-group-badge">${esc(tf('agent.ghGroupCount', { n: g.commits.length }))}</span></div>
+          </div>
+          <button class="agent-small-btn gh-restore-all" title="${esc(t('agent.ghRestoreWholeProject'))}">⏪</button>
+        </div>
+        <div class="gh-group-inner" ${isOpen ? '' : 'hidden'}></div>
+      `;
+      wrap.querySelector('.gh-commit-head').addEventListener('click', e => {
+        if (e.target.closest('.gh-restore-all')) return;
+        if (_gh.expandedGroups.has(g.key)) _gh.expandedGroups.delete(g.key);
+        else _gh.expandedGroups.add(g.key);
+        renderGhLogTab(document.getElementById('ghBody'));
+      });
+      wrap.querySelector('.gh-restore-all').addEventListener('click', async e => {
+        e.stopPropagation();
+        await confirmAndRestore({ hash: head.hash, label: tf('agent.ghRestoreWholeProjectConfirm', { msg: head.message, date: ghFormatDate(head.date) }) });
+      });
+      if (isOpen) {
+        const inner = wrap.querySelector('.gh-group-inner');
+        g.commits.forEach(c => inner.appendChild(buildGhCommitRow(c)));
+      }
+      body.appendChild(wrap);
+    });
+  }
+  async function toggleGhCommit(hash) {
+    if (_gh.expanded === hash) { _gh.expanded = null; renderGhLogTab(document.getElementById('ghBody')); return; }
+    _gh.expanded = hash;
+    _gh.expandedData = null;
+    renderGhLogTab(document.getElementById('ghBody'));
+    try {
+      _gh.expandedData = await apiGitCommit(_gh.folder.agentProject, hash);
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+      _gh.expanded = null;
+    }
+    renderGhLogTab(document.getElementById('ghBody'));
+  }
+  function renderGhCommitFiles(container, c) {
+    if (!container) return;
+    if (!_gh.expandedData) { container.innerHTML = `<div class="gh-empty" style="padding:8px;">${esc(t('agent.loading'))}</div>`; return; }
+    const files = _gh.expandedData.files || [];
+    if (!files.length) { container.innerHTML = `<div class="gh-empty" style="padding:8px;">${esc(t('agent.ghNoFileChanges'))}</div>`; return; }
+    container.innerHTML = '';
+    files.forEach(f => {
+      const row = document.createElement('div');
+      row.className = 'gh-file-row';
+      row.innerHTML = `<span class="gh-file-badge" title="${esc(ghStatusLabel(f.status))}">${STATUS_BADGE[f.status] || '•'}</span><span class="gh-file-path">${esc(f.path)}</span><button class="gh-file-restore" title="${esc(t('agent.ghRestoreFile'))}">↺</button>`;
+      row.querySelector('.gh-file-restore').addEventListener('click', async () => {
+        await confirmAndRestore({ hash: c.hash, paths: [f.path], label: tf('agent.ghRestoreFileConfirm', { path: f.path, date: ghFormatDate(c.date) }) });
+      });
+      container.appendChild(row);
+    });
+  }
+  function renderGhDeletedTab(body) {
+    if (!_gh.deleted.length) {
+      body.innerHTML = `<div class="gh-empty">${esc(t('agent.ghNoDeletedFiles'))}</div>`;
+      return;
+    }
+    body.innerHTML = '';
+    _gh.deleted.forEach(d => {
+      const row = document.createElement('div');
+      row.className = 'gh-file-row gh-deleted-row';
+      row.innerHTML = `<span class="gh-file-badge" title="${esc(ghStatusLabel('deleted'))}">🔴</span><span class="gh-file-path">${esc(d.path)}<div class="gh-commit-meta">${esc(t('agent.ghDeletedOn'))} ${esc(ghFormatDate(d.deletedAt))}</div></span><button class="gh-file-restore" title="${esc(t('agent.ghRestoreFile'))}">↺</button>`;
+      row.querySelector('.gh-file-restore').addEventListener('click', async () => {
+        await confirmAndRestore({ hash: d.restoreHash, paths: [d.path], label: tf('agent.ghRestoreDeletedConfirm', { path: d.path }), afterRefreshDeleted: true });
+      });
+      body.appendChild(row);
+    });
+  }
+  // Shared confirm+call+refresh for every restore action (single file,
+  // deleted file, or whole project) — one place to keep the UX consistent.
+  async function confirmAndRestore({ hash, paths, label, afterRefreshDeleted }) {
+    if (!confirm(label)) return;
+    try {
+      const res = await apiGitRestore(_gh.folder.agentProject, hash, paths);
+      showToast(`✅ ${t('agent.ghRestored')}`);
+      // Re-pull log + deleted list so the new "Restored ..." checkpoint and
+      // any now-recreated file show up immediately.
+      const [logRes, delRes] = await Promise.all([
+        apiGitLog(_gh.folder.agentProject),
+        apiGitDeleted(_gh.folder.agentProject),
+      ]);
+      _gh.commits = logRes.commits || [];
+      _gh.deleted = delRes.files || [];
+      _gh.expanded = null;
+      renderGitHistoryBody();
+      _readFileCache.clear();
+      if (afterRefreshDeleted) { /* deleted list already refreshed above */ }
+      return res;
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+  }
+
   function positionAgentSettingsPanel() {
     const panel = document.getElementById('agentSettingsPanel');
     const gear = document.getElementById('agentGearBtn');
@@ -2284,7 +2807,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     });
   }
 
-  // Language change hook, called by js/core/i18n.js's setLang() (same pattern
+  // Language change hook, called by _js/core/i18n.js's setLang() (same pattern
   // as kiconnect-voice.js's onLanguageChange). Re-reads
   // translated text/title/placeholder in place so open panels and
   // in-progress runs update immediately, not just on next re-render.
@@ -2338,6 +2861,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       if (checkpointHint) checkpointHint.textContent = t('agent.checkpointHint');
       const projectsLabel = document.getElementById('agentProjectsLabel');
       if (projectsLabel) projectsLabel.textContent = t('agent.projects');
+      const openHistoryBtn = document.getElementById('agentOpenHistoryBtn');
+      if (openHistoryBtn) openHistoryBtn.textContent = '🕘 ' + t('agent.gitHistory');
       if (panel.classList.contains('open')) { renderAutonomyChips(); renderProjectList(); }
     }
 
@@ -2371,6 +2896,29 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     // from its stored `_agentSteps` and persist the translated markdown so a
     // reload shows the new language too.
     retranslateAgentHistory();
+
+    // Git-history/restore modal: static chrome (title, tab labels) plus a
+    // full re-render of the currently visible tab if the modal is open —
+    // commit messages/dates/status words/restore-confirm text are all
+    // recomputed from t()/tf() at render time, so this is enough to bring
+    // them to the new language without needing a page reload.
+    const ghTitleEl = document.getElementById('ghTitle');
+    if (ghTitleEl) ghTitleEl.textContent = _gh.folder ? `${t('agent.gitHistory')} — ${_gh.folder.name}` : t('agent.gitHistory');
+    const ghTabLogEl = document.getElementById('ghTabLog');
+    if (ghTabLogEl) ghTabLogEl.textContent = t('agent.ghTabCheckpoints');
+    const ghTabDeletedEl = document.getElementById('ghTabDeleted');
+    if (ghTabDeletedEl) ghTabDeletedEl.textContent = t('agent.ghTabDeleted');
+    // GC button: also static chrome, and — unlike the tab labels above —
+    // its label carries state (⏳ while running vs 🧹 idle), so re-set only
+    // the icon-appropriate half rather than clobbering an in-progress run's
+    // "⏳ ..." with the idle label.
+    const ghGcBtnEl = document.getElementById('ghGcBtn');
+    if (ghGcBtnEl) {
+      ghGcBtnEl.textContent = `${_gh.gcRunning ? '⏳' : '🧹'} ${t('agent.ghGc')}`;
+      ghGcBtnEl.title = t('agent.ghGcHint');
+    }
+    const ghOverlay = document.getElementById('agentGitHistoryOverlay');
+    if (ghOverlay && ghOverlay.classList.contains('open')) { _gh.expanded = null; renderGitHistoryBody(); }
   });
 
   function retranslateAgentHistory() {
@@ -2403,6 +2951,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       injectComposerUI();
       injectAgentSettingsPanel();
       injectFolderPicker();
+      injectGitHistoryModal();
       injectHeaderToggle();
       syncComposerChip();
       return;
@@ -2416,7 +2965,6 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   // after every other module has initialized just because the static HTML
   // is already parsed - especially given the circular import back to
   // core/state.js et al. A macrotask boundary guarantees the whole
-  // synchronous module-evaluation pass has completed first. Found via the
-  // dry-run harness during Phase 4 of the v3.5.1→v4.0.0 modularization.
+  // synchronous module-evaluation pass has completed first.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
   else setTimeout(waitForHost, 0);
