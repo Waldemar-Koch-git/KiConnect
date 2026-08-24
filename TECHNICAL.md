@@ -108,7 +108,7 @@ Ki-Connect no longer loads its JS libraries from a CDN. All required libraries a
 
 An internet connection is still required once, to download `_render.zip` on first launch (or when the `_render` folder is empty). After that, the application can run fully offline with respect to these libraries.
 
-On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (mandatory - the proxy exits at startup if any is missing) for server-side AES-GCM encryption/decryption of the agent/knowledge-base registries under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config. It additionally uses `pypdf`, `python-docx`, `python-pptx`, and `openpyxl` for text extraction from the corresponding file types in the knowledge base, and `numpy` for faster embedding similarity search - each is checked individually at import time and the knowledge base feature degrades gracefully per file/feature (clear error, rather than a crash) if one is missing, and the proxy itself still starts fine without any of them. `START.bat`/`START_portable.bat` install all nine packages automatically; manual installs can use `pip install -r requirements.txt` for the four mandatory ones, then uncomment whichever optional knowledge-base extras are needed.
+On the Python side, `kiconnect-proxy.py` requires `flask`, `requests`, `waitress`, and `cryptography` (mandatory - the proxy exits at startup if any is missing) for server-side AES-GCM encryption/decryption of the agent/knowledge-base registries under `./datas/<accountId>/`, separate from the client-side encryption of chats/providers/config. It additionally uses `pypdf`, `python-docx`, `python-pptx`, and `openpyxl` for text extraction from the corresponding file types in the knowledge base, and `numpy` for faster embedding similarity search - each is checked individually at import time and the knowledge base feature degrades gracefully per file/feature (clear error, rather than a crash) if one is missing, and the proxy itself still starts fine without any of them. `START.bat`/`START_portable.bat` install all nine packages automatically;
 
 ---
 
@@ -131,7 +131,6 @@ kiconnect/
     ├── kiconnect-mathjax-config.js  (MathJax config, must load before _render/latex/tex-chtml.js)
     ├── kiconnect-languages-i18n.js  (classic script; translation tables shared with every module)
     ├── kiconnect-proxy.py           (local Flask/Waitress server: static files, /proxy, /store, /agent, /kb)
-    ├── requirements.txt
     ├── _js/
     │   ├── core/        boot.js, state.js, theme.js, i18n.js
     │   ├── auth/         crypto.js, accounts.js, storage.js
