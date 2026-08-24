@@ -4,6 +4,8 @@ title KI Connect - Update
 cd /d "%~dp0"
 
 REM ==============================================================
+REM  Hint: This file needs to be CRLF not LF (else update problem)
+REM
 REM  What this script does, in plain terms (also useful if you ever
 REM  need to explain this to an antivirus false-positive report):
 REM    1. Asks the GitHub API for the current commit hash on main (a
