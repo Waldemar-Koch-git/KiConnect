@@ -2,6 +2,19 @@
 title KI Connect
 cd /d "%~dp0"
 
+REM -- Apply any pending self-update staged by update.bat --------
+REM See START.bat for the full explanation: update.bat only ever stages
+REM "<name>.new" for these three files (never overwrites them directly
+REM while they might be running/paused on the call stack), so this is
+REM the first safe point to swap them in.
+if exist "%~dp0update.bat.new" move /y "%~dp0update.bat.new" "%~dp0update.bat" >nul
+if exist "%~dp0START.bat.new" move /y "%~dp0START.bat.new" "%~dp0START.bat" >nul
+if exist "%~dp0START_portable.bat.new" (
+    move /y "%~dp0START_portable.bat.new" "%~dp0START_portable.bat" >nul
+    start "" cmd /c call "%~dp0START_portable.bat"
+    exit /b 0
+)
+
 set "PYTHON=%~dp0python\python.exe"
 set MIN_VERSIONS="flask>=3.0.0" "requests>=2.31.0" "waitress>=3.0.0" "cryptography>=42.0.0" "pypdf>=4.0.0" "python-docx>=1.1.0" "python-pptx>=0.6.23" "openpyxl>=3.1.0" "numpy>=1.26.0"
 

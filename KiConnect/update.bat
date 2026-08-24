@@ -184,6 +184,16 @@ REM  "call") does the new content actually take effect - so this is
 REM  safe even for update.bat calling this on itself.
 REM ============================================================
 :refresh_self_managed
+    REM NOTE: %SM_NAME% may be THIS file (update.bat, currently running)
+    REM or a file paused on the call stack (START.bat / START_portable.bat,
+    REM whichever one "call"-ed us). Overwriting it here, while it may be
+    REM open/mid-parse in a running cmd.exe process, corrupts that
+    REM process's line-reading position and produces bogus "label not
+    REM found" errors later in the very same run. So this ONLY ever
+    REM stages "<name>.new" - it never touches %SM_NAME% itself. The
+    REM actual swap-in happens the next time START.bat / START_portable.bat
+    REM is launched fresh (see the block at the top of those files),
+    REM which is a brand-new process that hasn't opened the old file yet.
     set "SM_NAME=%~1"
     curl --fail --location --output "%~dp0%SM_NAME%.new" "%RAW_BASE_URL%/%SM_NAME%"
     if errorlevel 1 (
@@ -192,13 +202,11 @@ REM ============================================================
         goto :eof
     )
     if not exist "%~dp0%SM_NAME%" (
-        move /y "%~dp0%SM_NAME%.new" "%~dp0%SM_NAME%" >nul
-        echo  [ OK ] %SM_NAME% downloaded.
+        echo  [ OK ] %SM_NAME% will be installed on next start.
         goto :eof
     )
     fc /b "%~dp0%SM_NAME%.new" "%~dp0%SM_NAME%" >nul 2>&1
     if errorlevel 1 (
-        move /y "%~dp0%SM_NAME%.new" "%~dp0%SM_NAME%" >nul
         echo  [ OK ] %SM_NAME% updated - will be used on next start.
     ) else (
         del /f /q "%~dp0%SM_NAME%.new"
