@@ -5,10 +5,13 @@ cd /d "%~dp0"
 REM -- Apply any pending self-update staged by update.bat --------
 REM update.bat never overwrites START.bat/update.bat/START_portable.bat
 REM while they might be running/paused on the call stack; it only ever
-REM leaves "<name>.new" next to them. This is the first safe moment to
-REM swap those in: a brand-new cmd.exe process that hasn't read anything
-REM from this file yet. If START.bat itself was updated, apply it and
-REM relaunch a fresh copy instead of continuing to run the old one.
+REM leaves "<name>.new" next to them - and, since the update.bat fix,
+REM those "<name>.new" files have already had Mark-of-the-Web stripped
+REM via Unblock-File right after being downloaded. So the move below
+REM is the first safe moment to swap those in: a brand-new cmd.exe
+REM process that hasn't read anything from this file yet. If START.bat
+REM itself was updated, apply it and relaunch a fresh copy instead of
+REM continuing to run the old one.
 if exist "%~dp0update.bat.new" move /y "%~dp0update.bat.new" "%~dp0update.bat" >nul
 if exist "%~dp0START_portable.bat.new" move /y "%~dp0START_portable.bat.new" "%~dp0START_portable.bat" >nul
 if exist "%~dp0START.bat.new" (

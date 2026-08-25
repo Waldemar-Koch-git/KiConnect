@@ -4,8 +4,6 @@ title KI Connect - Update
 cd /d "%~dp0"
 
 REM ==============================================================
-REM  Hint: This file needs to be CRLF not LF (else update problem)
-REM
 REM  What this script does, in plain terms (also useful if you ever
 REM  need to explain this to an antivirus false-positive report):
 REM    1. Asks the GitHub API for the current commit hash on main (a
@@ -28,6 +26,16 @@ REM       as one zip" method as a safety net.
 REM  Nothing here modifies files outside this script's own folder,
 REM  nothing re-executes itself, and every step prints what it's
 REM  doing instead of running silently.
+REM
+REM  MOTW note: curl.exe on Windows 10/11 stamps every file it saves
+REM  with Mark-of-the-Web (Zone.Identifier ADS), because it treats the
+REM  URL as "downloaded from the internet". A plain rename/move (as
+REM  used below to swap "<name>.new" into place) keeps that stamp,
+REM  which is exactly what triggers the extra SmartScreen/AV warning
+REM  on the resulting .bat files. Every curl download below is
+REM  immediately passed through :unblock, which strips that stamp via
+REM  PowerShell's Unblock-File - this is the automated equivalent of
+REM  manually retyping the file into a fresh .txt and renaming it.
 REM ==============================================================
 
 set REPO_OWNER=Waldemar-Koch-git
@@ -121,6 +129,7 @@ if errorlevel 1 (
     echo  [ !! ] Could not fetch kiconnect_sync.ps1.
     if exist "%SYNC_SCRIPT%.new" del /f /q "%SYNC_SCRIPT%.new"
 ) else (
+    call :unblock "%SYNC_SCRIPT%.new"
     if exist "%SYNC_SCRIPT%" (
         fc /b "%SYNC_SCRIPT%.new" "%SYNC_SCRIPT%" >nul 2>&1
         if errorlevel 1 ( move /y "%SYNC_SCRIPT%.new" "%SYNC_SCRIPT%" >nul & echo  [ OK ] kiconnect_sync.ps1 updated. ) else ( del /f /q "%SYNC_SCRIPT%.new" & echo  [ OK ] kiconnect_sync.ps1 already current. )
@@ -178,12 +187,13 @@ REM ============================================================
 REM  Helper: refresh a self-managed .bat file from GitHub if it
 REM  changed. Same pattern update.bat already used on itself before
 REM  this rewrite (see the antivirus-heuristic comment near the top):
-REM  fetch to "<name>.new", byte-compare, and if different, move the
-REM  new copy over the old one *without* relaunching anything. This
-REM  run keeps executing whatever cmd.exe already has buffered; only
-REM  the *next* time the file is invoked (double-click, or the next
-REM  "call") does the new content actually take effect - so this is
-REM  safe even for update.bat calling this on itself.
+REM  fetch to "<name>.new", strip Mark-of-the-Web, byte-compare, and
+REM  if different, move the new copy over the old one *without*
+REM  relaunching anything. This run keeps executing whatever cmd.exe
+REM  already has buffered; only the *next* time the file is invoked
+REM  (double-click, or the next "call") does the new content actually
+REM  take effect - so this is safe even for update.bat calling this
+REM  on itself.
 REM ============================================================
 :refresh_self_managed
     REM NOTE: %SM_NAME% may be THIS file (update.bat, currently running)
@@ -203,6 +213,7 @@ REM ============================================================
         if exist "%~dp0%SM_NAME%.new" del /f /q "%~dp0%SM_NAME%.new"
         goto :eof
     )
+    call :unblock "%~dp0%SM_NAME%.new"
     if not exist "%~dp0%SM_NAME%" (
         echo  [ OK ] %SM_NAME% will be installed on next start.
         goto :eof
@@ -214,6 +225,22 @@ REM ============================================================
         del /f /q "%~dp0%SM_NAME%.new"
         echo  [ OK ] %SM_NAME% already current.
     )
+    goto :eof
+
+
+REM ============================================================
+REM  Helper: strip Mark-of-the-Web (Zone.Identifier alternate data
+REM  stream) from a file that was just downloaded with curl. Without
+REM  this, curl marks every saved file as "from the internet", and a
+REM  plain rename/move (used everywhere below to swap "<name>.new"
+REM  into place) carries that mark over to the final .bat/.ps1 file -
+REM  which is exactly what makes Windows/AV show an extra warning
+REM  when it's later run. Unblock-File removes the mark; if
+REM  PowerShell is somehow unavailable this silently no-ops and only
+REM  costs you the (harmless) SmartScreen prompt again.
+REM ============================================================
+:unblock
+    powershell -NoProfile -Command "try { Unblock-File -LiteralPath '%~1' -ErrorAction SilentlyContinue } catch {}"
     goto :eof
 
 
@@ -237,6 +264,7 @@ REM ============================================================
         echo  Please check your internet connection.
         goto :eof
     )
+    call :unblock "%TMP_DIR%\repo.zip"
     echo  [ OK ] Archive downloaded.
 
     echo  [INFO] Extracting...
@@ -323,6 +351,7 @@ REM ============================================================
             echo  [ !! ] Could not download: comm\_render.zip
             goto :eof
         ) else (
+            call :unblock "%RENDER_ZIP%"
             echo  [ OK ] comm\_render.zip downloaded.
         )
     ) else (

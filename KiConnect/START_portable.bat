@@ -6,7 +6,11 @@ REM -- Apply any pending self-update staged by update.bat --------
 REM See START.bat for the full explanation: update.bat only ever stages
 REM "<name>.new" for these three files (never overwrites them directly
 REM while they might be running/paused on the call stack), so this is
-REM the first safe point to swap them in.
+REM the first safe point to swap them in. Since the update.bat fix,
+REM those "<name>.new" files have already had Mark-of-the-Web stripped
+REM via Unblock-File right after being downloaded, so the plain
+REM move/rename below no longer carries an internet-zone stamp over to
+REM the final .bat file.
 if exist "%~dp0update.bat.new" move /y "%~dp0update.bat.new" "%~dp0update.bat" >nul
 if exist "%~dp0START.bat.new" move /y "%~dp0START.bat.new" "%~dp0START.bat" >nul
 if exist "%~dp0START_portable.bat.new" (
@@ -71,7 +75,7 @@ if errorlevel 1 (
     )
     if not exist "%~dp0python\get-pip.py" (
         echo  [INFO] Downloading get-pip.py...
-        powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%~dp0python\get-pip.py'"
+        powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%~dp0python\get-pip.py'; Unblock-File -LiteralPath '%~dp0python\get-pip.py' -ErrorAction SilentlyContinue"
         if errorlevel 1 (
             echo  [ERROR] get-pip.py could not be downloaded.
             echo  Please download manually: https://pip.pypa.io
