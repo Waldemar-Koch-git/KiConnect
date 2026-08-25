@@ -226,10 +226,10 @@ export function _pullBackForOpenBlock(text, safeEnd) {
   const isListContinuation = (l) => isListLine(l) || (!isBlank(l) && /^[ \t]+\S/.test(l));
 
   // Blank lines alone never close a list/table in CommonMark — a "loose"
-  // list still parses as one list. Skip trailing blank lines and check the
-  // last actual content line to decide whether we're still inside an open
-  // block (otherwise each loose-list item got committed separately, producing
-  // a broken "1., 1., 1." numbering once DOMPurify stripped the start attr).
+  // list still parses as one. Skip trailing blank lines and check the last
+  // content line to decide if still inside an open block (otherwise each
+  // loose-list item committed separately, breaking numbering once
+  // DOMPurify stripped the start attr).
   let lastNonBlank = lines.length - 1;
   while (lastNonBlank >= 0 && isBlank(lines[lastNonBlank])) lastNonBlank--;
   if (lastNonBlank < 0) return safeEnd; // candidate is all blank lines
@@ -512,13 +512,10 @@ export async function doSetupPassword() {
   const colorRow = document.getElementById('accountColorRow');
   const selSw = colorRow?.querySelector('[data-selected]');
   const color = selSw?.dataset.color || ACCOUNT_COLORS[state._accounts.length % ACCOUNT_COLORS.length];
-  // Create account
-  // Random part uses crypto.getRandomValues (not Math.random(), too weak) —
-  // 16 random bytes, hex-encoded. Matters because /store/<accountId>/... has
-  // no separate password check of its own; the account ID is the only thing
-  // stopping "just this account's blob" from becoming "any account's blob"
-  // for anyone else reaching localhost:5000. Content stays encrypted either
-  // way, but a guessable ID would let someone overwrite/delete another account.
+  // Create account. Random part uses crypto.getRandomValues (not
+  // Math.random(), too weak) since /store/<accountId>/... has no separate
+  // password check — the ID alone stops one account's blob from becoming
+  // another's for anyone reaching localhost:5000.
   const _idBytes = new Uint8Array(16);
   crypto.getRandomValues(_idBytes);
   const accountId = Date.now().toString() + '_' + Array.from(_idBytes, b => b.toString(16).padStart(2, '0')).join('');
@@ -554,10 +551,9 @@ export async function forgotPassword() {
   }
   const acc = getAccount(state._selectedLoginAccountId);
   if (!confirm(tf('account.deleteConfirm', { name: acc?.name || '' }))) return;
-  // Must await: _showAccountViewAfterChange() below renders the account grid
-  // from the in-memory _accounts array, which deleteAccount() only updates
-  // partway through its own (async) run — without awaiting, the just-deleted
-  // account would still show up until the next reload.
+  // Must await: _showAccountViewAfterChange() renders the account grid from
+  // the in-memory _accounts array, which deleteAccount() only updates
+  // partway through its async run.
   await deleteAccount(state._selectedLoginAccountId);
   state._selectedLoginAccountId = null;
   _stopLockCountdown();
@@ -565,10 +561,10 @@ export async function forgotPassword() {
 }
 
 export async function deleteAccount(accountId) {
-  // Remove all data from server store and localStorage.
-  // Ask the server which keys exist rather than deleting a hardcoded list —
-  // a previous hardcoded list was missing 'profileFolders', silently leaving
-  // it behind. Falls back to a hardcoded list only if the listing call fails.
+  // Remove all data from server store and localStorage. Ask the server
+  // which keys exist rather than deleting a hardcoded list (a previous one
+  // was missing 'profileFolders'); falls back to a hardcoded list only if
+  // the listing call fails.
   if (state._storeAvailable) {
     const serverKeys = await _storeListKeys(accountId);
     const keysToDelete = (serverKeys && serverKeys.length) ? serverKeys : [
@@ -722,18 +718,17 @@ export async function checkLogin() {
     showLoginScreen();
     return;
   }
-  // F5/reload: session token check (no password in sessionStorage)
-  // The token was encrypted with the CryptoKey, so it can't be decrypted
-  // without the password. Since RAM is empty after F5, the user must
-  // re-authenticate unless the token is still valid AND the key is still in RAM.
+  // F5/reload: session token check (no password in sessionStorage). The
+  // token was encrypted with the CryptoKey, so it needs the password to
+  // decrypt — re-auth is required unless the token is valid AND the key is
+  // still in RAM.
   const lastAccountId = localStorage.getItem('kic_active_account');
   if (lastAccountId && getAccount(lastAccountId)) {
     // Check whether a session token is present in sessionStorage (only then is it worth trying)
     if (restoreSessionPassphrase()) {
-      // Validating the token requires the CryptoKey -> on F5, _cryptoKey is null.
-      // We can't derive a new key without the password.
-      // So: stay logged in only if _cryptoKey is still in RAM
-      // (i.e. not a real reload, just internal navigation / hot-reload).
+      // Validating the token requires the CryptoKey, which is null after
+      // F5. Stay logged in only if it's still in RAM (internal
+      // navigation, not a real reload).
       if (state._cryptoKey) {
         const tokenOk = await _validateSessionToken(lastAccountId);
         if (tokenOk) {
@@ -751,15 +746,11 @@ export async function checkLogin() {
   showLoginScreen();
 }
 
-// This IIFE is the application's actual boot trigger (calls setupEventListeners/
-// applyTranslations/checkLogin, which cascades into essentially every other
-// module). Deferred via setTimeout(0) - same reasoning as _js/agent.js's and
-// _js/db.js's waitForHost() fix: with ES modules, this file's own evaluation
-// order (set by the import dependency graph, not source position in the old
-// _js/core/boot.js) is not guaranteed to run after every other module has
-// initialized. A macrotask boundary guarantees the whole synchronous
-// module-evaluation pass - including the deeply circular core/state.js
-// graph - has completed first.
+// The application's actual boot trigger (setupEventListeners/
+// applyTranslations/checkLogin). Deferred via setTimeout(0), same reasoning
+// as agent.js/db.js's waitForHost(): ES module evaluation order follows the
+// import graph, not source position, so a macrotask boundary guarantees
+// every module (including the circular state.js graph) has initialized first.
 setTimeout(async () => {
   // Hide main UI immediately — show only after successful login
   document.querySelector('.main')?.style.setProperty('display','none');

@@ -1,0 +1,19 @@
+# kiconnect-proxy.py dependencies.
+# Install with: pip install -r requirements.txt
+
+# --- Mandatory (proxy exits at startup if missing) ---
+flask
+requests
+waitress
+cryptography
+
+# --- Optional: only needed for Knowledge-Base (RAG) file extraction /
+# search. Each is checked individually at import time in
+# kiconnect-proxy.py and the KB feature degrades gracefully (clear error
+# per file/feature) if one is absent — the proxy itself still starts fine
+# without them. Uncomment what you need, or install all of them.
+# pypdf          # .pdf extraction for the knowledge base
+# python-docx    # .docx extraction for the knowledge base (import name: docx)
+# python-pptx    # .pptx extraction for the knowledge base (import name: pptx)
+# openpyxl       # .xlsx extraction for the knowledge base
+# numpy          # faster cosine similarity search; falls back to pure Python if absent

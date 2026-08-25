@@ -1,10 +1,8 @@
-// _js/voice.js (formerly kiconnect-voice.js) – Speech input & speech output (Web Speech API)
-// Version 2.1 – fully revised
-// A real ES module with explicit imports/exports (no IIFE wrapper needed —
-// a module already has its own scope).
+// Speech input & speech output (Web Speech API).
 import { state } from './core/state.js';
 import { sendMessage } from './chat/chat-send.js';
 import { autoResize } from './core/boot.js';
+import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
 import { proxyUrl } from './providers/provider-crud.js';
 import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc-ui.js';
 
@@ -40,9 +38,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   // detection somehow never fires. Not user-configurable — it's a backstop.
   var STT_MAX_LISTEN_MS = 90000;
 
-  // Bridge to the Tuning panel's Audio section (_js/providers/provider-crud.js). Provider
-  // choices live in `vs` (localStorage); API keys stay encrypted in
-  // config.audioProviders and are only read here, never written.
+  // Bridge to the Tuning panel's Audio section. Provider choices live in
+  // `vs` (localStorage); API keys stay encrypted in config.audioProviders.
   export function kicVoiceGetSetting(key) { return vs[key]; }
   export function kicVoiceSetSetting(key, value) {
     vs[key] = value;
@@ -57,24 +54,15 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   let dialogPending = false;
   let btnMic, btnTts, btnTtsPause, btnVoiceSettings;
 
-  // i18n helper. TRANSLATIONS/currentLang are global lexical bindings (not
-  // on window) but still accessible as plain identifiers inside this IIFE.
-  function t(key, fallback) {
-    try {
-      /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS['en'] || {};
-        const val = lang[key] ?? (TRANSLATIONS['en'] || {})[key];
-        if (val != null) return val;
-      }
-    } catch(e) {}
-    return fallback || key;
-  }
-  // Like t(), but substitutes {placeholder} tokens (dynamic values like provider/HTTP code).
+  // i18n helper. Core lookup/substitution logic lives in
+  // core/bolton-i18n.js (was duplicated near-identically in agent.js and
+  // db.js); this wrapper keeps voice.js's own fallback semantics unchanged.
+  function t(key, fallback) { return boltonT(key, fallback); }
+  // Like t(), but substitutes {placeholder} tokens (dynamic values like
+  // provider/HTTP code). coalesceNullish=true reproduces this file's
+  // original `v ?? ''` behavior, which agent.js's/db.js's tf() don't have.
   function tv(key, fallbackTemplate, vars) {
-    let s = t(key, fallbackTemplate);
-    if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v ?? ''); });
-    return s;
+    return boltonSubstitute(t(key, fallbackTemplate), vars, true);
   }
 
   // DOM helper functions
@@ -178,11 +166,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   }
 
   // Unified TTS UI sync. Only one thing can be read aloud at a time (see
-  // stopCurrentTtsController), so the main 🔊 button and whichever bubble's
-  // Play button is involved must show the same play/pause state.
-  // state: 'idle' | 'playing' | 'paused'. bubbleCtrl: the triggering
-  // .bubble-voice-controls element, or null for the main button (mirrors
-  // onto the last-assistant-message bubble, since it reads the same text).
+  // stopCurrentTtsController), so the main 🔊 button and the active bubble's
+  // Play button must show the same play/pause state. bubbleCtrl is null for
+  // the main button, which mirrors onto the last-assistant-message bubble.
   function syncTtsUi(state, bubbleCtrl) {
     ttsActive = state !== 'idle';
     ttsPaused = state === 'paused';
@@ -549,11 +535,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
 
     // Close
     panel.querySelector('#vsClose').addEventListener('click', closeVoiceSettingsPanel);
-    // Uses composedPath() rather than panel.contains(e.target): the TTS/STT
-    // provider chips rebuild their container's innerHTML on click, detaching
-    // the clicked node before this bubbled listener runs —
-    // panel.contains(e.target) would then wrongly return false and close the
-    // panel. composedPath() is captured at dispatch time and stays correct.
+    // composedPath() instead of panel.contains(e.target): the provider
+    // chips rebuild innerHTML on click, detaching the clicked node before
+    // this listener runs, which would make contains() wrongly return false.
     document.addEventListener('click', function (e) {
       var path = (typeof e.composedPath === 'function') ? e.composedPath() : null;
       var insidePanel = path
@@ -602,9 +586,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     renderAudioEngineSection(panel);
   }
 
-  // Engine quick-switch chips (TTS/STT). Only lists providers that need no
-  // key (browser) or already have one configured in the Tuning panel, so a
-  // provider only shows up once it's actually usable.
+  // Engine quick-switch chips (TTS/STT); only lists providers that need no
+  // key or already have one configured, so they only show once usable.
   var TTS_PROVIDERS = [
     { id: 'browser',    icon: '🖥️', needsKey: false, nameKey: 'audio.providerBrowser' },
     { id: 'openai',     icon: '🟢', needsKey: true,  nameKey: 'audio.providerOpenAI' },
@@ -715,9 +698,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     }
   }
 
-  // Positions the panel above its own gear button (viewport-clamped)
-  // instead of anchoring to the send button — the old anchor could land the
-  // popup far from the voice group on reordered/wrapped narrow layouts.
+  // Positions the panel above its own gear button (viewport-clamped),
+  // avoiding stale anchoring to the send button on narrow layouts.
   function positionVoiceSettingsPanel() {
     var panel = document.getElementById('voiceSettingsPanel');
     if (!panel || !btnVoiceSettings) return;
@@ -743,10 +725,7 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     if (panel) panel.classList.remove('open');
   }
 
-  // Access to config.audioProviders (_js/core/state.js, read-only). `config` is
-  // not declared locally — it resolves to state.js's top-level `let
-  // config`, a global lexical binding shared across script tags (same
-  // mechanism as TRANSLATIONS/currentLang above); _js/core/i18n.js loads first.
+  // Access to config.audioProviders (state.js, read-only).
   function audioProviderKey(provider) {
     try { return (state.config && state.config.audioProviders && state.config.audioProviders[provider] && state.config.audioProviders[provider].apiKey) || ''; }
     catch (e) { return ''; }
@@ -762,15 +741,11 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     openAudioTuningPanel();
   }
 
-  // Guard against MathJax's own Explorer/Speech feature. MathJax 4's
-  // "explorer" a11y extension calls its own cancelVoice() on formula
-  // mousedown, which kills whatever speechSynthesis utterance is playing,
-  // including ours (confirmed via stack trace). Intercepting the click
-  // itself is unreliable, so instead window.speechSynthesis.cancel() is
-  // wrapped: while our browser-TTS is speaking, external cancel() calls are
-  // swallowed; our own code bypasses the wrapper via _nativeSpeechCancel and
-  // can still cancel normally. Only matters for the 'browser' TTS engine —
-  // HTTP-based providers play through <audio> and never touch speechSynthesis.
+  // Guard against MathJax's Explorer a11y extension, which calls its own
+  // cancelVoice() on formula mousedown and kills our playing utterance.
+  // Wraps speechSynthesis.cancel() to swallow external calls while we're
+  // speaking; our own code bypasses it via _nativeSpeechCancel. Only
+  // matters for the 'browser' TTS engine.
   var _nativeSpeechCancel = null;
   var _browserEngineSpeaking = false; // true only while OUR utterance is actually playing
   (function installCancelGuard() {
@@ -779,17 +754,14 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     _nativeSpeechCancel = ss.cancel.bind(ss);
     ss.cancel = function () {
       if (!_browserEngineSpeaking) return _nativeSpeechCancel();
-      // Swallowed: something other than our own code (MathJax's formula
-      // explorer, see note above) tried to cancel while we're speaking.
-      // Expected and harmless — playback just continues.
+      // Swallowed: MathJax's explorer tried to cancel while we're speaking
+      // — expected and harmless.
     };
     ss.__kicCancelGuarded = true;
   })();
 
-  // TTS engines, one per provider, all exposing the same interface:
+  // TTS engines, one per provider, common interface:
   //   speak(text, opts, {onstart, onend, onerror}) → {pause(), resume(), stop()}
-  // Lets speakLastAssistantMessage()/speakBubble() and the bubble submenu
-  // stay provider-agnostic, just holding onto whatever controller comes back.
   var ttsEngines = {
     browser: {
       speak: function (text, opts, cbs) {
@@ -800,30 +772,25 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
         }
         _nativeSpeechCancel();
 
-        // Chrome's native speech engine has an undocumented per-utterance
-        // length ceiling: past it, speak() silently does nothing (looks like
-        // a dead button on long replies). Splitting into sentence-bounded
-        // chunks and queuing them back-to-back sidesteps it — same
-        // chunkTextForTts() the HTTP TTS providers use for their documented
-        // limits — with inaudible chunk boundaries since the next utterance
-        // queues immediately.
+        // Chrome has an undocumented per-utterance length ceiling — past
+        // it, speak() silently no-ops. Split into sentence-bounded chunks
+        // (same chunkTextForTts() the HTTP providers use) and queue
+        // back-to-back with inaudible boundaries.
         var chunks = chunkTextForTts(text, BROWSER_TTS_CHUNK_MAX_CHARS);
         var chunkIdx = 0;
         var utter = null;
 
-        // Reliability workarounds for well-known Web Speech API bugs:
-        // 1) Chrome/Edge can silently drop an utterance if speak() runs right
-        //    after cancel(), before the queue flushes — defer to a macrotask.
-        // 2) pause() before onstart fires is silently ignored by Chrome —
-        //    buffer an early pause() and apply it once onstart fires.
-        // 3) Chrome stops firing progress on long utterances (~15s+) if
-        //    left untouched — a periodic harmless pause()+resume() "kick"
-        //    while speaking prevents it from silently dying.
-        // 4) That kick can itself misfire on some Chrome builds, tearing the
-        //    utterance down (onerror 'interrupted'/'canceled', confirmed via
-        //    event logging to only follow a kick, never real user action).
-        //    An error right after our last kick is treated as a kick
-        //    self-abort, not a real stop: resume from the last word boundary.
+        // Workarounds for known Web Speech API bugs:
+        // 1) speak() right after cancel(), before the queue flushes, can
+        //    silently drop the utterance — defer to a macrotask.
+        // 2) pause() before onstart fires is ignored by Chrome — buffer it
+        //    and apply once onstart fires.
+        // 3) Chrome stops firing progress on long (~15s+) utterances unless
+        //    kept alive with a periodic pause()+resume() "kick".
+        // 4) That kick can itself misfire and tear the utterance down —
+        //    an error right after our last kick is treated as a kick
+        //    self-abort and resumed from the last word boundary, not a
+        //    real stop.
         var started = false, pendingPause = false, userPaused = false, keepAliveTimer = null;
         var canceled = false; // true once stop() has been called, even before speak() was actually issued
         var lastKickAt = 0;   // timestamp of the most recent keep-alive pause()/resume() kick
@@ -832,12 +799,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
         var MAX_RECOVERY_ATTEMPTS = 5;
         var KICK_ERROR_WINDOW_MS = 1500; // error within this window of a kick is blamed on the kick
 
-        // The keep-alive kick works around a Chrome bug where speechSynthesis
-        // stalls after ~15s+ on *network* voices only — it doesn't affect
-        // *local* voices (Windows SAPI, macOS system). On local engines,
-        // pause()+resume() is a real OS round-trip with unpredictable
-        // multi-second latency, so kicking one introduces the exact audible
-        // gap the kick was meant to prevent. Only arm it for non-local voices.
+        // The keep-alive kick only affects *network* voices (the Chrome
+        // stall bug it works around); on *local* voices, pause()+resume()
+        // is a real OS round-trip that would itself cause an audible gap.
+        // Only arm it for non-local voices.
         function isLocalVoice() {
           try {
             var voices = speechSynthesis.getVoices();
@@ -879,10 +844,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
           return u;
         }
 
-        // Wires up on{start,boundary,end,error} identically for the initial,
-        // recovery-restart, and next-chunk utterances. `isRestart` suppresses
-        // cbs.onstart() so callers don't get a second "started" callback for
-        // kick recoveries or chunk advances (only the first attempt fires it).
+        // Wires up on{start,boundary,end,error} identically for the
+        // initial, recovery-restart, and next-chunk utterances. `isRestart`
+        // suppresses a duplicate "started" callback.
         function attachHandlers(u, isRestart) {
           u.onstart = function () {
             started = true;
@@ -909,12 +873,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
               if (cbs.onend) cbs.onend();
             }
           };
-          // event.error is 'canceled'/'interrupted' whenever anything calls
-          // speechSynthesis.cancel(): our own stop()/pause() (expected), our
-          // keep-alive kick misfiring (note 4 above, recovered silently
-          // below), or real outside interference. MathJax's own cancel()
-          // calls are blocked before reaching here (see installCancelGuard),
-          // so this mostly sees our own cancels and rare kick misfires.
+          // event.error is 'canceled'/'interrupted' on any cancel() call:
+          // our own stop()/pause(), a kick misfire (recovered below), or
+          // outside interference (MathJax's own is already blocked, see
+          // installCancelGuard).
           u.onerror = function (ev) {
             clearKeepAlive();
             var reason = (ev && ev.error) || 'unknown';
@@ -942,12 +904,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
           };
         }
 
-        // Re-issues the remainder of the CURRENT chunk as a fresh utterance
-        // for kick recovery, sharing the same wiring as normal chunk
-        // playback so pause()/resume()/stop() keep working transparently
-        // (they close over the mutable `utter`). Mutates chunks[chunkIdx] to
-        // the remaining text so onboundary's charIndex and any second
-        // recovery within the same chunk stay consistent.
+        // Re-issues the remainder of the current chunk as a fresh utterance
+        // for kick recovery, sharing the same wiring so pause/resume/stop
+        // keep working. Mutates chunks[chunkIdx] to the remaining text so a
+        // second recovery within the same chunk stays consistent.
         function restartFrom(charIndex) {
           if (canceled) return;
           var remaining = chunks[chunkIdx].slice(charIndex);
@@ -968,9 +928,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
           utter = makeUtterance(chunks[idx]);
           attachHandlers(utter, /* isRestart */ idx > 0);
           setTimeout(function () {
-            // A newer speak() request may have already called stop() on this
-            // controller before this deferred call ran — don't queue the
-            // utterance, or it plays alongside whatever superseded it.
+            // A newer speak() may have already stopped this controller —
+            // don't queue, or it plays alongside whatever superseded it.
             if (canceled) return;
             speechSynthesis.speak(utter);
           }, 0);
@@ -1009,20 +968,17 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     gcloud:     createChunkedHttpTtsEngine(fetchGcloudTtsBlob, GCLOUD_TTS_MAX_CHARS),
   };
 
-  // Chrome's speechSynthesis has no documented per-utterance limit (unlike
-  // Groq/Cloud TTS below), but silently no-ops well before the ~32k-char
-  // spec figure, depending on voice/OS. Kept comfortably low so it never
-  // approaches the real ceiling, while chunk seams stay infrequent.
+  // Chrome's speechSynthesis silently no-ops well before the ~32k-char
+  // spec figure (voice/OS-dependent) — kept comfortably low.
   var BROWSER_TTS_CHUNK_MAX_CHARS = 1000;
 
-  // Groq's Orpheus TTS caps `input` at 200 chars/request
-  // (console.groq.com/docs/text-to-speech/orpheus#limitations); kept a bit
-  // under that for multi-byte character safety margin.
+  // Groq's Orpheus TTS caps `input` at 200 chars/request; kept a bit under
+  // that for multi-byte safety margin.
   var GROQ_TTS_MAX_CHARS = 190;
 
   // Cloud TTS's text:synthesize endpoint caps input at ~5000 UTF-8 bytes;
-  // kept well under that for multi-byte character safety margin, and
-  // because Chirp 3: HD tends to reject very long requests with a 400.
+  // kept well under that (multi-byte safety margin; Chirp 3 HD 400s on
+  // very long requests).
   var GCLOUD_TTS_MAX_CHARS = 3000;
 
   // Splits `text` into chunks no longer than `maxLen`, preferring sentence
@@ -1064,8 +1020,7 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
 
   // Wraps an async "text → audio Blob" fetcher into the common TTS engine
   // interface, splitting `text` into <=maxChars chunks played back-to-back
-  // through one <audio> element (queue advances on `onended`). Needed for
-  // providers (Groq/Orpheus) with a short per-request input limit.
+  // (queue advances on `onended`) for providers with a short input limit.
   function createChunkedHttpTtsEngine(fetchBlobFn, maxChars) {
     return {
       speak: function (text, opts, cbs) {
@@ -1103,9 +1058,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   }
 
   // Wraps an async "text → audio Blob" fetcher into the common TTS engine
-  // interface, playing through a plain <audio> element. Returns the
-  // controller synchronously so callers can attach it right away; early
-  // pause/resume calls before the audio element exists are harmless no-ops.
+  // interface via a plain <audio> element. Returns the controller
+  // synchronously; early pause/resume before the element exists are no-ops.
   function createHttpTtsEngine(fetchBlobFn) {
     return {
       speak: function (text, opts, cbs) {
@@ -1132,10 +1086,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     };
   }
 
-  // Extracts the provider's actual error message (e.g. error.message in
-  // Groq/OpenAI's JSON body) so failures show why, not just the status code.
-  // Encoded as 'tts-http-<code>::<detail>' since onerror() only passes a
-  // string; ttsErrorToast() below decodes it.
+  // Extracts the provider's actual error message so failures show why, not
+  // just the status. Encoded as 'tts-http-<code>::<detail>' since onerror()
+  // only passes a string; ttsErrorToast() decodes it.
   async function ttsHttpError(res) {
     var detail = '';
     try {
@@ -1164,9 +1117,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   async function fetchGroqTtsBlob(text) {
     var apiKey = audioProviderKey('groq');
     if (!apiKey) throw new Error('no-key');
-    // 'playai-tts' was decommissioned by Groq — current model is Orpheus v1
-    // English TTS (max 200 chars/request, hence the chunking above). Voice
-    // is user-selectable (vs.groqTtsVoice). See: console.groq.com/docs/text-to-speech/orpheus
+    // Current model is Orpheus v1 English TTS (max 200 chars/request,
+    // hence the chunking above); voice is user-selectable (vs.groqTtsVoice).
     var voice = vs.groqTtsVoice || 'troy';
     var res = await fetch(proxyUrl('https://api.groq.com/openai/v1/audio/speech'), {
       method: 'POST',
@@ -1190,12 +1142,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     return res.blob();
   }
 
-  // Gemini's generateContent TTS returns base64-encoded *raw* PCM (no WAV
-  // header) at inlineData.data, unlike OpenAI/Groq/ElevenLabs which hand
-  // back a ready-to-play Blob. Decode the base64, read the sample rate from
-  // inlineData.mimeType (don't hardcode it, Google can change it), and wrap
-  // in a minimal 44-byte WAV header for a normal playable Blob.
-  // See: ai.google.dev/gemini-api/docs/speech-generation
+  // Gemini's TTS returns base64-encoded raw PCM (no WAV header) at
+  // inlineData.data, unlike other providers' ready-to-play Blob. Decode,
+  // read the sample rate from inlineData.mimeType (don't hardcode it), and
+  // wrap in a minimal 44-byte WAV header.
   function pcmBase64ToWavBlob(base64, sampleRate, numChannels, bitsPerSample) {
     var binary = atob(base64);
     var len = binary.length;
@@ -1227,8 +1177,6 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     var apiKey = audioProviderKey('gemini');
     if (!apiKey) throw new Error('no-key');
     var voice = vs.geminiTtsVoice || 'Kore';
-    // gemini-2.5-flash-preview-tts is the broadly-available free-tier model;
-    // see ai.google.dev/gemini-api/docs/speech-generation
     // Key goes in ?key= rather than x-goog-api-key, since the proxy's
     // forwarded-header allowlist doesn't include that header.
     var res = await fetch(proxyUrl('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=' + encodeURIComponent(apiKey)), {
@@ -1263,12 +1211,10 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     return new Blob([bytes], { type: mimeType });
   }
 
-  // Google Cloud Text-to-Speech (Chirp 3: HD) — a separate product from the
-  // Gemini API above: different auth (GCP project + billing, not an AI
-  // Studio key), different domain, generous monthly free quota instead of
-  // Gemini's per-minute limit. Voice names follow
-  // "<languageCode>-Chirp3-HD-<Persona>"; languageCode comes from opts.lang
-  // (same BCP-47 code used for STT). See: cloud.google.com/text-to-speech/docs/chirp3-hd
+  // Google Cloud TTS (Chirp 3: HD) — separate product from the Gemini API
+  // above (GCP billing auth, different domain/quota). Voice names follow
+  // "<languageCode>-Chirp3-HD-<Persona>"; languageCode is the BCP-47 code
+  // from opts.lang (same as STT).
   async function fetchGcloudTtsBlob(text, opts) {
     var apiKey = audioProviderKey('gcloud');
     if (!apiKey) throw new Error('no-key');
@@ -1291,9 +1237,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
 
   // STT engines, one per provider, common interface:
   //   start(opts, {onstart, oninterim, onend, onerror}) → {stop()}
-  // Groq/Whisper has no streaming API, so oninterim never fires for it (a
-  // "recognizing…" placeholder shows instead — see startStt() below); the
-  // transcript arrives once, in onend().
+  // Groq/Whisper has no streaming API, so oninterim never fires (a
+  // "recognizing…" placeholder shows instead); the transcript arrives once
+  // in onend().
   var sttEngines = {
     browser: {
       start: function (opts, cbs) {
@@ -1304,9 +1250,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
           return { stop: function () {} };
         }
         var rec = new SR();
-        // continuous=true + our own silence timer, instead of the browser's
-        // non-configurable end-of-speech cutoff, so vs.sttSilenceMs governs
-        // when listening actually stops.
+        // continuous=true + our own silence timer so vs.sttSilenceMs (not
+        // the browser's fixed cutoff) governs when listening stops.
         rec.continuous     = true;
         rec.interimResults = true;
         rec.lang           = opts.lang;
@@ -1342,8 +1287,7 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
         };
         rec.onerror = function (e) {
           // 'no-speech' fires naturally with continuous=true on brief
-          // silence; our own timer already handles "stop after N seconds
-          // quiet", so treat this as a normal end, not a real failure.
+          // silence; treat as a normal end, not a failure.
           if (e.error === 'no-speech') return;
           if (silenceTimer) clearTimeout(silenceTimer);
           if (maxTimer) clearTimeout(maxTimer);
@@ -1358,10 +1302,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     gemini: createRecorderSttEngine(transcribeWithGemini),
   };
 
-  // Shared "record with mic-level silence detection, send the whole clip to
-  // an HTTP transcription endpoint" engine — used by Groq (Whisper) and
-  // Gemini (fed via a multimodal generateContent call instead of a
-  // dedicated STT endpoint). `transcribeFn` is `(blob, lang) => Promise<string>`.
+  // Shared "record with mic-level silence detection, send the clip to an
+  // HTTP transcription endpoint" engine, used by Groq and Gemini.
+  // `transcribeFn` is `(blob, lang) => Promise<string>`.
   function createRecorderSttEngine(transcribeFn) {
     return {
       start: function (opts, cbs) {
@@ -1377,10 +1320,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
           else if (stream) stream.getTracks().forEach(function (tr) { tr.stop(); });
         }
 
-        // Groq's transcription endpoint has no streaming/VAD — without this,
-        // MediaRecorder would record forever until clicked again. A small
-        // Web Audio API level meter auto-stops once volume stays under a
-        // quiet threshold for vs.sttSilenceMs.
+        // No streaming/VAD on the endpoint — a Web Audio level meter
+        // auto-stops once volume stays under threshold for vs.sttSilenceMs.
         function startSilenceDetection(liveStream) {
           try {
             var Ctx = window.AudioContext || window.webkitAudioContext;
@@ -1487,9 +1428,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     });
   }
 
-  // Gemini has no dedicated transcription endpoint — the clip is sent as an
-  // inline audio part in a multimodal generateContent call, prompting the
-  // model to return only the transcript. See: ai.google.dev/gemini-api/docs/audio
+  // Gemini has no dedicated transcription endpoint — the clip is sent as
+  // an inline audio part in a multimodal generateContent call.
   async function transcribeWithGemini(blob, lang) {
     var apiKey = audioProviderKey('gemini');
     if (!apiKey) throw new Error('no-key');
@@ -1593,10 +1533,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     _currentTtsController = null;
   }
 
-  // Speaks `text` with the currently selected provider (vs.ttsProvider),
-  // routing pause/resume/stop through whichever engine handles it. Any
-  // previously playing TTS is stopped first — only one thing reads aloud
-  // at a time.
+  // Speaks `text` with the currently selected provider, routing
+  // pause/resume/stop through that engine. Any playing TTS is stopped
+  // first — only one thing reads aloud at a time.
   function speakTextWithCurrentProvider(text, cbs) {
     stopCurrentTtsController();
     var provider = vs.ttsProvider || 'browser';
@@ -1615,10 +1554,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     return _currentTtsController;
   }
 
-  // Surfaces TTS failures that would otherwise fail silently. Decodes
-  // 'tts-http-<code>::<detail>' (see ttsHttpError above) into a readable
-  // message, also logged to console in full since the toast auto-hides
-  // quickly and truncates long provider messages.
+  // Surfaces TTS failures that would otherwise fail silently, decoding
+  // 'tts-http-<code>::<detail>'; also logged in full since the toast
+  // auto-hides and truncates long messages.
   function ttsErrorToast(provider, err) {
     if (!err || err === 'no-key') return; // 'no-key' is already toasted by noKeyToast() before the engine even runs
     var httpMatch = /^tts-http-(\d+)(?:::([\s\S]*))?$/.exec(err);
@@ -1667,11 +1605,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     var bubble = rows[rows.length - 1].querySelector('.bubble');
     if (!bubble) return '';
     var clone = bubble.cloneNode(true);
-    // .math-inline/.math-block hold raw LaTeX until MathJax typesets them,
-    // and even typeset output can carry raw LaTeX in an assistive-MathML
-    // annotation. Either way this garbles TTS and can make Chrome's network
-    // voices abort the whole utterance on formula-heavy replies — so strip
-    // formulas the same way code blocks are already stripped.
+    // .math-inline/.math-block hold raw LaTeX (even typeset output can
+    // carry it in assistive-MathML), which garbles TTS and can abort
+    // Chrome network voices — strip formulas like code blocks already are.
     clone.querySelectorAll('pre, code, .code-block, .thinking-block, details, .token-badge, .math-inline, .math-block').forEach(function (el) { el.remove(); });
     return (clone.innerText || clone.textContent || '').replace(/\s+/g, ' ').trim();
   }
@@ -1690,10 +1626,9 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     if (!ctrl) syncTtsUi('idle', null);
   }
 
-  // Bubble TTS (per-bubble voice controls). Mirrors the main input-row
-  // control: a 🔊 button that starts playback and doubles as Stop while
-  // active, plus a Pause/Resume button shown only during playback. Both
-  // stay mirrored via syncTtsUi() above.
+  // Bubble TTS: mirrors the main input-row control — a 🔊 button that
+  // starts/stops playback plus a Pause/Resume button, kept in sync via
+  // syncTtsUi().
 
   var _currentBubbleCtrl = null;
 

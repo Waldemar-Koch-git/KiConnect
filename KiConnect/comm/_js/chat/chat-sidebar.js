@@ -621,10 +621,8 @@ export function buildChatItem(c) {
   div.appendChild(cb);
   div.appendChild(titleSpan);
   if (c.branchOf) { const bb=document.createElement('span'); bb.className='branch-badge'; bb.textContent='↩'; div.appendChild(bb); }
-  // Live-indicator: a small pulsing dot next to the title while this chat
-  // has an in-flight run (chat stream or agent turn) somewhere — most
-  // useful while it's NOT the one on screen, so a background stream stays
-  // visible without switching into it.
+  // Live-indicator: a pulsing dot next to the title while this chat has an
+  // in-flight run, most useful when it's NOT the one on screen.
   if (isChatStreaming(c.id)) {
     const liveDot = document.createElement('span');
     liveDot.className = 'chat-item-live-dot';

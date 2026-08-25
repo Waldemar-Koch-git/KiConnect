@@ -164,9 +164,7 @@ state._printSingleIdx = null;
   }
 
   // Quick on/off switch, independent of battleSelectedModels — flipping
-  // Battle-Modus off no longer requires unchecking every picked model.
-  // Only visible once a valid (>=2) selection exists; below that there's
-  // nothing to switch on.
+  // Battle-Modus off doesn't require unchecking every picked model.
   function syncActiveSwitch() {
     if (!activeSwitchWrap || !activeSwitch) return;
     const eligible = state.battleSelectedModels.length >= 2;
@@ -188,10 +186,9 @@ state._printSingleIdx = null;
     });
   }
 
-  // filter: lowercase search string, matched against each model's label —
-  // useful once a provider list is large enough to scroll (see chat
-  // feedback). Already-checked models stay checked while filtered out of
-  // view (state lives in battleSelectedModels, not in the filtered DOM).
+  // filter: lowercase search string matched against each model's label.
+  // Already-checked models stay checked while filtered out of view (state
+  // lives in battleSelectedModels, not the filtered DOM).
   function renderList(filter) {
     const q = (filter || '').trim().toLowerCase();
     titleEl.textContent = bt('battle.pickModels');
@@ -228,11 +225,9 @@ state._printSingleIdx = null;
             state.battleSelectedModels = state.battleSelectedModels.filter(v => v !== m.value);
           }
           const hasEnough = state.battleSelectedModels.length >= 2;
-          // Below 2 models Battle-Modus structurally can't run, so force it
-          // off. Crossing UP over the threshold defaults it back on (the
-          // old auto-on convenience) — but only on that crossing, so an
-          // explicit off (via the switch above) sticks while you merely
-          // add/remove models within an already->=2 selection.
+          // Below 2 models Battle-Modus can't run, so force it off.
+          // Crossing UP over the threshold defaults it back on, but only
+          // on that crossing — an explicit off sticks otherwise.
           if (!hasEnough) state.battleModeActive = false;
           else if (!hadEnough) state.battleModeActive = true;
           refreshToggleUI();
@@ -280,4 +275,12 @@ state._printSingleIdx = null;
   refreshToggleUI();
   syncActiveSwitch();
   onLanguageChange(() => { refreshToggleUI(); syncActiveSwitch(); });
+
+  // Re-syncs toggle/switch/popover after provider-models.js prunes
+  // battleSelectedModels (see _pruneBattleSelection()).
+  window.refreshBattlePopoverUI = function () {
+    refreshToggleUI();
+    syncActiveSwitch();
+    if (open) renderList(searchEl ? searchEl.value : '');
+  };
 })();

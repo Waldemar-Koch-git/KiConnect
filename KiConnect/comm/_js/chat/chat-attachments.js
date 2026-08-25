@@ -88,10 +88,9 @@ export async function _runStreamAndAttach(chat, messages, provider, typingId, do
   const modelUsed = activeRuns.get(runId)?.model ?? state.config.model;
   if (assistantText) _attachAIActions(chat, assistantText, usageData, streamEl, modelUsed);
   activeRuns.delete(runId);
-  // Sidebar's live-indicator dot for `chat` needs to disappear now that its
-  // run is gone from the registry; the composer button only changes if
-  // `chat` is the one on screen (syncComposerStreamingUI reads currentChatId
-  // itself, so this is a no-op for a background chat finishing).
+  // The sidebar's live-indicator dot for `chat` needs to disappear now
+  // that its run is gone; the composer button only changes if `chat` is
+  // on screen.
   renderSidebar();
   syncComposerStreamingUI();
   if (chat === currentChat()) setStatus('green');
@@ -123,19 +122,15 @@ export function _attachAIActions(chat, assistantText, usageData, streamEl, model
   }
 
   // Upgrade the just-finished bubble in place (action buttons, sibling nav,
-  // token badge, ...) instead of rebuilding the whole chat history or
-  // re-running formatText()/typesetMath() on content already rendered
-  // incrementally during streaming. Reuses `streamEl` as-is, only attaches
-  // the missing chrome around it.
+  // token badge) instead of rebuilding the whole history. Reuses
+  // `streamEl` as-is, only attaches the missing chrome.
   const path = getActivePath(chat);
   const idx = path.length - 1;
   const messagesEl = document.getElementById('messages');
   const emptyState = document.getElementById('emptyState');
 
-  // Only touch #messages if `chat` is the one on screen right now — if the
-  // stream finished while the user was elsewhere, #messages holds that other
-  // chat's rows. The finished answer is already saved into chat.messages, so
-  // it renders correctly next time this chat is opened via renderMessages().
+  // Only touch #messages if `chat` is on screen — otherwise the saved
+  // answer renders correctly next time this chat opens.
   if (chat === currentChat()) {
     if (!_finalizeAIRowInPlace(streamEl, path[idx], idx)) {
       // Fallback: streamEl is missing/detached — build a fresh row the old

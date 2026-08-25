@@ -193,10 +193,9 @@ export async function loadEmbeddingModelCandidates() {
     if (!data) throw new Error(t('js.embedModelLoadInvalidResponse'));
     const rawModels = Array.isArray(data?.data) ? data.data
       : Array.isArray(data?.models) ? data.models : (Array.isArray(data) ? data : []);
-    // APIs do not have a reliable capability flag.  Put likely embedding
-    // models first, but retain every advertised model so unfamiliar names
-    // (or provider-specific names) can be selected and tested without
-    // needing to know or type the exact identifier in advance.
+    // APIs have no reliable capability flag — put likely embedding models
+    // first, but retain every advertised model so unfamiliar names can
+    // still be selected and tested.
     const EMBED_MATCH = /embed(?:ding)?|e5[-_]|bge[-_]|gte[-_]|nomic|mxbai|jina|voyage|arctic|instructor|multilingual|qwen.*embed|granite.*embed|snowflake/i;
     const seen = new Set(); const candidates = [];
     rawModels.forEach(m => {
@@ -267,9 +266,7 @@ export async function testEmbeddingModel() {
 
   const btn = document.getElementById('pvEmbedModelTestBtn');
   // Captured as innerHTML (not textContent) so the label's data-i18n <span>
-  // survives the round trip - a plain textContent save/restore here would
-  // silently strip that span the first time this button is used, leaving
-  // the label unable to pick up future language switches.
+  // survives — textContent would strip it and break future language switches.
   const prevLabel = btn.innerHTML; btn.textContent = '…'; btn.disabled = true;
   try {
     const extraHeaders = { 'Content-Type': 'application/json' };
@@ -465,10 +462,9 @@ export async function fetchModels() {
 		  const EMBED_FILTER = /embed|e5-|bge-|rerank|whisper|tts|dall-e/i;
           const seenIds = new Set();
           rawModels.forEach(m => {
-            // Google's /v1beta/openai/models endpoint returns native Gemini-style
-            // IDs like "models/gemini-2.5-pro" even though this is the
-            // OpenAI-compatible route, which expects (and the UI should show)
-            // the bare "gemini-2.5-pro" form — strip the prefix if present.
+            // Google's OpenAI-compat endpoint still returns native
+            // "models/gemini-2.5-pro" IDs — strip the prefix for the bare
+            // form the UI expects.
             const id = (m.id || m.name || '').replace(/^models\//, ''); if (!id) return;
 			if (EMBED_FILTER.test(id)) return;
             // Some providers' /models endpoints return the same id more than once
@@ -499,11 +495,26 @@ export async function fetchModels() {
   applyModelGroupsToUI(allGroups);
 }
 
+// battleSelectedModels lives independently of the model-selector <select>,
+// so a disabled/deleted provider's model stayed picked (just hidden from
+// the popover) until it errored on send. Prune it here too.
+function _pruneBattleSelection(availableIds) {
+  if (!state.battleSelectedModels || !state.battleSelectedModels.length) return;
+  const before = state.battleSelectedModels.length;
+  state.battleSelectedModels = state.battleSelectedModels.filter(id => availableIds.has(id));
+  if (state.battleSelectedModels.length === before) return;
+  // <2 models left -> Battle-Modus can't run, force it off.
+  if (state.battleSelectedModels.length < 2) state.battleModeActive = false;
+  save();
+  if (window.refreshBattlePopoverUI) window.refreshBattlePopoverUI();
+}
+
 export function applyModelGroupsToUI(allGroups) {
   const ph = `<option value="">${escHtml(t('js.selectModel'))}</option>`;
   if (!allGroups.length) {
     ['modelSelector','modelInput'].forEach(id => { const el=document.getElementById(id); if(el) el.innerHTML=ph; });
     if (window.buildCustomDropdownData) buildCustomDropdownData();
+    _pruneBattleSelection(new Set());
     return;
   }
   let optsHtml = ph;
@@ -540,6 +551,9 @@ export function applyModelGroupsToUI(allGroups) {
   }
   updateModelMaxInfo(); syncAllModelSelects(); updateThinkingUI();
   if (window.buildCustomDropdownData) buildCustomDropdownData();
+  const availableIds = new Set();
+  allGroups.forEach(g => g.models.forEach(m => availableIds.add(m.fullId)));
+  _pruneBattleSelection(availableIds);
 }
 
 export function rebuildModelDropdownFromCache() {
@@ -704,11 +718,9 @@ export const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
 }));
 
 export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
-  // modelId is optional so the two pre-existing single-model callers (which
-  // only ever meant "whatever's selected in the composer") keep working
-  // unchanged; Battle-Modus passes each variant's own model explicitly so
-  // every model in the comparison actually searches with itself, not with
-  // whatever happens to be selected in the composer.
+  // modelId is optional so single-model callers ("whatever's selected in
+  // the composer") keep working unchanged; Battle-Modus passes each
+  // variant's own model explicitly so it searches with itself.
   modelId = modelId || splitModelId(state.config.model).modelId;
   if (provider.type === 'anthropic') {
     const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages: msgs, tools: AGENTIC_WEB_TOOLS_ANTHROPIC, tool_choice: { type: 'auto' } };

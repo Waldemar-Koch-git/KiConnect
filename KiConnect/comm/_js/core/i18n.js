@@ -189,13 +189,10 @@ export function retranslateSuggestionChips() {
   });
 }
 
-// Battle-Modus tile grids build their status labels / winner button /
-// default-winner banner with bt()/btf() only once, at render time (see
-// _buildBattleTileGridRow() in chat-send.js) — a plain language switch
-// never touched them, so an already-open battle grid kept showing its
-// button/status text in whichever language was active when it streamed
-// in. Same surgical-DOM-walk approach as retranslateBubbleButtons() above,
-// so scroll position and any in-progress streaming isn't disturbed.
+// Battle-Modus tile grids build their status labels/winner button with
+// bt()/btf() only once, at render time — a plain language switch never
+// touched them. Same surgical-DOM-walk approach as
+// retranslateBubbleButtons() above, so scroll/streaming isn't disturbed.
 export function retranslateBattleTiles(root = document) {
   root.querySelectorAll('.battle-row').forEach(row => {
     const avatar = row.querySelector('.avatar-col .avatar.ai');

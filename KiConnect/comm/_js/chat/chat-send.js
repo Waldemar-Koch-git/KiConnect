@@ -289,10 +289,9 @@ export function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   const cached = _streamStableCache.get(bubbleEl) || { len: 0 };
 
   if (stable.length > cached.len) {
-    // Append only the newly finished increment and typeset only the newly
-    // inserted nodes — never overwrite stableEl's full innerHTML, or every
-    // already-typeset <mjx-container> in it would be destroyed and MathJax
-    // would have to redo them, causing visible flicker.
+    // Append only the newly finished increment and typeset only the new
+    // nodes — overwriting stableEl's full innerHTML would destroy every
+    // already-typeset <mjx-container> and cause visible flicker.
     const newStable = stable.slice(cached.len);
     const prevLast = stableEl.lastChild;
     stableEl.insertAdjacentHTML('beforeend', formatText(newStable));
@@ -304,10 +303,9 @@ export function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
   tailEl.innerHTML = formatText(tail);
   const mathNodes = tailEl.querySelectorAll('.math-inline, .math-block');
   if (mathNodes.length) {
-    // Pass the container itself, not a snapshot of its current child nodes:
-    // tailEl's innerHTML is fully overwritten on every subsequent chunk, so a
-    // captured node list would likely be detached by the time this fires.
-    // Re-scanning the live container instead always typesets current content.
+    // Pass the container itself, not a snapshot of its child nodes: tailEl's
+    // innerHTML is fully overwritten each chunk, so a captured node list
+    // would likely already be detached by the time this fires.
     typesetMathThrottled(tailEl, 400);
   }
   // If still mid-formula, leave it as raw text rather than making MathJax
@@ -337,21 +335,131 @@ export function _finishLiveStreamUI() {
   document.querySelectorAll('.bubble.streaming').forEach(b => b.classList.remove('streaming'));
 }
 
+// ── Shared streaming helpers ────────────────────────────────────────────
+// Parts byte-for-byte identical between _streamAIResponse (single-chat)
+// and _streamBattleVariant (Battle-Modus): request-body builders, SSE
+// line-chunking, fetch calls. Each caller still applies deltas to its own
+// target (live bubble vs. battle-tile grid).
+
+// Read SSE body -> yield lines, carrying partial lines across chunks.
+async function* _sseLines(res) {
+  const reader = res.body.getReader(), decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) yield line;
+  }
+}
+
+// Anthropic /v1/messages request body.
+function _buildAnthropicBody(modelId, messages) {
+  const body = { model: modelId, max_tokens: effectiveMaxTokens(), stream: true, messages };
+  // temperature unsupported on Claude 4+ — omit entirely for those.
+  if (isTemperatureSupported(modelId)) {
+    body.temperature = state.config.temperature;
+  }
+  if (state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
+  if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
+    if (isAdaptiveThinkingModel(modelId)) {
+      // Claude 4+: adaptive thinking via output_config.effort
+      const effortMap = { 1: 'low', 2: 'medium', 3: 'high' };
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { effort: effortMap[state.config.thinkingIntensity || 2] };
+      delete body.temperature; // must not be sent for adaptive thinking
+    } else {
+      // Claude 3.7/3.5: enabled + budget_tokens
+      const budget = usesTokenBudget(modelId) ? (state.config.thinkingBudget || 8000) : CLAUDE_BUDGET[state.config.thinkingIntensity || 2];
+      body.thinking = { type: 'enabled', budget_tokens: budget };
+      body.temperature = 1; // required to be exactly 1 for legacy thinking
+      body.max_tokens = Math.max(body.max_tokens, budget + 2000);
+    }
+  }
+  return body;
+}
+
+// Anthropic streaming fetch call.
+function _fetchAnthropicStream(provider, body, signal) {
+  return fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': provider.apiKey,
+      'anthropic-version': '2023-06-01',
+      // No anthropic-beta header needed here: prompt caching is GA and
+      // ttl:'1h' works without it. See kiconnect-agent.js for the agent
+      // path, which still sends a beta header for context-management.
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
+// OpenAI-compatible `messages` array. `includeToolStuff` forwards
+// tool_calls/role:'tool' entries for the agentic web-search round trip.
+// Both callers need it (see CHANGELOG: "Battle-Modus agentic search 400").
+function _buildOpenAiApiMessages(messages, includeToolStuff) {
+  const apiMsgs = [];
+  if (state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
+  messages.forEach(m => {
+    if (m.role === 'user' || m.role === 'assistant') {
+      const msg = { role: m.role, content: m.content };
+      if (includeToolStuff && m.tool_calls) msg.tool_calls = m.tool_calls;
+      apiMsgs.push(msg);
+    } else if (includeToolStuff && m.role === 'tool') {
+      apiMsgs.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
+    }
+  });
+  return apiMsgs;
+}
+
+// o-series/GPT-5 use max_completion_tokens + reasoning_effort instead of
+// max_tokens/temperature; identical branch in both callers.
+function _applyOaiEffortAndTokens(reqBody, modelId) {
+  const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
+  if (isOSeries) {
+    reqBody.max_completion_tokens = effectiveMaxTokens();
+    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
+  } else {
+    reqBody.temperature = state.config.temperature;
+    reqBody.max_tokens = effectiveMaxTokens();
+    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
+  }
+}
+
+// zhipu Accept-Language is opt-in (single-chat only, GLM thinking support).
+function _buildOpenAiExtraHeaders(provider, { zhipuAcceptLanguage = false } = {}) {
+  const extraHeaders = {};
+  if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+  if (zhipuAcceptLanguage && provider.type === 'zhipu') { extraHeaders['Accept-Language'] = 'en-US,en'; }
+  return extraHeaders;
+}
+
+// OpenAI-compatible streaming fetch call. Identical shape in both callers.
+function _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, signal) {
+  return fetch(proxyUrl(`${endpoint}/chat/completions`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
+    body: JSON.stringify(reqBody),
+    signal,
+  });
+}
+
 export async function _streamAIResponse(messages, provider, typingId, documentIds, opts) {
-  // opts.prefixText: pre-formed markdown/HTML (currently only the agentic
-  // web-search tool trace, see runAgenticWebToolLoop) seeded as already-
-  // "streamed" text before the model's own live delta text is appended —
-  // same trick already used below for the <thinking> block.
+  // opts.prefixText: pre-formed markdown/HTML (e.g. the agentic web-search
+  // tool trace) seeded as already-"streamed" text before the model's own
+  // live delta is appended — same trick used for the <thinking> block.
   let assistantText = (opts && opts.prefixText) ? (opts.prefixText + '\n\n') : '', usageData = null;
-  // runId: caller (_runStreamAndAttach) generates and passes one via
-  // opts.runId, so it's known even if this function throws before returning
-  // (registration happens synchronously, before any await). Falls back to
-  // self-generating for any other caller.
+  // runId: caller generates and passes it via opts.runId so it's known
+  // even if this function throws before returning; falls back to
+  // self-generating otherwise.
   const runId = (opts && opts.runId) || _makeRunId(state.currentChatId);
-  // Every run gets its OWN AbortController instead of sharing a single
-  // global one — this is what lets stopStreaming(chatId) cancel exactly
-  // one chat's in-flight request while a different chat's stream keeps
-  // running untouched.
+  // Every run gets its own AbortController (not a shared global one), so
+  // stopStreaming(chatId) cancels exactly one chat's request.
   const runAbortController = (opts && opts.abortController) || new AbortController();
   const run = {
     runId,
@@ -370,95 +478,50 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
     targetContainer: null,       // unused outside Battle-Modus
   };
   activeRuns.set(runId, run);
-  // Single choke point where a chat-stream run becomes "visible" as
-  // in-flight — updates the sidebar's live-indicator dot and (if this run's
-  // chat is on screen) the composer's send/stop button, before the first
-  // network await. syncComposerStreamingUI() reads currentChatId itself, so
-  // this stays correct even if the user switched chats during earlier awaits.
+  // Single choke point where a run becomes "visible" as in-flight — updates
+  // the sidebar dot and (if on screen) the composer's send/stop button
+  // before the first network await. Stays correct even if the user
+  // switches chats mid-await, since syncComposerStreamingUI() reads
+  // currentChatId itself.
   renderSidebar();
   syncComposerStreamingUI();
 
   if (provider.type === 'anthropic') {
     const { modelId } = splitModelId(state.config.model);
-    const body = {
-      model: modelId,
-      max_tokens: effectiveMaxTokens(),
-      stream: true,
-      messages,
-    };
-    // temperature is deprecated / unsupported on Claude 4+ models — omit entirely for those.
-    if (isTemperatureSupported(modelId)) {
-      body.temperature = state.config.temperature;
-    }
-    if (state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
-    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
-      if (isAdaptiveThinkingModel(modelId)) {
-        // New API (Claude 4+): adaptive thinking via output_config.effort
-        const effortMap = { 1: 'low', 2: 'medium', 3: 'high' };
-        body.thinking = { type: 'adaptive' };
-        body.output_config = { effort: effortMap[state.config.thinkingIntensity || 2] };
-        // temperature must NOT be sent for adaptive thinking models
-        delete body.temperature;
-      } else {
-        // Legacy API (Claude 3.7 / 3.5): enabled + budget_tokens
-        const budget = usesTokenBudget(modelId) ? (state.config.thinkingBudget || 8000) : CLAUDE_BUDGET[state.config.thinkingIntensity || 2];
-        body.thinking = { type: 'enabled', budget_tokens: budget };
-        body.temperature = 1; // required to be exactly 1 for legacy thinking
-        body.max_tokens = Math.max(body.max_tokens, budget + 2000);
-      }
-    }
-    const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': provider.apiKey,
-        'anthropic-version': '2023-06-01',
-        // No anthropic-beta header needed here: prompt caching is GA and
-        // ttl:'1h' works without it. See kiconnect-agent.js for the agent
-        // path, which still sends a beta header for context-management.
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify(body),
-      signal: run.abortController.signal,
-    });
+    const body = _buildAnthropicBody(modelId, messages);
+    const res = await _fetchAnthropicStream(provider, body, run.abortController.signal);
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
     removeTyping(typingId);
     const aiEl = appendEmptyAI(run.model, runId);
     run.bubbleEl = aiEl;
-    const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '', inThinkingBlock = false;
-    while (true) {
-      const { done, value } = await reader.read(); if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const ev = JSON.parse(line.slice(6).trim());
-          if (ev.type === 'message_start' && ev.message?.usage) {
-            usageData = { ...(usageData || {}), ...ev.message.usage };
+    for await (const line of _sseLines(res)) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const ev = JSON.parse(line.slice(6).trim());
+        if (ev.type === 'message_start' && ev.message?.usage) {
+          usageData = { ...(usageData || {}), ...ev.message.usage };
+          _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
+        }
+        else if (ev.type === 'message_delta' && ev.usage) {
+          usageData = { ...(usageData || {}), ...ev.usage };
+          _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
+        }
+        else if (ev.type === 'content_block_start') { inThinkingBlock = ev.content_block?.type === 'thinking'; }
+        else if (ev.type === 'content_block_stop') { inThinkingBlock = false; }
+        else if (ev.type === 'content_block_delta') {
+          if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
+            thinkingText += ev.delta.thinking || '';
+            { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
             _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
-          }
-          else if (ev.type === 'message_delta' && ev.usage) {
-            usageData = { ...(usageData || {}), ...ev.usage };
+          } else if (ev.delta?.type === 'text_delta') {
+            assistantText += ev.delta.text;
+            { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
             _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
+            if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
           }
-          else if (ev.type === 'content_block_start') { inThinkingBlock = ev.content_block?.type === 'thinking'; }
-          else if (ev.type === 'content_block_stop') { inThinkingBlock = false; }
-          else if (ev.type === 'content_block_delta') {
-            if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) {
-              thinkingText += ev.delta.thinking || '';
-              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
-              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
-            } else if (ev.delta?.type === 'text_delta') {
-              assistantText += ev.delta.text;
-              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
-              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
-              if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
-            }
-          }
-        } catch {}
-      }
+        }
+      } catch {}
     }
     { const liveBubble = _runBubbleEl(run); if (liveBubble) _finalizeStreamingBubble(liveBubble.querySelector('.bubble'), assistantText); }
     if (thinkingText) assistantText = `<thinking>\n${thinkingText}\n</thinking>\n\n` + assistantText;
@@ -466,37 +529,16 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
   } else {
     const endpoint = getProviderEndpoint(provider);
     const { modelId } = splitModelId(state.config.model);
-    const apiMsgs = [];
-    if (state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
-    // messages are already expanded by caller — pass through. Also forward
-    // tool_calls and role:'tool' messages unchanged (from an 'agentic'
-    // web-search round trip) — dropping them left a dangling tool_calls
-    // message with no matching result, which most OpenAI-compatible APIs
-    // reject with a 400. The Anthropic branch above doesn't hit this since
-    // it sends `messages` straight through.
-    messages.forEach(m => {
-      if (m.role === 'user' || m.role === 'assistant') {
-        const msg = { role: m.role, content: m.content };
-        if (m.tool_calls) msg.tool_calls = m.tool_calls;
-        apiMsgs.push(msg);
-      } else if (m.role === 'tool') {
-        apiMsgs.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
-      }
-    });
+    // includeToolStuff=true: this path forwards tool_calls/role:'tool'
+    // messages unchanged (agentic web-search round trip). Dropping them
+    // left a dangling tool_calls message with no matching result, which
+    // most OpenAI-compatible APIs reject with a 400.
+    const apiMsgs = _buildOpenAiApiMessages(messages, true);
     const reqBody = { model: modelId, messages: apiMsgs, stream: true };
-    // GPT-5 is a reasoning model just like the o-series: it rejects
-    // `temperature` and `max_tokens` outright and requires
-    // `max_completion_tokens` instead — so it needs to take the same
-    // request-shape branch as o1/o3/o4.
-    const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
-    if (isOSeries) {
-      reqBody.max_completion_tokens = effectiveMaxTokens();
-      if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
-    } else {
-      reqBody.temperature = state.config.temperature;
-      reqBody.max_tokens = effectiveMaxTokens();
-      if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
-    }
+    // GPT-5 is a reasoning model like the o-series: rejects `temperature`
+    // and `max_tokens`, requires `max_completion_tokens` — same branch as
+    // o1/o3/o4.
+    _applyOaiEffortAndTokens(reqBody, modelId);
     if (documentIds?.length) reqBody.documents = documentIds;
     if (provider.type !== 'zhipu') {
       reqBody.stream_options = { include_usage: true };
@@ -508,19 +550,17 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
       reqBody.thinking = { type: state.config.thinkingEnabled ? 'enabled' : 'disabled' };
       delete reqBody.reasoning_effort;
     }
-    // MiniMax (M-series) has no reasoning_effort levels — it thinks by
-    // default (M2.x can't be turned off) — so we send an on/off
-    // `thinking.type` plus `reasoning_split: true`, returning the trace via
-    // delta.reasoning_details instead of inline <think> tags.
+    // MiniMax has no reasoning_effort levels (thinks by default, M2.x
+    // can't disable) — send on/off `thinking.type` + `reasoning_split:
+    // true`, trace returned via delta.reasoning_details.
     if (provider.type === 'minimax' && isThinkingCapable(modelId)) {
       reqBody.thinking = { type: state.config.thinkingEnabled ? 'adaptive' : 'disabled' };
       reqBody.reasoning_split = true;
       delete reqBody.reasoning_effort;
     }
-    // Mistral: only 'none'/'high' are documented values for reasoning_effort
-    // (no low/medium), and it's a root-level field, not nested — the
-    // OAI_EFFORT low/medium/high mapping above doesn't apply here. Native
-    // Magistral models always reason and take no parameter at all.
+    // Mistral only documents 'none'/'high' for reasoning_effort (root-level
+    // field), so OAI_EFFORT's low/medium/high mapping doesn't apply. Native
+    // Magistral always reasons, no parameter needed.
     if (provider.type === 'mistral') {
       if (isMistralAdjustableThinkingModel(modelId)) {
         reqBody.reasoning_effort = (state.config.thinkingEnabled && isThinkingCapable(modelId)) ? 'high' : 'none';
@@ -528,20 +568,12 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
         delete reqBody.reasoning_effort;
       }
     }
-    const extraHeaders = {};
-    if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
-    if (provider.type === 'zhipu') { extraHeaders['Accept-Language'] = 'en-US,en'; }
-    const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
-      body: JSON.stringify(reqBody),
-      signal: run.abortController.signal,
-    });
+    const extraHeaders = _buildOpenAiExtraHeaders(provider, { zhipuAcceptLanguage: true });
+    const res = await _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, run.abortController.signal);
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     removeTyping(typingId);
     const aiEl = appendEmptyAI(run.model, runId);
     run.bubbleEl = aiEl;
-    const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
     let thinkingText = '';
     const isZhipu = provider.type === 'zhipu';
     const isMinimax = provider.type === 'minimax';
@@ -551,66 +583,59 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
     // repeats everything so far), unlike GLM's incremental reasoning_content —
     // so track the previously-seen length to extract only the new suffix.
     let minimaxReasoningSeen = '';
-    while (true) {
-      const { done, value } = await reader.read(); if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
-        try {
-          const chunk = JSON.parse(payload);
-          const rawContent = chunk.choices?.[0]?.delta?.content;
-          let delta = '', reasoningDelta = '';
-          if (isMistral) {
-            const parsed = parseMistralContent(rawContent);
-            delta = parsed.text;
-            // Fall back to a reasoning_content field in case the streaming
-            // shape follows the same convention as GLM/DeepSeek instead of
-            // (or in addition to) chunked content — harmless either way.
-            reasoningDelta = parsed.reasoning || chunk.choices?.[0]?.delta?.reasoning_content || '';
-          } else {
-            delta = rawContent || '';
-            if (isZhipu) {
-              reasoningDelta = chunk.choices?.[0]?.delta?.reasoning_content || '';
-            } else if (isMinimax) {
-              const details = chunk.choices?.[0]?.delta?.reasoning_details;
-              if (details && details.length) {
-                const full = details.map(d => d.text || '').join('');
-                if (full.length > minimaxReasoningSeen.length) {
-                  reasoningDelta = full.slice(minimaxReasoningSeen.length);
-                  minimaxReasoningSeen = full;
-                }
+    for await (const line of _sseLines(res)) {
+      if (!line.startsWith('data: ')) continue;
+      const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(payload);
+        const rawContent = chunk.choices?.[0]?.delta?.content;
+        let delta = '', reasoningDelta = '';
+        if (isMistral) {
+          const parsed = parseMistralContent(rawContent);
+          delta = parsed.text;
+          // Fall back to a reasoning_content field in case the streaming
+          // shape follows the same convention as GLM/DeepSeek instead of
+          // (or in addition to) chunked content — harmless either way.
+          reasoningDelta = parsed.reasoning || chunk.choices?.[0]?.delta?.reasoning_content || '';
+        } else {
+          delta = rawContent || '';
+          if (isZhipu) {
+            reasoningDelta = chunk.choices?.[0]?.delta?.reasoning_content || '';
+          } else if (isMinimax) {
+            const details = chunk.choices?.[0]?.delta?.reasoning_details;
+            if (details && details.length) {
+              const full = details.map(d => d.text || '').join('');
+              if (full.length > minimaxReasoningSeen.length) {
+                reasoningDelta = full.slice(minimaxReasoningSeen.length);
+                minimaxReasoningSeen = full;
               }
             }
           }
-          if (reasoningDelta) {
-            thinkingText += reasoningDelta;
-          }
-          assistantText += delta;
-          if (showsThinking) {
-            // GLM / MiniMax: render live bubble with thinking block + assistant text
-            if (reasoningDelta || delta) {
-              { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
-              _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
-              if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
-            }
-          } else if (delta) {
-            { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), '', assistantText); }
-            _updateRunText(runId, assistantText, usageData, '');
+        }
+        if (reasoningDelta) {
+          thinkingText += reasoningDelta;
+        }
+        assistantText += delta;
+        if (showsThinking) {
+          // GLM / MiniMax: render live bubble with thinking block + assistant text
+          if (reasoningDelta || delta) {
+            { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), thinkingText, assistantText); }
+            _updateRunText(runId, _streamStoredText(thinkingText, assistantText), usageData, thinkingText);
             if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
           }
-          if (chunk.usage) {
-            const u = chunk.usage;
-            // DeepSeek reports cache hits as prompt_cache_hit_tokens instead
-            // of the OpenAI-standard prompt_tokens_details.cached_tokens —
-            // fall back to it so DeepSeek's cache savings actually show up
-            // in the token badge instead of always reading 0.
-            usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
-            _updateRunText(runId, showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData, showsThinking ? thinkingText : '');
-          }
-        } catch {}
-      }
+        } else if (delta) {
+          { const liveBubble = _runBubbleEl(run); if (liveBubble) renderStreamingBubble(liveBubble.querySelector('.bubble'), '', assistantText); }
+          _updateRunText(runId, assistantText, usageData, '');
+          if (AUTO_SCROLL_DURING_STREAM) scrollToBottom();
+        }
+        if (chunk.usage) {
+          const u = chunk.usage;
+          // DeepSeek reports cache hits as prompt_cache_hit_tokens instead
+          // of the standard field — fall back to it or savings read 0.
+          usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
+          _updateRunText(runId, showsThinking ? _streamStoredText(thinkingText, assistantText) : assistantText, usageData, showsThinking ? thinkingText : '');
+        }
+      } catch {}
     }
     { const liveBubble = _runBubbleEl(run); if (liveBubble) _finalizeStreamingBubble(liveBubble.querySelector('.bubble'), assistantText); }
     if (showsThinking && thinkingText) {
@@ -621,10 +646,8 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
   _finishLiveStreamUI();
   run.status = 'done';
   run.text = assistantText;
-  // Return the run's CURRENT bubble (may have been reattached to a fresh
-  // node by renderMessages() if the chat was switched away and back mid-
-  // stream, or be null if the chat isn't on screen right now) — never the
-  // originally-captured node, which may be long detached from the DOM.
+  // Return the run's CURRENT bubble (may be reattached or null if not on
+  // screen), never the originally-captured node, which may be detached.
   return { text: assistantText, usage: usageData, el: run.bubbleEl, runId };
 }
 
@@ -669,101 +692,57 @@ export async function _streamBattleVariant(chat, msg, i, provider, modelId, mess
   sibling.content = assistantText;
   try {
     if (provider.type === 'anthropic') {
-      const body = { model: modelId, max_tokens: effectiveMaxTokens(), stream: true, messages };
-      if (isTemperatureSupported(modelId)) body.temperature = state.config.temperature;
-      if (state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
-      if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
-        if (isAdaptiveThinkingModel(modelId)) {
-          const effortMap = { 1: 'low', 2: 'medium', 3: 'high' };
-          body.thinking = { type: 'adaptive' };
-          body.output_config = { effort: effortMap[state.config.thinkingIntensity || 2] };
-          delete body.temperature;
-        } else {
-          const budget = usesTokenBudget(modelId) ? (state.config.thinkingBudget || 8000) : CLAUDE_BUDGET[state.config.thinkingIntensity || 2];
-          body.thinking = { type: 'enabled', budget_tokens: budget };
-          body.temperature = 1;
-          body.max_tokens = Math.max(body.max_tokens, budget + 2000);
-        }
-      }
-      const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify(body),
-        signal: run.abortController.signal,
-      });
+      const body = _buildAnthropicBody(modelId, messages);
+      const res = await _fetchAnthropicStream(provider, body, run.abortController.signal);
       if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-      const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
       let inThinkingBlock = false;
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const ev = JSON.parse(line.slice(6).trim());
-            if (ev.type === 'message_start' && ev.message?.usage) usageData = { ...(usageData || {}), ...ev.message.usage };
-            else if (ev.type === 'message_delta' && ev.usage) usageData = { ...(usageData || {}), ...ev.usage };
-            else if (ev.type === 'content_block_start') inThinkingBlock = ev.content_block?.type === 'thinking';
-            else if (ev.type === 'content_block_stop') inThinkingBlock = false;
-            else if (ev.type === 'content_block_delta') {
-              if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) thinkingText += ev.delta.thinking || '';
-              else if (ev.delta?.type === 'text_delta') assistantText += ev.delta.text;
-            }
-          } catch {}
-          run.text = assistantText; run.thinkingText = thinkingText; run.usage = usageData;
-          sibling.content = assistantText;
-          const bubbleEl = _runBubbleEl(run);
-          if (bubbleEl) renderStreamingBubble(bubbleEl, thinkingText, assistantText);
-        }
+      for await (const line of _sseLines(res)) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const ev = JSON.parse(line.slice(6).trim());
+          if (ev.type === 'message_start' && ev.message?.usage) usageData = { ...(usageData || {}), ...ev.message.usage };
+          else if (ev.type === 'message_delta' && ev.usage) usageData = { ...(usageData || {}), ...ev.usage };
+          else if (ev.type === 'content_block_start') inThinkingBlock = ev.content_block?.type === 'thinking';
+          else if (ev.type === 'content_block_stop') inThinkingBlock = false;
+          else if (ev.type === 'content_block_delta') {
+            if (ev.delta?.type === 'thinking_delta' && inThinkingBlock) thinkingText += ev.delta.thinking || '';
+            else if (ev.delta?.type === 'text_delta') assistantText += ev.delta.text;
+          }
+        } catch {}
+        run.text = assistantText; run.thinkingText = thinkingText; run.usage = usageData;
+        sibling.content = assistantText;
+        const bubbleEl = _runBubbleEl(run);
+        if (bubbleEl) renderStreamingBubble(bubbleEl, thinkingText, assistantText);
       }
     } else {
       const endpoint = getProviderEndpoint(provider);
-      const apiMsgs = [];
-      if (state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
-      messages.forEach(m => { if (m.role === 'user' || m.role === 'assistant') apiMsgs.push({ role: m.role, content: m.content }); });
+      // includeToolStuff=true: per-variant agentic web loop can end the
+      // history on a 'tool' message the model still needs — dropping it
+      // (old `false`) left providers like Mistral a 400 (msgs can't end
+      // on `assistant`). No-op for non-agentic sends.
+      const apiMsgs = _buildOpenAiApiMessages(messages, true);
       const reqBody = { model: modelId, messages: apiMsgs, stream: true };
-      const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
-      if (isOSeries) {
-        reqBody.max_completion_tokens = effectiveMaxTokens();
-        if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
-      } else {
-        reqBody.temperature = state.config.temperature;
-        reqBody.max_tokens = effectiveMaxTokens();
-        if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
-      }
+      _applyOaiEffortAndTokens(reqBody, modelId);
       if (provider.type !== 'zhipu') reqBody.stream_options = { include_usage: true };
-      const extraHeaders = {};
-      if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
-      const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
-        body: JSON.stringify(reqBody),
-        signal: run.abortController.signal,
-      });
+      const extraHeaders = _buildOpenAiExtraHeaders(provider);
+      const res = await _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, run.abortController.signal);
       if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-      const reader = res.body.getReader(), decoder = new TextDecoder(); let buf = '';
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n'); buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
-          try {
-            const chunk = JSON.parse(payload);
-            const delta = chunk.choices?.[0]?.delta?.content || '';
-            assistantText += delta;
-            if (chunk.usage) {
-              const u = chunk.usage;
-              usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
-            }
-          } catch {}
-          run.text = assistantText; run.usage = usageData;
-          sibling.content = assistantText;
-          const bubbleEl = _runBubbleEl(run);
-          if (bubbleEl) renderStreamingBubble(bubbleEl, '', assistantText);
-        }
+      for await (const line of _sseLines(res)) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(payload);
+          const delta = chunk.choices?.[0]?.delta?.content || '';
+          assistantText += delta;
+          if (chunk.usage) {
+            const u = chunk.usage;
+            usageData = { input_tokens: u.prompt_tokens, output_tokens: u.completion_tokens, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0 };
+          }
+        } catch {}
+        run.text = assistantText; run.usage = usageData;
+        sibling.content = assistantText;
+        const bubbleEl = _runBubbleEl(run);
+        if (bubbleEl) renderStreamingBubble(bubbleEl, '', assistantText);
       }
     }
     { const bubbleEl = _runBubbleEl(run); if (bubbleEl) _finalizeStreamingBubble(bubbleEl, assistantText); }
@@ -813,11 +792,8 @@ export async function _runBattleVariant(chat, msg, i, fullModelId, messages) {
     wireMessages = messages.map(m => ({ role: m.role, content: _toOpenAIContent(m.content) }));
   }
   // Agentic web search: each model decides for itself whether/what to
-  // search, so — unlike manual search, which is shared once across all
-  // variants (see sendBattleMessage) — this has to run per variant, with
-  // that variant's own provider AND modelId (callModelForAgenticWebTurn
-  // defaults to the composer's single-chat model if none is passed, which
-  // would have been wrong for every variant except by coincidence).
+  // search, so unlike manual search (shared once, see sendBattleMessage)
+  // this runs per variant with that variant's own provider/modelId.
   let finalMessages = wireMessages;
   let traceHtml = '';
   if (isAgenticWebMode()) {
@@ -845,11 +821,9 @@ export async function sendBattleMessage(text, att, modelIds) {
   let userContent = _uc;
 
   // Manual web search — one shared lookup for the whole Battle-Modus
-  // message (all variants see the same results), same idea as the KB
-  // block below. Agentic web search is NOT handled here: that needs each
-  // model to decide for itself whether/what to search, so it runs inside
-  // _runBattleVariant()/_streamBattleVariant() per model instead — see
-  // there for why isAgenticWebMode() is explicitly excluded from this call.
+  // message (same idea as the KB block below). Agentic search is NOT
+  // handled here since each model needs to decide for itself; it runs
+  // per-model inside _runBattleVariant()/_streamBattleVariant().
   let webSearch = null;
   if (!isAgenticWebMode() && shouldUseWebSearch(text)) {
     try {
@@ -872,12 +846,10 @@ export async function sendBattleMessage(text, att, modelIds) {
   }
   const webSourceChips = webSearch?.results || [];
 
-  // Knowledge-base retrieval (RAG) — same hook as sendMessageCore(), just
-  // applied once here since all Battle-Modus variants share one outgoing
-  // user message. Previously this whole block was missing, so no model in
-  // Battle-Modus ever received KB context, and the composer's KB toggle
-  // was never cleared afterwards (kbClearActiveSelection() lives at the
-  // bottom of this same block) — it looked "on" but never did anything.
+  // Knowledge-base retrieval (RAG) — same hook as sendMessageCore(),
+  // applied once since all Battle-Modus variants share one outgoing user
+  // message. kbClearActiveSelection() at the end of this block resets the
+  // composer's KB toggle afterwards.
   let kbResult = null;
   let kbWasRequested = false;
   if (text && typeof kbRetrieveForQuery === 'function') {
@@ -921,9 +893,7 @@ export async function sendBattleMessage(text, att, modelIds) {
   scrollToBottom();
 
   // History for the API call: active path up to (but not including) the
-  // still-empty battleMsg placeholder just pushed — same idea as
-  // sendMessageCore's activePath.slice(0,-1), just built once and reused
-  // per-provider inside _runBattleVariant.
+  // still-empty battleMsg placeholder — built once, reused per-provider.
   const activePath = getActivePath(chat);
   const historyMsgs = activePath.slice(0, -1)
     .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -1165,9 +1135,7 @@ export async function sendMessageOriginal() {
 
   // Battle-Modus: if the composer's battle toggle is active with >=2
   // models picked, fan out to sendBattleMessage() instead of the normal
-  // single-model path. sendBattleMessage() does its own KB-retrieval and
-  // web-search hooks (manual search shared once across variants; agentic
-  // search runs per-variant so each model searches for itself).
+  // single-model path (which does its own KB/web-search hooks).
   if (state.battleModeActive && state.battleSelectedModels.length >= 2) {
     if ((shouldUseWebSearch(text) || isAgenticWebMode()) && webEngineNeedsKey(state.config.webSearchEngine || 'free') && !(state.config.webSearchApiKey || '').trim()) {
       toast(t('web.noKey'));
@@ -1206,12 +1174,11 @@ export async function sendMessageCore(text, att) {
   let linkedPages = [];
   const fileNames0 = att.map(a=>a.name);
 
-  // Instant render: show the user's bubble immediately, before any network
-  // round-trip (uploads / link fetch / web search) — those can take a
-  // second or more and used to leave the chat looking "stuck". Build a
-  // minimal preview (text + images, files as chips) and push it into the
-  // chat tree right away; the full content is written into this same
-  // message object afterwards without touching the DOM again.
+  // Instant render: show the user's bubble before any network round-trip
+  // (upload/link fetch/web search), which can take a second or more. Push
+  // a minimal preview (text + images, files as chips); full content is
+  // written into the same message object afterwards without touching the
+  // DOM again.
   const previewContent = (() => {
     if (att.length) {
       const arr=[];
@@ -1282,11 +1249,9 @@ export async function sendMessageCore(text, att) {
     }
   }
 
-  // Knowledge-base retrieval (RAG) — _js/db.js exports kbRetrieveForQuery()
-  // (a no-op no KB is toggled on in the composer would just return null),
-  // same pattern as the agent module's hooks. Circular import with
-  // _js/db.js: safe since these are only called here at runtime, never at
-  // module-evaluation time.
+  // Knowledge-base retrieval (RAG) via db.js's kbRetrieveForQuery() (no-op
+  // if no KB is toggled on). Circular import with db.js is safe since it's
+  // only called at runtime, never at module-evaluation time.
   let kbResult = null;
   let kbWasRequested = false;
   if (text && typeof kbRetrieveForQuery === 'function') {
@@ -1309,10 +1274,9 @@ export async function sendMessageCore(text, att) {
     ...(linkedPages || []).map((p, i) => ({ index:`L${i + 1}`, title:p.title || p.url, url:p.url, snippet:p.text?.slice(0, 280) || '' })),
     ...(webSearch?.results || [])
   ];
-  // The user's bubble is already on screen (instant preview above). Now
-  // backfill the SAME message object with the fully augmented content (web
-  // results, linked pages, resolved files) — sent to the model and saved,
-  // without touching the DOM again since the text/image parts already rendered.
+  // The user's bubble is already on screen (instant preview above). Backfill
+  // the same message object with the augmented content (web results, linked
+  // pages, resolved files) without touching the DOM again.
   userMsgForStorage.content = Array.isArray(userContent)
     ? userContent.map(p=>{
         if(p._webSearch) return p;
@@ -1330,10 +1294,9 @@ export async function sendMessageCore(text, att) {
   userMsgForStorage._kbSources = kbSourceChips.length?kbSourceChips:undefined;
   const chat=currentChat();
 
-  // Only the web-source chip row is new visual info the preview couldn't have
-  // shown yet (it depends on the search that just finished) — patch just that
-  // one row into the already-rendered bubble instead of rebuilding the whole
-  // message (which would re-typeset text/math that's already on screen).
+  // Only the web-source chip row is new (depends on the just-finished
+  // search) — patch it into the already-rendered bubble instead of
+  // rebuilding the whole message.
   if (webSourceChips.length) {
     const bubbleEl = previewMsgEl.querySelector('.bubble');
     if (bubbleEl && !bubbleEl.querySelector('.web-sources')) {
@@ -1352,12 +1315,9 @@ export async function sendMessageCore(text, att) {
   renderDetectedLinks();
 
   const typingId=showTyping();
-  // No global isStreaming/abortController to set here — the run
-  // _streamAIResponse creates below IS this chat's streaming state (see
-  // isChatStreaming/runsForChat); the composer button/sidebar dot update
-  // themselves the moment that run registers, correctly reflecting
-  // whichever chat is on screen even if the user switched away during an
-  // earlier await (upload, link fetch, web search, KB retrieval).
+  // No global isStreaming/abortController — the run _streamAIResponse
+  // creates below IS this chat's streaming state (see isChatStreaming);
+  // the composer/sidebar update themselves once that run registers.
 
   // build wire-format message list, then delegate to shared _streamAIResponse
   let messages;

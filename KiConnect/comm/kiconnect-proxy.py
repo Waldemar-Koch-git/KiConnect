@@ -31,12 +31,11 @@ STATIC_DIR = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR   = os.path.join(STATIC_DIR, 'datas')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Projects (coding-agent feature) point at real, user-chosen folders anywhere
-# on the filesystem, re-confined to that folder on every call (see
-# _project_root_for_id / _safe_rel_path). Can't be registered if it equals or
-# encloses STATIC_DIR/DATA_DIR. The project-id -> path mapping lives
-# per-account, encrypted at rest, in datas/<accountId>/agent_projects.json;
-# the AES key is derived client-side from the password, held in RAM only.
+# Projects (coding-agent) point at real, user-chosen folders, re-confined to
+# that folder on every call (see _project_root_for_id/_safe_rel_path). Can't
+# be registered if it equals/encloses STATIC_DIR/DATA_DIR. The id->path
+# mapping lives encrypted at rest in datas/<accountId>/agent_projects.json;
+# the AES key is derived client-side, held in RAM only.
 
 # Strict Origin / Host Check
 ALLOWED_ORIGINS = {
@@ -212,16 +211,14 @@ AGENT_IGNORE_DIRS = {
 AGENT_BLOCKED_SUFFIXES = ('.env', '.key', '.pem', '.pfx', '.p12', '.crt')
 AGENT_BLOCKED_NAMES = {'.env', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
 _SAFE_PROJECT_ID_RE = re.compile(r'^p_[A-Za-z0-9]{1,64}$')
-# A commit-ish the endpoints below will accept: a (possibly abbreviated) hex
-# sha, optionally with a trailing ~N (parent-of) suffix - e.g. "a1b2c3d~1".
-# Deliberately rejects anything else (branch names, "HEAD", "--upload-pack"
-# style flags, ...) since these values flow into `git` subprocess argv.
+# A commit-ish the endpoints accept: abbreviated hex sha, optionally with a
+# trailing ~N suffix (e.g. "a1b2c3d~1"). Rejects anything else (branch
+# names, flags, ...) since these values flow into `git` subprocess argv.
 _SAFE_GIT_REF_RE = re.compile(r'^[0-9a-fA-F]{4,40}(~[0-9]+)?$')
 
-# Agent Session (per-account, in-RAM only). The AES-256 key for a project
-# registry is derived client-side from the password and handed to the
-# server once at unlock, kept only in this in-memory dict, keyed by a
-# random session token - never persisted.
+# Agent Session (per-account, in-RAM only). The AES-256 key is derived
+# client-side and handed to the server once at unlock, kept only in this
+# in-memory dict keyed by a random session token - never persisted.
 _agent_sessions = {}          # token(str) -> {'accountId': str, 'key': bytes, 'ts': float}
 _AGENT_SESSION_TTL = 24 * 3600
 _agent_session_lock = threading.Lock()
@@ -367,11 +364,9 @@ def _agent_authed(fn):
         return fn(sess, *args, **kwargs)
     return wrapper
 
-# /agent/session/unlock - hand the server a per-account agent key. Called
-# once after a normal password login (see _js/auth/accounts.js
-# unlockAgentSession()). Key is derived client-side from the password + a
-# dedicated salt, independent of the config/providers/chats key - a leak of
-# one doesn't expose the other.
+# /agent/session/unlock - hand the server a per-account agent key, once
+# after login (see accounts.js unlockAgentSession()). Derived from a
+# dedicated salt, independent of the config/providers/chats key.
 @app.route('/agent/session/unlock', methods=['POST', 'OPTIONS'])
 def agent_session_unlock():
     if request.method == 'OPTIONS':
@@ -399,10 +394,9 @@ def agent_session_unlock():
         _agent_sessions[token] = sess
     return _agent_ok({'token': token, 'projects': data['projects']})
 
-# /agent/session/rekey - password change: re-encrypt under new key.
-# Requires a still-valid OLD session. Re-encrypts the server's own
-# already-decrypted registry, never a client-supplied one, so a password
-# change can't smuggle in unvalidated project entries.
+# /agent/session/rekey - password change: re-encrypts the server's own
+# already-decrypted registry (never a client-supplied one) under the new
+# key, requiring a still-valid old session.
 @app.route('/agent/session/rekey', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_session_rekey(old_sess):
@@ -572,22 +566,15 @@ def agent_projects(sess):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'name': name, 'path': target})
 
-# Git checkpointing: best-effort safety net for agent file operations
-# (create/write/edit/delete/move/copy - see MUTATING_TOOL_NAMES in
-# kiconnect-agent.js). When a project has 'checkpoints' enabled, the frontend
-# calls POST /agent/checkpoint/<id> once before each such tool call (see
-# apiCheckpoint()/executeTool() in kiconnect-agent.js) - stages and commits
-# whatever changed since the last checkpoint, using the project's own (or a
-# fresh) git repo. The checkpoints PUT endpoint below also fires one
-# immediately on enable, so a freshly scaffolded project gets a repo and a
-# baseline commit right away instead of waiting for the next tool call.
-# Everything here is 100% local: only `git init` / `git config` (repo-local,
-# never --global) / `git add` / `git commit` / `git gc --auto` (see
-# _git_checkpoint()'s auto-housekeeping below) are ever run. Nothing here
-# ever runs `git push`, `git remote`, or touches any remote/branch - not a
-# replacement for the user's own git workflow, purely a local undo trail.
-# A failed git operation is swallowed and reported as {ok:false} rather than
-# blocking the tool call - a missing safety net shouldn't stop the agent.
+# Git checkpointing: best-effort safety net for agent file mutations (see
+# MUTATING_TOOL_NAMES in agent.js). With 'checkpoints' enabled, the frontend
+# calls POST /agent/checkpoint/<id> before each mutating tool call - stages
+# and commits whatever changed since the last checkpoint. The PUT endpoint
+# below also fires one immediately on enable, so a freshly scaffolded
+# project gets a baseline commit right away. Purely local (init/config
+# repo-local/add/commit/gc --auto) - never push/remote, not a replacement
+# for the user's own git workflow. A failed git op is swallowed as
+# {ok:false} rather than blocking the tool call.
 _git_available_cache = None
 
 def _git_available():
@@ -620,20 +607,13 @@ def _git_checkpoint(pdir, message):
                           cwd=pdir, capture_output=True, timeout=30, text=True)
         if commit.returncode != 0:
             return {'ok': False, 'reason': (commit.stderr or 'commit failed')[:200]}
-        # `--auto` is git's own built-in threshold check (default: >6700 loose
-        # objects or >50 packfiles) - below that it's a near-instant no-op,
-        # so calling it after every checkpoint is cheap. This is deliberately
-        # NOT the same as the 🧹 button in the history modal (agent_git_gc()
-        # below), which forces a full `--aggressive --prune=now` repack on
-        # demand: doing that unconditionally on every single checkpoint would
-        # make each turn redo a full repack of the *entire* repo instead of
-        # just the objects added since the last one (O(n²) over a long
-        # session), and --aggressive's deep delta search is explicitly meant
-        # to be run occasionally, not on a tight loop. This call is purely to
-        # stop loose objects from piling up unbounded over a very long
-        # session - failure here is swallowed, same as everything else in
-        # this function; it must never turn a successful checkpoint into a
-        # failed one.
+        # `--auto` is git's own built-in threshold check (default >6700
+        # loose objects / >50 packfiles) - a near-instant no-op below that,
+        # cheap to call every checkpoint. NOT the same as the 🧹 button's
+        # forced `--aggressive --prune=now` (agent_git_gc() below), which
+        # would be O(n²) over a session if run unconditionally here. Just
+        # keeps loose objects from piling up; failure is swallowed like
+        # everything else in this function.
         try:
             _sp.run(['git', 'gc', '--auto', '-q'], cwd=pdir, capture_output=True, timeout=60)
         except Exception:
@@ -643,13 +623,9 @@ def _git_checkpoint(pdir, message):
         return {'ok': False, 'reason': str(e)[:200]}
 
 # /agent/projects/<id>/checkpoints - enable/disable git checkpoints. Off by
-# default, same opt-in pattern as shell execution below. Enabling it takes an
-# immediate baseline checkpoint (see _git_checkpoint() call below) so a repo
-# exists and today's on-disk state is captured right away, rather than
-# waiting for the first mutating tool call - important for projects that
-# were just scaffolded via create_file/create_directory(ies), which don't
-# themselves trigger a checkpoint (see MUTATING_TOOL_NAMES in
-# kiconnect-agent.js).
+# default (same opt-in pattern as shell execution below). Enabling takes an
+# immediate baseline checkpoint so today's on-disk state is captured right
+# away, rather than waiting for the first mutating tool call.
 @app.route('/agent/projects/<pid>/checkpoints', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_checkpoints(sess, pid):
@@ -670,10 +646,9 @@ def agent_set_checkpoints(sess, pid):
             result['initial'] = _git_checkpoint(pdir, 'Initial checkpoint (checkpoints enabled)')
     return _agent_ok(result)
 
-# /agent/checkpoint/<id> - stage+commit current changes. Called by the
-# frontend right before a mutating tool call executes (not in simulate mode,
-# not if checkpoints are off). Re-checks the 'checkpoints' flag server-side
-# rather than trusting the caller, same as the shell 'enabled' re-check below.
+# /agent/checkpoint/<id> - stage+commit current changes, called right
+# before a mutating tool executes. Re-checks the 'checkpoints' flag
+# server-side rather than trusting the caller (same as shell below).
 @app.route('/agent/checkpoint/<pid>', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_checkpoint(sess, pid):
@@ -691,14 +666,12 @@ def agent_checkpoint(sess, pid):
     message = (body.get('message') or 'Agent checkpoint').strip()[:200] or 'Agent checkpoint'
     return _agent_ok(_git_checkpoint(pdir, message))
 
-# ── Git history / restore ────────────────────────────────────────────────
+# ── Git history / restore ─────────────────────────────────────────────
 # Read-only browsing (log/commit/file-at/deleted) plus one write op
-# (restore), all scoped to a single project's own local repo via
-# _project_root_for_id()/_safe_rel_path() - same confinement every other
-# /agent/* file endpoint uses. Restore is deliberately non-destructive: it
-# never runs `git reset --hard` or rewrites history, it only checks out old
-# content into the working tree and makes a brand-new checkpoint commit out
-# of it - so a restore can itself always be undone the same way.
+# (restore), scoped to a project's own repo via the same confinement every
+# /agent/* file endpoint uses. Restore never runs `git reset --hard` or
+# rewrites history - it checks out old content and makes a new checkpoint
+# commit, so a restore can itself always be undone.
 
 def _run_git(pdir, args, timeout=30, text=True):
     import subprocess as _sp
@@ -711,9 +684,8 @@ def _require_git_ref(raw):
     return raw
 
 # /agent/git/<id>/log - checkpoint history, newest first. Optional
-# ?path=<rel path> to only show commits that touched one file (used to
-# find/restore a specific file's older versions, including ones later
-# deleted). Optional ?limit= (default 200, capped at 500).
+# ?path= to only show commits touching one file; ?limit= (default 200,
+# capped 500).
 @app.route('/agent/git/<pid>/log', methods=['GET', 'OPTIONS'])
 @_agent_authed
 def agent_git_log(sess, pid):
@@ -728,12 +700,10 @@ def agent_git_log(sess, pid):
         limit = min(max(int(request.args.get('limit', 200)), 1), 500)
     except (TypeError, ValueError):
         limit = 200
-    # %b (body) is included so a "Run: <id>" trailer line - appended by
-    # checkpointMessage() in agent.js to tag every checkpoint made during
-    # the same agent turn - can be parsed back out below. Lets the 🕘 modal
-    # group a turn's checkpoints instead of showing one flat row per
-    # tool call. Older/manual commits simply have no trailer -> no runId,
-    # and render as their own one-commit group (see renderGhGroups()).
+    # %b (body) included so the "Run: <id>" trailer (appended by
+    # checkpointMessage() in agent.js) can be parsed back out, letting the
+    # 🕘 modal group a turn's checkpoints. Commits without it render as
+    # their own one-commit group (see renderGhGroups()).
     args = ['log', f'-{limit}', '--pretty=format:%x01%H%x02%h%x02%ci%x02%s%x03%b', '--date=iso']
     scope = (request.args.get('path') or '').strip()
     if scope:
@@ -801,9 +771,8 @@ def agent_git_commit(sess, pid, hash_):
     return _agent_ok({'hash': full_hash, 'date': date, 'message': subject, 'files': files})
 
 # /agent/git/<id>/file-at?hash=&path= - a file's content as of a given
-# checkpoint, for previewing before restoring it. hash may be "<sha>~1" to
-# mean "right before that commit" (used for restoring deleted files, see
-# /agent/git/<id>/deleted below).
+# checkpoint, for previewing before restore. hash may be "<sha>~1" (right
+# before that commit), used for restoring deleted files.
 @app.route('/agent/git/<pid>/file-at', methods=['GET', 'OPTIONS'])
 @_agent_authed
 def agent_git_file_at(sess, pid):
@@ -827,10 +796,9 @@ def agent_git_file_at(sess, pid):
     except UnicodeDecodeError:
         return _agent_ok({'path': rel, 'hash': ref, 'content_b64': base64.b64encode(res.stdout).decode('ascii'), 'binary': True})
 
-# /agent/git/<id>/deleted - files that were deleted at some point and are
-# still missing now (recreated files are excluded), newest deletion first.
-# Each entry carries restoreHash = "<delete-commit>~1", the ref one restore
-# call needs to bring that exact file back.
+# /agent/git/<id>/deleted - files deleted and still missing (recreated
+# files excluded), newest first. Each entry carries restoreHash =
+# "<delete-commit>~1" to bring it back via restore.
 @app.route('/agent/git/<pid>/deleted', methods=['GET', 'OPTIONS'])
 @_agent_authed
 def agent_git_deleted(sess, pid):
@@ -859,15 +827,11 @@ def agent_git_deleted(sess, pid):
     out.sort(key=lambda r: r['deletedAt'], reverse=True)
     return _agent_ok({'files': out})
 
-# /agent/git/<id>/restore - bring back an old checkpoint's content. Two
-# modes, chosen by whether `paths` is given:
-#   - paths: [...]   restore just those files/folders to their state at
-#     `hash` (recreates deleted ones too) - everything else untouched.
-#   - no paths        restore the ENTIRE project to its state at `hash`:
-#     every file gets that snapshot's content, and anything that didn't
-#     exist yet at `hash` is removed.
-# Either way this ends by taking a fresh checkpoint of the result, so the
-# restore itself becomes an undoable step rather than lost history.
+# /agent/git/<id>/restore - bring back an old checkpoint's content. With
+# `paths`, restores just those files/folders (recreates deleted ones too);
+# without, restores the ENTIRE project (removes anything that didn't exist
+# yet at `hash`). Either way ends with a fresh checkpoint of the result, so
+# the restore is itself undoable.
 @app.route('/agent/git/<pid>/restore', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_git_restore(sess, pid):
@@ -948,17 +912,11 @@ def _dir_size(pdir):
                 pass
     return total
 
-# /agent/git/<id>/gc - repacks the project's .git into delta-compressed
-# packfiles (`git gc --aggressive --prune=now`, a full forced repack). This
-# is the manual/on-demand counterpart to the lightweight `git gc --auto`
-# that already runs after every checkpoint in _git_checkpoint() (which is a
-# near-instant no-op below git's own loose-object threshold); this endpoint
-# forces the deep, expensive repack regardless of that threshold, for when a
-# user explicitly wants to shrink a project's history right now (e.g. before
-# archiving it). Never touches history or working-tree content, only how
-# it's stored on disk. Reports before/after size of .git so the modal can
-# show whether it actually helped - on a very small repo, packfile overhead
-# can occasionally make it slightly bigger, which is expected and not a bug.
+# /agent/git/<id>/gc - forces a full `git gc --aggressive --prune=now`
+# repack, the on-demand counterpart to the lightweight `--auto` that already
+# runs after every checkpoint. Storage only, never touches history/content.
+# Reports before/after .git size (a very small repo can occasionally grow
+# slightly from packfile overhead - expected, not a bug).
 @app.route('/agent/git/<pid>/gc', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_git_gc(sess, pid):
@@ -977,10 +935,9 @@ def agent_git_gc(sess, pid):
     after = _dir_size(git_dir)
     return _agent_ok({'before': before, 'after': after})
 
-# /agent/projects/<id>/shell - enable/disable shell command execution. Its
-# own explicit endpoint (not folded into general project settings) so
-# turning it on is a distinct, deliberate action, and /agent/exec below can
-# independently double-check it server-side.
+# /agent/projects/<id>/shell - enable/disable shell execution. Its own
+# explicit endpoint so enabling is a distinct action, independently
+# re-checked server-side by /agent/exec.
 @app.route('/agent/projects/<pid>/shell', methods=['PUT', 'OPTIONS'])
 @_agent_authed
 def agent_set_shell(sess, pid):
@@ -1020,19 +977,17 @@ def agent_set_project_path(sess, pid):
     return _agent_ok({'id': pid, 'path': target})
 
 # /agent/exec/<id> - run a shell command inside the project folder. Off by
-# default, gated behind the per-project 'shell' flag above.
+# default, gated behind the per-project 'shell' flag.
 #
-# NOT a hard security boundary (no container/VM) - the command runs as the
-# same OS user as the proxy, confined to the project folder only by
-# convention (cwd); `cd ..` or an absolute path can still escape. Best-effort
-# hardening instead:
-#   1. Minimal, secret-free environment (doesn't inherit the proxy's env).
-#   2. POSIX resource limits (CPU, memory, proc/file counts, no core dumps)
-#      via preexec_fn, against fork bombs/runaway loops. Linux/macOS only.
-#   3. Own process group (os.setsid) so a timeout can kill the whole subtree.
-#   4. Best-effort network isolation via `unshare --net` (Linux only, needs
-#      unprivileged user namespaces; probed once, reported via
-#      `networkIsolated` rather than assumed on).
+# NOT a hard security boundary (no container/VM) - runs as the same OS user
+# as the proxy, confined to the project folder only by convention (cwd);
+# `cd ..` or an absolute path can still escape. Best-effort hardening:
+#   1. Minimal, secret-free environment.
+#   2. POSIX resource limits (CPU/memory/proc/file, no core dumps) via
+#      preexec_fn, against fork bombs. Linux/macOS only.
+#   3. Own process group (os.setsid) so a timeout kills the whole subtree.
+#   4. Best-effort network isolation via `unshare --net` (Linux only,
+#      probed once, reported via `networkIsolated` rather than assumed).
 MAX_EXEC_OUTPUT = 200_000  # chars, per stream
 EXEC_TIMEOUT_SECONDS = 45
 SANDBOX_CPU_SECONDS = EXEC_TIMEOUT_SECONDS + 5   # hard CPU ceiling, just above the wall-clock timeout
@@ -1296,10 +1251,9 @@ def agent_file(sess, pid, rel_path):
         try:
             return _agent_ok({'path': rel_path, 'content': raw.decode('utf-8'), 'binary': False})
         except UnicodeDecodeError:
-            # Not UTF-8 text (PDF, image, zip, ...). Return raw bytes as
-            # base64 so the frontend can do format-specific extraction
-            # (e.g. pdf.js for .pdf) instead of just "can't read it". `content`
-            # stays None for compat with callers only checking `binary`.
+            # Not UTF-8 text (PDF, image, zip, ...) - return raw bytes as
+            # base64 so the frontend can do format-specific extraction.
+            # `content` stays None for callers only checking `binary`.
             return _agent_ok({'path': rel_path, 'content': None, 'binary': True, 'content_b64': base64.b64encode(raw).decode('ascii')})
 
     if request.method == 'PUT':
@@ -1449,35 +1403,28 @@ def agent_copy(sess, pid):
             shutil.copy2(src, dst)
     return _agent_ok({'from': rel_from, 'to': rel_to})
 
-#  Knowledge-Base API (RAG) - reuses the Agent session above
-#  (_agent_session_or_401 / _agent_encrypt / _agent_decrypt / _atomic_write)
-#  instead of a third independent one: unlocking the project feature also
-#  unlocks this, no extra password round trip.
+#  Knowledge-Base API (RAG) - reuses the Agent session above instead of a
+#  third independent one: unlocking the project feature also unlocks this.
 #
 #  Registry: datas/<accountId>/kb_registry.json, encrypted with the SAME key
-#  as agent_projects.json - small, rewritten whole on every change, like the
-#  project registry.
+#  as agent_projects.json - small, rewritten whole on every change.
 #
-#  Vector storage per KB: datas/<accountId>/kb/<kbId>.sqlite, handled OUTSIDE
-#  the JSON registry encryption (too large/hot to decrypt+re-encrypt on
-#  every search). Only the chunk TEXT column is encrypted (AES-GCM);
-#  embeddings stay plaintext - raw numbers alone aren't meaningfully
-#  readable without the chunk text. Not full SQLCipher - communicated to the
-#  user as-is, no overstated security guarantee.
+#  Vector storage per KB: datas/<accountId>/kb/<kbId>.sqlite, OUTSIDE the
+#  JSON registry encryption (too large/hot to decrypt+re-encrypt per
+#  search). Only the chunk TEXT column is encrypted (AES-GCM); embeddings
+#  stay plaintext, not meaningfully readable alone. Not full SQLCipher -
+#  no overstated security guarantee to the user.
 #
-#  Embedding provider: generic OpenAI-compatible /embeddings (baseUrl +
-#  model + optional apiKey), not hardcoded to any tool - works with LM
-#  Studio, Ollama, vLLM, or any hosted embeddings API. Goes through the same
+#  Embedding provider: generic OpenAI-compatible /embeddings (works with LM
+#  Studio, Ollama, vLLM, or any hosted API). Goes through the same
 #  is_allowed()/_pin_dns() SSRF protection as the chat proxy, since the URL
 #  is user-supplied.
 #
 #  Vector search: plain SQLite + brute-force cosine similarity (numpy if
-#  available, else pure Python) rather than a sqlite-vec dependency - a
-#  personal KB's chunk count (hundreds to low tens-of-thousands) makes a
-#  full scan fast enough, and it works out of the box on every platform
-#  without a native-extension build step. Swappable for sqlite-vec later
-#  without changing the registry format - only _kb_open_db()/
-#  _kb_cosine_search() would need to change.
+#  available, else pure Python) instead of a sqlite-vec dependency - a
+#  personal KB's chunk count makes a full scan fast enough with no
+#  native-extension build step. Swappable for sqlite-vec later without
+#  changing the registry format.
 MAX_KB_FILE_SIZE = 25 * 1024 * 1024            # 25 MB/file - PDFs/DOCX are bigger than agent's 5MB text files
 MAX_KB_FILES = 5000                            # safety cap per knowledge base
 KB_IGNORE_DIRS = AGENT_IGNORE_DIRS             # reuse the agent's ignore list (.git, node_modules, ...)
@@ -1794,9 +1741,7 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
         chunk_overlap = settings.get('chunkOverlap') or CHUNK_OVERLAP_DEFAULT
 
         # `files` maps every indexed path to the citation/dedup "source"
-        # label: relative path for a folder root ("sub/dir/file.md"), or
-        # "parentDir/file.ext" for individually added files, so same-named
-        # files from different folders stay distinct.
+        # label, so same-named files from different folders stay distinct.
         files = []      # list of (abs_path, label)
         seen_abs = set()
         excluded_abs = {os.path.realpath(p) for p in (entry.get('excludedFiles') or [])}
@@ -1923,10 +1868,8 @@ def _kb_run_index(account_id, kb_id, sess_key, full_reindex=True):
 _kb_error = _agent_error
 _kb_ok = _agent_ok
 
-# Every /kb/* view used to repeat the same OPTIONS preflight/session
-# check/kb_id format check by hand. This decorator does it once: handles
-# OPTIONS, requires a valid agent session (passed as first arg), and checks
-# <kb_id> format before the view sees it.
+# Shared decorator for /kb/* views: handles the OPTIONS preflight,
+# requires a valid agent session, and checks <kb_id> format up front.
 def _kb_route(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -2149,12 +2092,11 @@ def kb_reindex(sess, kb_id):
     threading.Thread(target=_kb_run_index, args=(sess['accountId'], kb_id, sess['key'], True), daemon=True).start()
     return _kb_ok({'ok': True})
 
-# GET /kb/<id>/export - decrypt every chunk and return a plain-JSON dump the
-# browser turns into a download. Deliberately NOT encrypted: the point is
-# portability to a *different* account/password, whose key can't decrypt
-# this one's bytes. Frontend must warn "this file is unencrypted" before
-# download (_js/db.js). Embedding apiKey is never included - it's a
-# per-account credential, not KB data.
+# GET /kb/<id>/export - decrypt every chunk and return a plain-JSON dump.
+# Deliberately NOT encrypted, for portability to a *different*
+# account/password whose key can't decrypt this one's bytes; frontend must
+# warn "unencrypted" before download (db.js). Embedding apiKey is never
+# included - it's a per-account credential, not KB data.
 EXPORT_FORMAT_VERSION = 1
 
 @app.route('/kb/<kb_id>/export', methods=['GET', 'OPTIONS'])
@@ -2208,12 +2150,10 @@ def kb_export(sess, kb_id):
         'chunks': chunks_out,
     })
 
-# POST /kb/import - opposite direction: takes a kb/v1 export and
-# re-encrypts every chunk under *this* session's key before it touches disk.
-# Existing embeddings are reused as-is (no re-embedding), provided the
-# importing account uses the same embedding model - mixing models would
-# make cosine scores meaningless, so a mismatched model name is a warning,
-# not a hard error, since dimensions can't be verified until re-indexed.
+# POST /kb/import - takes a kb/v1 export and re-encrypts every chunk under
+# *this* session's key. Embeddings are reused as-is if the importing
+# account uses the same embedding model; a mismatch is a warning, not a
+# hard error, since dimensions can't be verified until re-indexed.
 @app.route('/kb/import', methods=['POST', 'OPTIONS'])
 @_kb_route
 def kb_import(sess):
@@ -2530,13 +2470,12 @@ def check_origin():
 
 # Private IP ranges (SSRF protection), three tiers:
 #  - LOOPBACK_NETWORKS: same machine only, always allowed (local LM
-#    Studio/Ollama/vLLM on 'localhost').
-#  - ALWAYS_BLOCKED_NETWORKS: never reachable via the proxy - cloud metadata
-#    endpoints and reserved/broadcast ranges, no legitimate LAN use case.
+#    Studio/Ollama/vLLM).
+#  - ALWAYS_BLOCKED_NETWORKS: never reachable - cloud metadata endpoints and
+#    reserved/broadcast ranges, no legitimate LAN use case.
 #  - LAN_NETWORKS: private/local ranges (RFC1918, link-local, IPv6 ULA,
-#    CGNAT), blocked by default, unlockable per-provider via the
-#    "kic_lan_confirm" marker after the user double-confirms the address in
-#    the Provider editor.
+#    CGNAT), blocked by default, unlockable per-provider via
+#    "kic_lan_confirm" after the user double-confirms in the Provider editor.
 LOOPBACK_NETWORKS = [
     ipaddress.ip_network('127.0.0.0/8'), ipaddress.ip_network('::1/128'),
 ]
@@ -2600,13 +2539,11 @@ def classify_host(host):
     return 'public', pin
 
 def is_allowed(target_url, method='GET', confirmed=False):
-    # No domain allowlist - users can point POST at any custom
-    # OpenAI-compatible endpoint. SSRF protection: http/https only, tiered
-    # check on where the address points (see above). Returns (ok, reason,
-    # needs_confirm, pinned_ip); pinned_ip is the exact address this
-    # decision was based on - the caller MUST connect to that same address
-    # (see _pin_dns below), or a changed DNS answer (rebinding) could steer
-    # the request at an unapproved target.
+    # No domain allowlist - users can point POST at any custom endpoint.
+    # SSRF protection: http/https only, tiered check on the address (above).
+    # Returns (ok, reason, needs_confirm, pinned_ip); the caller MUST
+    # connect to pinned_ip (see _pin_dns below), or a changed DNS answer
+    # (rebinding) could steer the request elsewhere.
     try: parsed = urlparse(target_url)
     except Exception: return False, 'Invalid URL', False, None
     if parsed.scheme not in ('http', 'https'): return False, 'HTTP/HTTPS only', False, None
@@ -2631,16 +2568,13 @@ def is_allowed(target_url, method='GET', confirmed=False):
         return True, '', False, pin
     return True, '', False, pin  # public
 
-# DNS pinning (closes the SSRF check's DNS-rebinding gap). is_allowed()/
-# classify_host() vet the hostname's IP, but the real connection resolves it
-# again - a low-TTL DNS answer could point somewhere the check never saw.
-# This pins socket.getaddrinfo() to the already-vetted address for the
-# request's duration.
+# DNS pinning (closes the SSRF check's DNS-rebinding gap): is_allowed()
+# vets the hostname's IP, but the real connection resolves it again - a
+# low-TTL answer could point elsewhere. Pins socket.getaddrinfo() to the
+# already-vetted address for the request's duration.
 #
-# Uses thread-local state rather than a global save/restore swap: waitress
-# serves multiple worker threads, and concurrent swap-in/swap-back calls on
-# the same global getaddrinfo would race. A patched function that only
-# special-cases the current thread's pin avoids that.
+# Uses thread-local state, not a global save/restore swap: waitress serves
+# multiple worker threads, and concurrent global swaps would race.
 _dns_pin = threading.local()
 _real_getaddrinfo = socket.getaddrinfo
 
@@ -2792,8 +2726,7 @@ def _proxy_request(target_url):
     except Exception: pass
 
     # "kic_lan_confirm=1" is a marker the frontend appends to the proxy URL
-    # (never the upstream one) for an address double-confirmed in the
-    # Provider editor (see confirmLanAddress() in _js/providers/provider-crud.js). Strip it
+    # for an address double-confirmed in the Provider editor. Strip it
     # before forwarding so it never reaches the upstream API.
     fwd_params = request.args.copy()
     lan_confirmed = fwd_params.pop('kic_lan_confirm', None) == '1'

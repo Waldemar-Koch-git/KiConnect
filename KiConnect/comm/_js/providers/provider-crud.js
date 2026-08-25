@@ -359,10 +359,9 @@ export async function saveProviderEditor() {
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
   const apiKey = document.getElementById('pvApiKey').value.trim();
 
-  // Non-localhost server URLs need an explicit, double-confirmed opt-in -
-  // the proxy won't forward requests to them otherwise. Re-confirming is
-  // skipped only if this exact host was already confirmed for this same
-  // provider (so re-saving unrelated fields doesn't re-prompt).
+  // Non-localhost server URLs need an explicit, double-confirmed opt-in,
+  // or the proxy won't forward requests. Skipped only if this exact host
+  // was already confirmed for this provider.
   let netConfirmed = false, netConfirmedHost = '';
   if (type === 'openai-compat' && serverUrl) {
     let hostname = '';

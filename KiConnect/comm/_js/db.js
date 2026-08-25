@@ -1,20 +1,17 @@
-// _js/db.js (formerly kiconnect-db.js) - Knowledge base / RAG module.
-// (like _js/agent.js/js/voice.js): API client for /kb/* on the
-// local proxy plus its own composer UI, exporting
-// kbRetrieveForQuery / buildKbAugmentedContent / buildKbSourcesRow /
-// kbClearActiveSelection as real ES module exports.
+// Knowledge base / RAG module: API client for /kb/* plus its own composer
+// UI, exporting kbRetrieveForQuery / buildKbAugmentedContent /
+// buildKbSourcesRow / kbClearActiveSelection.
 //
-// Auth reuses the Agent session (agentSessionHeader()) instead of a
-// separate unlock. Embedding provider is any OpenAI-compatible base
-// URL + model name.
+// Auth reuses the Agent session (agentSessionHeader()). Embedding provider
+// is any OpenAI-compatible base URL + model name.
 //
-// Circular import with _js/auth/accounts.js and _js/core/i18n.js: those
-// modules call this module's KB functions at send-time, and this module
-// calls their session/i18n hooks. Safe because every cross-reference here
-// resolves to a hoisted function declaration used only at runtime, never
-// at module-evaluation time.
+// Circular import with accounts.js/i18n.js is safe: every cross-reference
+// resolves to a hoisted function used only at runtime, never at
+// module-evaluation time.
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow, onSessionLock, onSessionRekey, onSessionUnlock } from './auth/accounts.js';
+import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
+import { escHtml as esc } from './core/html-utils.js';
 import { tf as hostTf } from './core/i18n.js';
 import { getProviderEndpoint, listEmbeddingProviders } from './providers/provider-crud.js';
 import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
@@ -22,18 +19,10 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
   'use strict';
 
   // i18n helper: falls back to the given English text if no TRANSLATIONS
-  // entry exists.
-  function t(key, fallback) {
-    try {
-      /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS.en || {};
-        const val = lang[key] ?? (TRANSLATIONS.en || {})[key];
-        if (val != null) return val;
-      }
-    } catch (e) {}
-    return fallback || key;
-  }
+  // entry exists. Core lookup/substitution logic lives in
+  // core/bolton-i18n.js (was duplicated near-identically in agent.js and
+  // voice.js); this wrapper keeps db.js's own fallback semantics unchanged.
+  function t(key, fallback) { return boltonT(key, fallback); }
   // All English text lives in _lang/<code>.js — t()'s own key-fallback (see
   // above) covers the case where a key is somehow missing there.
   function tf(key, vars) {
@@ -41,24 +30,20 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
       const v = hostTf(key, vars);
       if (v && v !== key) return v;
     }
-    let s = t(key);
-    if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
-    return s;
+    return boltonSubstitute(t(key), vars);
   }
   function showToast(msg) {
     if (typeof hostToast === 'function') { hostToast(msg); return; }
     console.log('[KB]', msg);
   }
-  function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
-  }
+  // esc() used to be a local copy of the same escaping logic duplicated in
+  // agent.js (also as esc()) and chat-render.js (as escHtml) — now a single
+  // shared implementation in core/html-utils.js, aliased back to `esc` so
+  // this file's existing esc(...) call sites don't need to change.
 
-  // Every call goes through kbFetch() so it carries the current agent-session
-  // token (see agentSessionHeader()) - without it the proxy answers 401.
-  // Same handling as kiconnect-agent.js's agentFetch(): treat 401 as
-  // "session gone" and send the user back to the login screen.
+  // Every call goes through kbFetch() carrying the agent-session token —
+  // a 401 (session gone) sends the user back to login, like agent.js's
+  // agentFetch().
   /* global agentSessionHeader, logoutNow, currentChat */
   async function kbFetch(url, opts) {
     opts = opts || {};
@@ -166,11 +151,9 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
   }
-  // Export / Import
-  // Export decrypts every chunk server-side and hands back plain JSON - the
-  // point is moving the KB to a different account/password, whose key can
-  // never decrypt bytes sealed with this one's. Caller MUST warn the user
-  // the saved file is unencrypted plaintext.
+  // Export decrypts every chunk server-side and hands back plain JSON, for
+  // moving the KB to a different account/password. Caller MUST warn the
+  // user the saved file is unencrypted plaintext.
   async function exportKnowledgeBase(kbId) {
     const res = await kbFetch(`/kb/${encodeURIComponent(kbId)}/export`);
     const data = await res.json().catch(() => ({}));
@@ -192,9 +175,8 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     URL.revokeObjectURL(url);
   }
   // Reads a picked .kbexport.json File, validates it, and imports it as a
-  // new knowledge base under the current account. `embedding` is optional -
-  // omit it to keep just the source KB's baseUrl/model hint (no apiKey ever
-  // survives export).
+  // new KB. `embedding` is optional — omit to keep the source KB's
+  // baseUrl/model hint (no apiKey ever survives export).
   async function importKnowledgeBase(file, name, embedding) {
     const text = await file.text();
     let parsed;
@@ -466,10 +448,9 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     document.head.appendChild(s);
   }
 
-  // Composer button + popover, placed next to the project/agent context
-  // chip (#agentContextBar) - a knowledge base is a per-chat "which
-  // context" choice, same category as "which project". Falls back to the
-  // end of the action row when kiconnect-agent.js isn't loaded.
+  // Composer button + popover next to the project/agent context chip — a
+  // KB is a per-chat "which context" choice, same category as "which
+  // project". Falls back to the end of the action row if agent.js isn't loaded.
   function injectComposerUI() {
     if (document.getElementById('kbBtn')) return;
     const actions = document.querySelector('.input-actions');
@@ -707,10 +688,9 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     _kbImportInput.click();
   }
 
-  // Create modal (folder picker + name + collapsed "Advanced")
-  // Renders the embedding-source <select>: one per configured
-  // embedding-capable API provider, plus a "Custom / advanced" option that
-  // reveals manual baseUrl/model/key fields.
+  // Create modal (folder picker + name + collapsed "Advanced"). Renders
+  // the embedding-source <select>: one per configured embedding-capable
+  // provider, plus "Custom / advanced" for manual baseUrl/model/key.
   function renderEmbedProviderSelect(selectEl, selectedValue) {
     const embProviders = typeof listEmbeddingProviders === 'function' ? listEmbeddingProviders() : [];
     selectEl.innerHTML = '';

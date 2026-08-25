@@ -1,13 +1,10 @@
-// _js/agent.js (formerly kiconnect-agent.js) – Coding-Agent module (v3.0)
-// (like _js/voice.js). A "project" is a sidebar folder with an extra
+// Coding-Agent module. A "project" is a sidebar folder with an extra
 // `agentProject` field pointing at a filesystem folder on the proxy; a chat
 // filed into it runs the agent's tool loop, rendered as collapsed <details>
-// cards. One shared model picker app-wide; only autonomy mode is per-project.
-// Hooks into the rest of the app via an explicit registration API
-// (registerSendMessageOverride/registerRegenerateOverride/onRenderSidebar/
-// onLanguageChange, see _js/chat/chat-send.js and _js/chat/chat-sidebar.js)
-// rather than monkey-patching (`sendMessage = ...`) or `window.X` globals —
-// reassigning an imported binding isn't legal in ES modules.
+// cards. Hooks into the host app via an explicit registration API
+// (registerSendMessageOverride etc., see chat-send.js/chat-sidebar.js)
+// instead of monkey-patching, since reassigning an imported ES module
+// binding isn't legal.
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow } from './auth/accounts.js';
 import { save } from './auth/storage.js';
@@ -16,6 +13,8 @@ import { _finalizeAIRowInPlace, appendEmptyAI, appendToMessages, buildMsgEl, for
 import { _makeRunId, _runBubbleEl, _toAnthropicContent, _toOpenAIContent, activeRuns, autoGenerateChatTitle, CLAUDE_BUDGET, isChatStreaming, OAI_EFFORT, registerRegenerateOverride, registerSendMessageOverride, stopStreaming, syncComposerStreamingUI } from './chat/chat-send.js';
 import { currentChat, getActiveContainer, getActivePath, newChat, onRenderSidebar, renderSidebar } from './chat/chat-sidebar.js';
 import { autoResize } from './core/boot.js';
+import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
+import { escHtml as esc } from './core/html-utils.js';
 import { tf as hostTf } from './core/i18n.js';
 import { getProviderEndpoint, proxyUrl } from './providers/provider-crud.js';
 import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
@@ -25,37 +24,26 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
 
 // ── i18n helper (falls back to the given text if no TRANSLATIONS
   // entry exists — this module doesn't require editing the i18n file) ─
-  function t(key, fallback) {
-    try {
-      /* global TRANSLATIONS, currentLang */
-      if (typeof TRANSLATIONS !== 'undefined' && typeof state.currentLang !== 'undefined') {
-        const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS.en || {};
-        const val = lang[key] ?? (TRANSLATIONS.en || {})[key];
-        if (val != null) return val;
-      }
-    } catch (e) {}
-    return fallback || key;
-  }
+  // Core lookup/substitution logic lives in core/bolton-i18n.js (was
+  // duplicated near-identically in db.js and voice.js); this wrapper keeps
+  // agent.js's own fallback semantics unchanged.
+  function t(key, fallback) { return boltonT(key, fallback); }
   // Like t(), but substitutes {placeholder} vars; prefers the host app's tf().
-  // All English text lives in _lang/<code>.js — t()'s own key-fallback (see
-  // above) covers the case where a key is somehow missing there.
   function tf(key, vars) {
     if (typeof hostTf === 'function') {
       return hostTf(key, vars);
     }
-    let s = t(key);
-    if (vars) Object.entries(vars).forEach(([k, v]) => { s = s.replaceAll(`{${k}}`, v); });
-    return s;
+    return boltonSubstitute(t(key), vars);
   }
   function showToast(msg) {
     if (typeof hostToast === 'function') { hostToast(msg); return; }
     console.log('[Agent]', msg);
   }
-  function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    }[c]));
-  }
+  // esc() used to be a local copy of the same escaping logic that lives in
+  // chat-render.js (as escHtml) and used to live in db.js too (also as
+  // esc()) — now a single shared implementation in core/html-utils.js,
+  // aliased back to the name `esc` so none of this file's many esc(...)
+  // call sites need to change.
 
   // Settings persistence: just the default autonomy mode for new projects.
   // The model itself always comes from the header's model picker (config.model).
@@ -70,37 +58,25 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
   let settings = { autonomy: 'confirm', ...loadSettings() };
 
-  // Runtime state. No single global run/abortController pair: _js/chat/chat-send.js's
-  // isChatStreaming/runsForChat read the same activeRuns registry this module
-  // writes into (kind:'agent'), so several project chats can run at once.
-  // `pendingConfirm` is still a single global, so two simultaneous
-  // confirm-required tool calls queue behind one confirm bar — known
-  // limitation, would need a per-chat confirm queue to fix properly.
+  // Runtime state. Runs are tracked per-chat in the shared activeRuns
+  // registry (kind:'agent'), so several project chats can run at once.
+  // `pendingConfirm` is still global — two simultaneous confirm-required
+  // calls queue behind one confirm bar (known limitation).
   let pendingConfirm = null;
 
   const MAX_ITERATIONS = 200;
 
-  // Generic (provider-agnostic) tool-result compaction.
-  // Most providers we talk to already have their own automatic prefix
-  // caching as of 2026, where an unchanged request prefix is billed cheaply.
-  // compactOldToolResults() mutates old `history` entries to shrink payload
-  // size for providers WITHOUT such caching — but for providers WITH it,
-  // that mutation invalidates the cached prefix on nearly every loop
-  // iteration, so it's counterproductive there. Scoped to
-  // KNOWN_CACHING_PROVIDERS below: skipped for known-caching providers, still
-  // applied for an unknown openai-compat endpoint where caching can't be
-  // assumed. Only touches TOOL RESULTS older than KEEP_RECENT_TOOL_TURNS,
-  // never user/model text, and replaces content with a labeled placeholder
-  // (tool + main argument) so the model can re-call the tool if still needed
-  // — the file on disk is untouched, only the copy sent to the model shrinks.
+  // Shrinks old tool_results in `history` to save tokens on providers
+  // WITHOUT automatic prefix caching (see KNOWN_CACHING_PROVIDERS — for
+  // those, mutating history would invalidate the cached prefix instead).
+  // Only touches results older than KEEP_RECENT_TOOL_TURNS, replacing them
+  // with a placeholder the model can re-call if still needed; disk is untouched.
   const KEEP_RECENT_TOOL_TURNS = 6;   // tool-result turns kept 100% intact
   const COMPACT_MIN_SIZE = 400;       // don't bother compacting tiny results (chars)
 
-  // Providers with known automatic (or session-id-assisted) prefix caching,
-  // per each vendor's own 2026 docs. Anthropic is handled separately
-  // (explicit cache_control, see callModel) and never passed to
-  // compactOldToolResults. Anything not in this set (today: a freely
-  // configured 'openai-compat' endpoint) still gets compacted.
+  // Providers with known automatic/session-based prefix caching. Anthropic
+  // is handled separately (explicit cache_control in callModel). Anything
+  // else (e.g. a custom openai-compat endpoint) still gets compacted.
   const KNOWN_CACHING_PROVIDERS = new Set([
     'anthropic', 'openai-direct', 'kimi', 'deepseek', 'mistral',
     'google', 'xai', 'groq', 'minimax', 'zhipu', 'openrouter',
@@ -192,9 +168,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return map[ext] || '';
   }
 
-  // Tool schema (OpenAI-style function calling). Sent to the MODEL as part
-  // of the function-calling schema, not shown as UI text — kept in English
-  // on purpose, same as systemPrompt() above.
+  // Tool schema sent to the model (function calling) — deliberately English,
+  // not UI text.
   function toolSchema(folder) {
     const tools = [
       { type: 'function', function: { name: 'list_files', description: 'Recursively lists files in the project (optionally below a subfolder), including file size in bytes. Optionally filter by a glob pattern (e.g. "*.tmp", "**/*.md") so you don\'t have to scan the whole tree yourself when you only care about a subset of files — e.g. before a bulk operation like "delete all .tmp files".', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Subfolder relative to the project root. Leave empty for the whole project.' }, pattern: { type: 'string', description: 'Optional glob pattern to filter results, e.g. "*.log" or "src/**/*.ts". "*" matches within a path segment, "**" matches across folders.' } } } } },
@@ -230,15 +205,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     }
     return tools;
   }
-  // Same tools, translated to Anthropic's `tools` shape (name/description/
-  // input_schema) — used for Anthropic models, since Messages API doesn't
-  // speak the OpenAI-compatible /chat/completions format.
+  // Same tools in Anthropic's `tools` shape, for the Messages API.
   function toolSchemaAnthropic(folder) {
     return toolSchema(folder).map(f => ({ name: f.function.name, description: f.function.description, input_schema: f.function.parameters }));
   }
-  // Sent to the MODEL, not shown in the UI — deliberately always English
-  // regardless of UI language, since it's an internal system prompt, not a
-  // translated interface string.
+  // Internal system prompt, always English regardless of UI language.
   function systemPrompt(projectName) {
     return [
       `You are an autonomous coding agent with access to the local project folder "${projectName}".`,
@@ -255,23 +226,17 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     ].join(' ') + profileAddendum();
   }
 
-  // The active chat profile's custom system prompt used to have no effect in
-  // agent mode (systemPrompt() only sent its own hard-coded rules). This
-  // appends the profile's prompt, if any, AFTER the agent's own rules, so it
-  // layers "how to behave" on top of "how to use these tools" instead of
-  // fighting it. Contributes nothing if no profile/prompt is set. (Profile
-  // temperature already applies automatically via config.temperature.)
+  // Appends the active profile's custom system prompt (if any) AFTER the
+  // agent's own rules, so it layers "how to behave" on top of "how to use
+  // these tools". No-op if no profile/prompt is set.
   function profileAddendum() {
     const p = (typeof activeProfile === 'function') ? activeProfile() : null;
     const text = p && p.systemPrompt ? String(p.systemPrompt).trim() : '';
     return text ? `\n\nAdditionally, follow this persona/style guidance for how you communicate: ${text}` : '';
   }
 
-  // Backend calls: /agent/* on the local proxy. Every call goes through this
-  // wrapper so it carries the current agent-session token (see
-  // _js/auth/accounts.js: unlockAgentSession()/agentSessionHeader()). A 401 (project
-  // registry can't be decrypted) is treated as an expired session and sends
-  // the user back to login, like any other expired session.
+  // Backend calls to /agent/* on the local proxy, carrying the current
+  // agent-session token. A 401 is treated as an expired session (logout).
   /* global agentSessionHeader, logoutNow, toast */
   async function agentFetch(url, opts) {
     opts = opts || {};
@@ -289,9 +254,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   function encPath(p) {
     return String(p).replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/');
   }
-  // Shared body for agentFetch()-based JSON calls: parses the response, and
-  // on a non-ok status either throws or returns { error } (for tool-facing
-  // calls, which report failures back to the model instead of raising).
+  // Shared response handling for agentFetch() JSON calls: throws on non-ok,
+  // or returns { error } for tool-facing calls (reported back to the model).
   async function agentJson(url, opts, throwOnError) {
     const res = await agentFetch(url, opts);
     const data = await res.json().catch(() => ({}));
@@ -342,11 +306,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (res.status === 404) return { error: t('agent.err.fileNotFound') };
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
     const data = await res.json();
-    // PDFs come back as binary (content_b64) since they're not valid UTF-8
-    // text. extractPdfText() reuses the same pdf.js extraction _js/chat/chat-attachments.js
-    // uses for PDF chat attachments, instead of giving up on any project
-    // PDF. Falls through to the raw binary response if pdf.js isn't loaded
-    // or extraction fails (e.g. a scanned image-only PDF).
+    // PDFs come back as binary (content_b64); extract text via the same
+    // pdf.js pipeline chat-attachments.js uses, falling back to raw binary
+    // if extraction fails (e.g. scanned image-only PDF).
     if (data && data.binary && data.content_b64 && /\.pdf$/i.test(path)) {
       try {
         const lib = window._pdfjsLib || window.pdfjsLib;
@@ -409,10 +371,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: !!enabled }),
     }, true);
   }
-  // ── Git history / restore (see matching /agent/git/* routes in
-  // kiconnect-proxy.py). All read calls throw on failure (caller shows the
-  // error); apiGitRestore also throws since it's a deliberate user action
-  // that needs a clear success/fail result, not a silently-swallowed one.
+  // ── Git history / restore (see /agent/git/* routes in kiconnect-proxy.py).
+  // All calls throw on failure so the caller can surface a clear error.
   async function apiGitLog(project, path, limit) {
     const params = new URLSearchParams();
     if (path) params.set('path', path);
@@ -430,15 +390,12 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   async function apiGitDeleted(project) {
     return agentJson(`/agent/git/${encodeURIComponent(project)}/deleted`, undefined, true);
   }
-  // Forces a full, deep repack (`git gc --aggressive --prune=now`, see
-  // agent_git_gc() in kiconnect-proxy.py) — never touches history/content,
-  // only how it's stored on disk. Lighter housekeeping (`git gc --auto`,
-  // near-instant no-op below git's own loose-object threshold) already runs
-  // automatically after every checkpoint server-side; this button is for
-  // when the user wants the expensive deep repack right now regardless of
-  // that threshold. Returns byte counts so the modal can show whether it
-  // actually helped (on a tiny repo, packfile overhead can occasionally
-  // make it slightly larger — expected, not a bug).
+  // Forces a full `git gc --aggressive --prune=now` (see agent_git_gc() in
+  // kiconnect-proxy.py) — storage only, never touches history/content.
+  // Lighter `git gc --auto` housekeeping already runs automatically after
+  // every checkpoint; this is for an on-demand deep repack. Returns byte
+  // counts so the modal can show the effect (a tiny repo can occasionally
+  // grow slightly from packfile overhead — expected).
   async function apiGitGc(project) {
     return agentJson(`/agent/git/${encodeURIComponent(project)}/gc`, { method: 'POST' }, true);
   }
@@ -448,11 +405,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       body: JSON.stringify(paths ? { hash, paths } : { hash }),
     }, true);
   }
-  // Stages+commits whatever changed since the last checkpoint, via the
-  // project's git repo. Called right before a mutating tool runs (see
-  // executeTool()) — never blocks the tool on failure, since a missing
-  // safety net shouldn't stop the agent. throwOnError=false so a failed git
-  // is a quiet {error} the caller can surface once.
+  // Stages+commits whatever changed since the last checkpoint. Called before
+  // a mutating tool runs; never blocks the tool on failure (a missing safety
+  // net shouldn't stop the agent).
   async function apiCheckpoint(project, message) {
     return agentJson(`/agent/checkpoint/${encodeURIComponent(project)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }),
@@ -490,9 +445,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return new RegExp('^' + re + '$', 'i');
   }
 
-  // Flags paths like "test/test/..." — a folder segment repeating its own
-  // parent's name, almost always an accidental self-nesting mistake. Mutating
-  // tools attach a warning to their result so the model can self-correct.
+  // Flags "test/test/..."-style self-nesting paths (near-always a mistake)
+  // so mutating tools can attach a warning for the model to self-correct.
   function selfNestedWarning(p) {
     const segs = String(p || '').replace(/\\/g, '/').split('/').filter(Boolean);
     for (let i = 1; i < segs.length; i++) {
@@ -514,13 +468,10 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return result;
   }
 
-  // Detects a write_file call that would blow away over half of an
-  // existing, non-trivial file. Guards against an observed failure: a weak
-  // model only sees a truncated slice of a large file (see
-  // serializeToolResult()'s per-field truncation below), has no way to know
-  // its view was incomplete, and silently overwrites the rest on write_file.
-  // Compares against the file's CURRENT size from the tree listing (cheap,
-  // no content read).
+  // Detects a write_file call that would blow away over half of an existing,
+  // non-trivial file — guards against a model overwriting a file it only
+  // saw truncated (see serializeToolResult() below). Compares against the
+  // file's current size from the tree listing, no content read needed.
   async function shrinkRisk(project, path, newContent) {
     try {
       const tree = await apiTree(project);
@@ -533,9 +484,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
 
   // Reads the file, applies one or more exact-text replacements in order,
-  // and writes it back in one round trip — shared by edit_file's single
-  // old_str/new_str form and its `edits` array form (several changes, one
-  // call, one confirmation).
+  // and writes it back — shared by edit_file's single old_str/new_str and
+  // `edits` array forms.
   async function applyEditFile(project, args) {
     if (!args.path) return { error: t('agent.err.missingPath') };
     const edits = Array.isArray(args.edits) && args.edits.length
@@ -560,8 +510,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
 
   // Applies one find→replace across several files in one call/confirmation
-  // (e.g. renaming a symbol project-wide), meant to follow
-  // search_in_files/list_files narrowing down the affected paths.
+  // (e.g. renaming a symbol project-wide).
   async function applyReplaceInFiles(project, args) {
     const paths = Array.isArray(args.paths) ? args.paths : [];
     if (!paths.length) return { error: t('agent.err.missingPaths') };
@@ -581,12 +530,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return { files: results };
   }
 
-  // Read cache (scoped to a single agent turn). A tool loop often reads the
-  // same file more than once (search_in_files -> read_file, edit_file
-  // re-reading before applying); without this each re-read hits disk and
-  // re-pumps content into context. Cleared at the start of every turn and
-  // fully flushed before any mutating tool call — coarse (drops the whole
-  // cache, not just the written file) but simple and never stale.
+  // Read cache scoped to a single agent turn, since a tool loop often
+  // re-reads the same file. Cleared at turn start and fully flushed before
+  // any mutating call — coarse but never stale.
   const _readFileCache = new Map(); // `${project}::${path}` -> apiReadFile() result
   async function cachedReadFile(project, path) {
     const key = `${project}::${path}`;
@@ -598,32 +544,15 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return res;
   }
 
-  // Git checkpoints (opt-in per project, see agentCheckpointsEnabled).
-  // Every disk-mutating tool, used to gate the pre-mutation apiCheckpoint()
-  // call below. Includes create_file/create_directory(ies): although those
-  // only add rather than destroy existing content, a brand-new project
-  // built by the agent is typically nothing BUT create_file calls, so
-  // excluding them meant checkpoints silently never ran (no repo, no
-  // commits) for the most common case. Committing on create too gives a
-  // restorable snapshot of "what the agent just scaffolded", not just
-  // protection against later overwrites/deletes.
-  // git_restore included too: it writes real content back to disk (and,
-  // unlike the others, can also touch files an earlier checkpoint doesn't
-  // know about yet during a whole-project restore) — it already takes its
-  // own checkpoint of the RESULT server-side (see /agent/git/<id>/restore
-  // in kiconnect-proxy.py), but including it here additionally captures
-  // the state right BEFORE the restore runs, same safety net as every
-  // other mutating tool gets.
-  // run_command included too: it runs arbitrary shell commands with the
-  // same filesystem permissions as the rest of the agent (see apiExec) —
-  // `rm`, `sed -i`, `npm install`, a build script, etc. can all change
-  // files on disk just as much as write_file/delete_file can, so excluding
-  // it left a real gap in the safety net (and in end-of-turn coverage,
-  // since a turn whose only "mutation" was a shell command never set
-  // `run.hadMutation`, so its result was never committed at all). If a
-  // given command happens not to touch the filesystem, the pre-checkpoint
-  // is simply a no-op (nothing staged) — same as calling delete_file on a
-  // path that doesn't exist; harmless either way.
+  // Disk-mutating tools, gating the pre-mutation apiCheckpoint() call below.
+  // Includes create_file/create_directory(ies) too: a brand-new agent-built
+  // project is typically all create_file calls, so excluding them meant
+  // checkpoints never ran for the most common case. Includes git_restore
+  // (captures state right before the restore, in addition to its own
+  // server-side post-restore checkpoint) and run_command (arbitrary shell
+  // commands can mutate the filesystem just as much as write_file). A
+  // command/call that happens not to touch disk just makes the
+  // pre-checkpoint a no-op.
   const MUTATING_TOOL_NAMES = new Set([
     'write_file', 'write_files', 'edit_file', 'delete_file', 'delete_files',
     'move_file', 'copy_file', 'copy_files', 'replace_in_files', 'delete_directory', 'delete_directories',
@@ -634,21 +563,16 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     const f = state.folders.find(x => x.agentProject === projectId);
     return !!(f && f.agentCheckpointsEnabled);
   }
-  // `runId` (when given) is appended as a "Run: <id>" trailer line in the
-  // commit body, not the subject — keeps the one-line summary clean while
-  // letting agent_git_log() (kiconnect-proxy.py) tag each commit with the
-  // turn it belongs to, so the 🕘 modal can group a turn's checkpoints
-  // instead of showing one flat row per tool call. Commits without a
-  // runId (manual/baseline/restore checkpoints) just render as their own
-  // one-commit group — see renderGhGroups().
+  // `runId` (when given) is appended as a "Run: <id>" trailer in the commit
+  // body so the 🕘 modal can group a turn's checkpoints (see renderGhGroups()).
+  // Commits without a runId render as their own one-commit group.
   function checkpointMessage(name, args, runId) {
     const subject = `Agent: ${compactToolCallLabel(name, args)}`.slice(0, 200);
     return runId ? `${subject}\n\nRun: ${runId}` : subject;
   }
 
-  // Tool execution (respects autonomy mode). `run` is the specific RunState
-  // this call belongs to — threaded through so the confirm-bar rerender
-  // updates THIS run's bubble even while another chat's run is in flight.
+  // Tool execution (respects autonomy mode). `run` is threaded through
+  // explicitly so the confirm-bar rerender updates the right run's bubble.
   async function executeTool(name, args, project, autonomy, step, run) {
     if (name === 'list_files') {
       const data = await apiTree(project);
@@ -695,10 +619,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       try { return await fetchLinkedPage(args.url); }
       catch (err) { return { error: err.message }; }
     }
-    // Read-only git history tools — safe to run in every autonomy mode
-    // (including 'confirm', same as list_files/read_file above) since
-    // nothing on disk changes. See matching /agent/git/* routes in
-    // kiconnect-proxy.py for exact response shapes.
+    // Read-only git history tools — safe in every autonomy mode since
+    // nothing on disk changes.
     if (name === 'git_log') {
       return apiGitLog(project, args.path, args.limit);
     }
@@ -714,10 +636,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       return apiGitDeleted(project);
     }
 
-    // A risky overwrite forces the same confirm step as "Confirm" mode,
-    // regardless of actual autonomy setting — silently applying it in
-    // "Autonomous" mode could destroy data the model never fully saw (see
-    // shrinkRisk()). Skipped in "Simulate" mode since nothing is written.
+    // A risky overwrite forces a confirm step regardless of autonomy
+    // setting — silently applying it in "Autonomous" mode could destroy
+    // data the model never fully saw (see shrinkRisk()).
     let riskWarning = null, riskyFileMsgs = null;
     if (autonomy !== 'simulate') {
       if (name === 'write_file' && typeof args.content === 'string') {
@@ -772,26 +693,16 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       }
     }
 
-    // Real mutation about to happen — take a git checkpoint first if
-    // enabled, so the change stays recoverable via git log/revert. A
-    // failed/unavailable git never blocks the tool call; it's surfaced once
-    // per project per session instead of silently doing nothing forever.
-    // `run.hadMutation` is tracked regardless of whether checkpoints are
-    // currently enabled — see runAgentCompletion's `finally` block, which
-    // uses it to decide whether an end-of-turn checkpoint is worth taking.
-    //
-    // Message note: the checkpoint firing HERE (before `name` executes)
-    // actually captures whatever changed on disk since the LAST checkpoint
-    // — i.e. the PREVIOUS mutating call's effect, not this one's (this one
-    // hasn't run yet). So it's labeled with `run._pendingCheckpointMsg`
-    // (set by that previous call below), not with `name`/`args`. Using
-    // `name`/`args` here would label every checkpoint one action late —
-    // e.g. a checkpoint that actually captures a delete_file would show up
-    // in git log as whatever tool call happened to run AFTER it. The
-    // fallback (`run._pendingCheckpointMsg` unset) only matters for the
-    // very first mutating call since checkpoints were enabled/since the
-    // run started — nothing has changed on disk yet at that point, so the
-    // checkpoint is a no-op (nothing staged) and the message is moot.
+    // Real mutation about to happen — checkpoint first if enabled, so the
+    // change stays recoverable. A failed/unavailable git never blocks the
+    // tool call; it's surfaced once per project per session instead of
+    // failing silently forever. `run.hadMutation` is tracked regardless of
+    // whether checkpoints are enabled (see runAgentCompletion's `finally`).
+    // This checkpoint actually captures the PREVIOUS mutating call's effect
+    // (whatever changed since the last checkpoint), since `name` hasn't run
+    // yet — hence labeled with `run._pendingCheckpointMsg` set by that
+    // previous call, not `name`/`args`, or every checkpoint would be
+    // mislabeled one action late.
     if (MUTATING_TOOL_NAMES.has(name)) {
       if (run) run.hadMutation = true;
       if (project && projectCheckpointsEnabled(project)) {
@@ -804,9 +715,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
           }
         } catch (e) { /* best-effort only, never blocks the actual tool call */ }
       }
-      // Describes THIS call, about to actually run below — used to label
-      // whichever checkpoint (the next mutating call's pre-checkpoint, or
-      // the end-of-turn one in runAgentCompletion) ends up capturing it.
+      // Describes THIS call — labels whichever checkpoint (next mutating
+      // call's pre-checkpoint, or the end-of-turn one) ends up capturing it.
       if (run) run._pendingCheckpointMsg = checkpointMessage(name, args, run.runId);
     }
     // Any mutation invalidates the whole read cache above — coarser than
@@ -902,8 +812,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (pendingConfirm) { pendingConfirm.resolve(false); pendingConfirm = null; }
   }
   // Stops the agent run for one chat (default: chat on screen) — mirrors
-  // _js/chat/chat-send.js's stopStreaming(chatId), reusing the same activeRuns
-  // registry, plus closes the confirm bar if it belonged to this run.
+  // chat-send.js's stopStreaming(), plus closes the confirm bar if needed.
   function stopAgent(chatId) {
     chatId = chatId || state.currentChatId;
     stopStreaming(chatId);
@@ -911,21 +820,17 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
 
   // Chat-completion call. `history` is a provider-neutral turn list (see
-  // runAgentChatTurn): system/user/assistant(+toolCalls)/tool_results
-  // entries. callModel() translates it to whichever wire format `provider`
-  // needs and normalizes the reply back to {text, toolCalls}. Also applies
-  // the header's thinking/reasoning-effort setting via the same helpers the
-  // normal chat path uses, so it's the same model with the same settings.
+  // runAgentChatTurn). callModel() translates it to the wire format
+  // `provider` needs and normalizes the reply to {text, toolCalls}, applying
+  // the same thinking/reasoning-effort settings as normal chat.
   //
-  // Turns a tool result into the JSON string sent back as a tool_result.
-  // This used to just do JSON.stringify(result).slice(0, 8000), which slices
-  // mid-string (often invalid JSON) with no signal that anything was cut —
-  // the model could then write_file "to save its edit" and silently
-  // overwrite the real file with the truncated content it saw (this
-  // happened with a large i18n file in testing; see shrinkRisk() above for
-  // the write-side guard). Fix: truncate long STRING FIELDS individually
-  // with an explicit "…N more characters not shown" marker, then
-  // serialize — always valid JSON, and the model knows when it's partial.
+  // Serializes a tool result for the model. Truncates long STRING FIELDS
+  // individually with an explicit "…N more characters not shown" marker
+  // instead of naively slicing the whole JSON string (which produced
+  // invalid JSON mid-string with no signal anything was cut — the model
+  // could then write_file and silently overwrite a file with truncated
+  // content it thought was complete; see shrinkRisk() for the write-side
+  // guard).
   const TOOL_RESULT_FIELD_LIMIT = 20000; // per individual long string field (e.g. file content)
   const TOOL_RESULT_TOTAL_LIMIT = 24000; // hard ceiling on the final serialized result, just in case
   function truncateLongStrings(value) {
@@ -979,13 +884,10 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
           tool_calls: (h.toolCalls && h.toolCalls.length) ? h.toolCalls.map(c => ({
             id: c.id, type: 'function',
             function: { name: c.name, arguments: JSON.stringify(c.arguments || {}) },
-            // Gemini 2.5+/3.x require each function call to echo back its
-            // exact thought_signature, or the next turn gets a 400 (happens
-            // even with "thinking" off — recent Gemini models always reason
-            // internally). Stashed on the tool-call object as soon as seen
-            // (see callModel below) and echoed here. Calls we invented
-            // ourselves (the JSON-in-text fallback) were never signed, so we
-            // send Google's documented bypass sentinel instead.
+            // Gemini requires each function call to echo back its exact
+            // thought_signature or the next turn 400s (even with "thinking"
+            // off). Calls we invented ourselves (JSON-in-text fallback)
+            // were never signed, so send Google's documented bypass sentinel.
             ...(c._thoughtSig ? { extra_content: { google: { thought_signature: c._thoughtSig } } } : {}),
           })) : undefined,
         });
@@ -995,9 +897,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     });
     return out;
   }
-  // `signal` is passed in explicitly by the caller (the run's own
-  // AbortController, see runAgentCompletion), not a shared module-level one
-  // — needed since several agent runs can be in flight, one per chat.
+  // `signal` (the run's own AbortController) is passed in explicitly rather
+  // than shared, since several agent runs can be in flight at once.
   async function callModel(history, provider, folder, sessionId, signal) {
     if (!provider) throw new Error(t('agent.noModelHdr'));
     if (!provider.apiKey) throw new Error(t('agent.err.noApiKey'));
@@ -1007,19 +908,16 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (provider.type === 'anthropic') {
       const { system, messages } = toAnthropicHistory(history);
       // Cache breakpoints on tool schema and system prompt: byte-identical
-      // on every tool-loop iteration, so marking them `ephemeral` lets
-      // Anthropic serve them from cache instead of billing them as fresh
-      // input — real savings across several tool round-trips.
+      // every iteration, so `ephemeral` lets Anthropic serve them from
+      // cache instead of billing fresh input.
       const toolsForModel = toolSchemaAnthropic(folder);
       if (toolsForModel.length) toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
-      // Second cache breakpoint on the message history itself. Without it,
-      // only tool schema/system prompt were cached — every follow-up call
-      // re-billed the ENTIRE growing history as fresh input, including large
-      // tool_result content (e.g. a 600KB file). Placing a breakpoint on the
-      // last content block of the last message lets everything before it be
-      // served from cache; only the newest tool_result(s) are billed fresh.
-      // Without this, a simple "read this file, split it up" task cost
-      // ~1.4M tokens by reprocessing the whole file on every follow-up.
+      // Second cache breakpoint on the message history: without it, only
+      // tool schema/system prompt were cached and every follow-up re-billed
+      // the entire growing history (a "read this file, split it up" task
+      // cost ~1.4M tokens reprocessing the whole file each time). Placed on
+      // the last content block of the last message so everything before it
+      // is served from cache.
       if (messages.length) {
         const lastMsg = messages[messages.length - 1];
         if (Array.isArray(lastMsg.content) && lastMsg.content.length) {
@@ -1032,12 +930,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       }
       const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages, tools: toolsForModel };
       if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }];
-      // Native server-side context management (beta) — complements, doesn't
-      // replace, compactOldToolResults() (skipped for Anthropic; see there).
-      // Clears old tool RESULTS server-side, AFTER the cache-prefix lookup,
-      // so it doesn't bust the prompt cache. Only kicks in past the token
-      // trigger below. Beta API; worst case if it changes is a surfaced 400,
-      // not silent data loss (nothing local is changed, only what's sent).
+      // Native server-side context management (beta), complementing
+      // compactOldToolResults() (which skips Anthropic — see there). Clears
+      // old tool results server-side after the cache-prefix lookup so it
+      // doesn't bust the prompt cache. Beta API; worst case is a surfaced
+      // 400, never silent data loss.
       if (state.config.anthropicContextEditing !== false) {
         body.context_management = {
           edits: [{
@@ -1090,12 +987,10 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
       if (provider.type === 'zhipu') reqBody.thinking = { type: 'enabled' };
       // MiniMax has no reasoning_effort levels (on/off only, on by default,
-      // M2.x can't disable). Agent UI doesn't surface reasoning trace, so no
-      // reasoning_split needed here (unlike the streaming chat path).
+      // M2.x can't disable); agent UI doesn't surface the reasoning trace.
       else if (provider.type === 'minimax') reqBody.thinking = { type: 'adaptive' };
-      // Mistral only documents 'none'/'high' (root-level field), so the
-      // low/medium/high OAI_EFFORT mapping doesn't apply. Native Magistral
-      // always reasons and takes no parameter (see the check below).
+      // Mistral only documents 'none'/'high', so OAI_EFFORT's low/medium/high
+      // mapping doesn't apply. Native Magistral always reasons, no parameter.
       else if (provider.type === 'mistral') {
         if (isMistralAdjustableThinkingModel(modelId)) reqBody.reasoning_effort = 'high';
         else delete reqBody.reasoning_effort;
@@ -1106,9 +1001,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       // nothing to send; just avoid a stray reasoning_effort field.
       delete reqBody.reasoning_effort;
     }
-    // Mistral's prompt caching is automatic but more reliable with a reused
+    // Mistral's caching is automatic but more reliable with a reused
     // prompt_cache_key across requests sharing a prefix (docs.mistral.ai).
-    // Set whenever talking to Mistral with a stable id to key on.
     if (provider.type === 'mistral' && sessionId) reqBody.prompt_cache_key = String(sessionId);
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
@@ -1134,8 +1028,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
         }))
       : [];
     // Mistral reasoning models return `content` as {type:'thinking'|'text'}
-    // chunks instead of a plain string — extract just the answer text (the
-    // agent trace view doesn't surface reasoning separately here).
+    // chunks — extract just the answer text.
     let text = typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content)
       ? msg.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('')
       : '');
@@ -1153,11 +1046,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
         text = '';
       }
     }
-    // Normalize OpenAI's field names to the shape buildTokenBadge()/the
-    // Anthropic path use, same as the normal streaming chat path.
+    // Normalize OpenAI's field names to the shape buildTokenBadge() uses.
     // DeepSeek reports cache hits under prompt_cache_hit_tokens instead of
-    // the OpenAI-standard field — without this fallback its cache savings
-    // never show up in the token badge.
+    // the standard field — fall back to it or cache savings never show.
     const usage = data.usage ? {
       input_tokens: data.usage.prompt_tokens,
       output_tokens: data.usage.completion_tokens,
@@ -1177,9 +1068,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return null;
   }
   function safeParseJson(s) { try { return JSON.parse(s || '{}'); } catch { return {}; } }
-  // Shared status-line helper for a tool result, used by several
-  // buildToolBody() branches. Returns null on plain success so callers can
-  // append their own success line instead.
+  // Shared status-line helper for a tool result. Returns null on plain
+  // success so callers can append their own success line.
   function resultStatusLine(result) {
     if (!result) return null;
     if (result.error) return `❌ ${result.error}`;
@@ -1188,17 +1078,13 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return null;
   }
 
-  // Rendering a run as collapsed <details> cards inside a chat bubble.
-  // Reuses formatText() (markdown/code/DOMPurify pipeline) so it renders
-  // identically live and after reload.
+  // Renders a run as collapsed <details> cards, reusing formatText() so it
+  // renders identically live and after reload.
   //
-  // A single singleton `_currentRunId` would break with several project
-  // chats running an agent turn at once — the last-started run would steal
-  // subsequent rerenderCurrentRun()/updateTokenCounterUI() calls from other
-  // chats. Fixed by threading the specific `run` object explicitly through
-  // runAgentCompletion's loop and executeTool() instead of a shared pointer.
-  // `_agentRun(chatId)` is a convenience default for callers that just mean
-  // "whichever run belongs to the chat on screen right now".
+  // The specific `run` object is threaded explicitly through the tool loop
+  // instead of a shared singleton pointer, since several project chats can
+  // run an agent turn at once. `_agentRun(chatId)` is a convenience default
+  // meaning "whichever run belongs to the chat on screen right now".
   function _agentRun(chatId) {
     chatId = chatId || state.currentChatId;
     for (const run of activeRuns.values()) {
@@ -1216,9 +1102,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     btn.addEventListener('click', () => stopAgent(chatId));
     return btn;
   }
-  // Builds a full message row for a still-running run reattached after a
-  // chat switch — same shape as appendEmptyAI(), but pre-filled from
-  // run.steps/run.usage instead of starting empty.
+  // Builds a message row for a still-running run reattached after a chat
+  // switch — like appendEmptyAI() but pre-filled from run.steps/run.usage.
   function _buildAgentRowSkeleton(run) {
     const row = appendEmptyAI(run.model, run.runId);
     const bubble = row.querySelector('.bubble');
@@ -1240,23 +1125,21 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     if (bubbleWrap) bubbleWrap.insertBefore(footer, bubble.nextSibling);
     return row;
   }
-  // `run` should be passed explicitly by callers acting on a specific run
-  // (tool loop, executeTool) — falls back to _agentRun() only for callers
-  // that mean "whatever's on screen".
+  // `run` should be passed explicitly by callers acting on a specific run;
+  // falls back to _agentRun() ("whatever's on screen") otherwise.
   function rerenderCurrentRun(run) {
     run = run || _agentRun();
     if (!run || !run.steps) return;
-    // _runBubbleEl() returns null when this run's chat isn't on screen —
-    // nothing to update; run.steps already has the latest state, and
-    // renderMessages()'s reattach paints it once the user switches back.
+    // Null when this run's chat isn't on screen — run.steps already has
+    // the latest state; renderMessages()'s reattach repaints it later.
     const liveRow = _runBubbleEl(run);
     if (!liveRow) return;
     const liveBubble = liveRow.querySelector('.bubble');
     if (!liveBubble) return;
-    // formatText() rebuilds the whole trace on every call, which would wipe
-    // out any <details> the user manually expanded. Steps only ever get
-    // appended, so the Nth <details.agent-trace> stays the Nth one after a
-    // rebuild — capture open states by position and reapply them.
+    // formatText() rebuilds the whole trace each call, which would collapse
+    // any <details> the user opened. Steps only get appended, so the Nth
+    // <details.agent-trace> stays the Nth one — capture open state by
+    // position and reapply.
     const openStates = Array.from(liveBubble.querySelectorAll('details.agent-trace')).map(d => d.open);
     liveBubble.innerHTML = formatText(renderRunMarkdown(run.steps)) || '<p>…</p>';
     liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
@@ -1276,10 +1159,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     }).join('\n\n');
   }
   // Line-level diff via classic LCS backtracking, instead of naively
-  // prefixing every old_str line with '-' and every new_str line with '+'
-  // (which makes every line look changed for a small edit in a large
-  // block, defeating the confirm-mode diff preview). edit_file snippets
-  // are small enough that the O(n·m) DP table is cheap.
+  // marking every old line '-' and every new line '+' (which makes a small
+  // edit look like a full rewrite). edit_file snippets are small enough
+  // that the O(n·m) DP table is cheap.
   function _lcsLineDiff(oldLines, newLines) {
     const n = oldLines.length, m = newLines.length;
     const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
@@ -1299,10 +1181,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     while (j < m) { ops.push({ type: 'add', text: newLines[j] }); j++; }
     return ops;
   }
-  // Renders _lcsLineDiff()'s ops as a compact unified diff: keeps up to
-  // CONTEXT lines around an actual change, collapses the rest into an
-  // "N unchanged lines" marker — a one-line change in a 200-line snippet
-  // shows as a handful of lines, not the whole thing twice.
+  // Renders _lcsLineDiff()'s ops as a compact unified diff: keeps CONTEXT
+  // lines around a change, collapses the rest into an "N unchanged lines"
+  // marker.
   function renderUnifiedDiff(oldStr, newStr) {
     const CONTEXT = 2;
     const ops = _lcsLineDiff(String(oldStr).split('\n'), String(newStr).split('\n'));
@@ -1517,10 +1398,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     return lines.join('\n');
   }
   // Surfaces the proxy's actual sandboxing state for this run (see
-  // 'sandboxed'/'networkIsolated' in agent_exec()'s response). Resource-limit
-  // sandboxing is POSIX-only (absent on Windows); network isolation also
-  // needs `unshare`, not always available on Linux either — this reports
-  // what actually happened per command, since the OS can't be known ahead.
+  // 'sandboxed'/'networkIsolated' in agent_exec()'s response) — resource
+  // limits are POSIX-only and network isolation needs `unshare`, so this
+  // reports what actually happened rather than assuming.
   function sandboxStatusLine(result) {
     if (typeof result.sandboxed !== 'boolean') return '';
     if (!result.sandboxed) {
@@ -1533,9 +1413,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
 
   // Main agent turn, runs inside the normal chat flow. Turns a stored
-  // message into plain context text for the next model call. Agent replies
-  // store their spoken text separately in `_agentText` (see `finally`
-  // below), so past tool-call traces never get replayed into context.
+  // message into plain context text; agent replies store their spoken text
+  // separately in `_agentText` so past tool-call traces are never replayed.
   function extractContextText(msg) {
     if (msg._agentText != null) return msg._agentText;
     if (typeof msg.content === 'string') return msg.content;
@@ -1554,14 +1433,12 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     // turn no longer blocks sending in THIS one.
     if (isChatStreaming(chat.id)) { showToast(t('agent.stillRunning')); return; }
 
-    // Snapshot the conversation so far, BEFORE adding the new user message,
-    // as context for the model — previously every message started a
-    // memory-less run.
+    // Snapshot the conversation so far, before adding the new user message,
+    // as context for the model.
     const priorHistory = buildPriorHistory(chat);
 
     // Same attachment → content-block conversion normal chat uses (see
-    // buildAttachmentContent() in _js/chat/chat-attachments.js) — previously this module
-    // only read the typed text and silently dropped attached files.
+    // buildAttachmentContent() in chat-attachments.js).
     const { userContent, fileNames } = buildAttachmentContent(task, att || []);
 
     const container = getActiveContainer(chat);
@@ -1569,7 +1446,6 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     container.push(userMsg);
     // Same auto-title flow as normal chat (autoGenerateChatTitle):
     // placeholder immediately, replaced by an AI-generated title later.
-    // Previously this hard-truncated the raw task text instead.
     if (chat.messages.length === 1) { chat.title = '…'; renderSidebar(); autoGenerateChatTitle(chat, task); }
     const idxUser = getActivePath(chat).length - 1;
     const emptyStateEl = document.getElementById('emptyState');
@@ -1583,10 +1459,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     await runAgentCompletion(chat, folder, container, priorHistory, task, userContent);
   }
 
-  // Regenerating an assistant reply in a project chat: remove that reply
-  // and re-run the SAME agent loop for the SAME preceding user message via
-  // runAgentCompletion(), so "Regenerieren" behaves like normal chat instead
-  // of falling back to a plain, tool-less completion.
+  // Regenerating a reply in a project chat: remove it and re-run the same
+  // agent loop for the same preceding user message via runAgentCompletion().
   async function agentRegenerate(idx) {
     const chat = currentChat(); if (!chat) return;
     const folder = state.folders.find(f => f.id === chat.folderId);
@@ -1617,16 +1491,15 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       .map(m => {
         const h = { role: m.role, text: extractContextText(m) };
         // Past user turns with attachments store content as an array (see
-        // runAgentChatTurn) — keep it so history conversion can resend the
-        // actual file, not just its text parts.
+        // runAgentChatTurn) — keep it so history can resend the actual file.
         if (m.role === 'user' && Array.isArray(m.content)) h.content = m.content;
         return h;
       });
   }
 
-  // The actual model/tool loop: appends the live AI bubble, drives
+  // The model/tool loop: appends the live AI bubble, drives
   // callModel()+executeTool() until a final text-only reply, then saves and
-  // upgrades the bubble to its interactive form. Shared by send/regenerate.
+  // upgrades the bubble. Shared by send/regenerate.
   async function runAgentCompletion(chat, folder, container, priorHistory, task, content) {
     if (!folder.agentAutonomy) folder.agentAutonomy = 'confirm';
     const provider = providerForModel(state.config.model);
@@ -1653,9 +1526,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       usage: null,
       status: 'running',
       bubbleEl: null,
-      // Reattach hook for _js/chat/chat-render.js's renderMessages(): builds a fresh
-      // row from run.steps/run.usage on switching back mid-run, instead of
-      // the generic chat-bubble builder (which knows nothing about traces).
+      // Reattach hook for chat-render.js's renderMessages(): builds a fresh
+      // row from run.steps/run.usage instead of the generic bubble builder.
       buildLiveEl: () => _buildAgentRowSkeleton(run),
     };
     activeRuns.set(runId, run);
@@ -1666,10 +1538,9 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     const aiRow = appendEmptyAI(state.config.model, runId);
     run.bubbleEl = aiRow;
     const bubble = aiRow.querySelector('.bubble');
-    // Sibling of .bubble inside .bubble-wrap, not a child of bubble —
-    // rerenderCurrentRun() replaces bubble.innerHTML wholesale on every
-    // step, which would wipe this out if nested inside. Starts empty,
-    // filled once usage figures arrive, removed in `finally` when run ends.
+    // Sibling of .bubble (not a child) since rerenderCurrentRun() replaces
+    // bubble.innerHTML wholesale each step. Filled once usage arrives,
+    // removed in `finally`.
     const bubbleWrap = bubble.parentNode;
     const footer = document.createElement('div');
     footer.className = 'agent-run-footer';
@@ -1697,9 +1568,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     try {
       while (iterations < MAX_ITERATIONS) {
         iterations++;
-        // See KNOWN_CACHING_PROVIDERS above: only compact for providers
-        // without confirmed prefix caching, so this never mutates a prefix
-        // that caching (incl. Anthropic's explicit cache_control) needs stable.
+        // Only compact for providers without confirmed prefix caching (see
+        // KNOWN_CACHING_PROVIDERS).
         if (!KNOWN_CACHING_PROVIDERS.has(provider.type)) compactOldToolResults(history);
         let result;
         try { result = await callModel(history, provider, folder, chat.id, run.abortController.signal); }
@@ -1747,35 +1617,24 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       if (iterations >= MAX_ITERATIONS) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: MAX_ITERATIONS })}` }); rerenderCurrentRun(run); }
       if (aborted) { steps.push({ kind: 'text', text: `⏹ ${t('agent.aborted')}` }); rerenderCurrentRun(run); }
     } finally {
-      // Every real (non-simulated) mutating tool call checkpoints BEFORE
-      // it runs (see MUTATING_TOOL_NAMES handling in executeTool), by
-      // design, so each checkpoint reflects "the state right before this
-      // change" and stays revertable. That means the run's LAST mutation
-      // is never itself committed by that mechanism — it would just sit as
-      // an uncommitted working-tree change until some future mutating call
-      // (possibly a much later session) happens to trigger the next
-      // checkpoint, which would then also misattribute that old change to
-      // whatever new action triggered it. Take one more checkpoint here,
-      // after the loop ends for ANY reason (finished, aborted, error, max
-      // iterations), so the run's true final state always gets its own
-      // commit. This is what makes e.g. a delete_file that happens to be
-      // the last tool call in a turn actually show up in
-      // git_list_deleted/git_log afterwards, instead of silently staying
-      // an untracked change nothing else ever sees.
+      // Every mutating tool checkpoints BEFORE it runs (see executeTool),
+      // so the run's LAST mutation is never itself committed by that
+      // mechanism — it would sit uncommitted until some future call
+      // (possibly next session) mislabels it. Take one final checkpoint
+      // here after the loop ends for any reason, so the run's true final
+      // state always gets its own commit.
       if (run.hadMutation && folder.agentProject && projectCheckpointsEnabled(folder.agentProject)) {
         const fallbackMsg = run.runId ? `Agent: end of turn\n\nRun: ${run.runId}` : 'Agent: end of turn';
         try { await apiCheckpoint(folder.agentProject, run._pendingCheckpointMsg || fallbackMsg); }
         catch (e) { /* best-effort only, never blocks finishing the run */ }
       }
-      // Use the run's CURRENT bubble (may be reattached, or null if the
-      // chat isn't on screen) — never the originally-captured locals, which
-      // may be long detached from the DOM.
+      // Use the run's CURRENT bubble (may be reattached or null), never the
+      // originally-captured locals which may be detached from the DOM.
       const finishBubbleRow = _runBubbleEl(run);
       const finishBubble = finishBubbleRow && finishBubbleRow.querySelector('.bubble');
       if (finishBubble) finishBubble.classList.remove('streaming');
       const finalMd = renderRunMarkdown(steps);
-      // Plain-text version (no tool-call HTML cards) fed back as context on
-      // the next message (see extractContextText()) and "remembered" by
+      // Plain-text version (no tool-call HTML) fed back as context for
       // future agent runs in this chat.
       const contextText = steps.filter(s => s.kind === 'text').map(s => s.text).join('\n\n');
       // _model uses run.model (frozen at run start), not live config.model
@@ -1785,17 +1644,13 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       save();
       run.status = 'done';
 
-      // Only touch #messages if this chat is still on screen — if the run
-      // finished on a different chat, the reply is already saved and renders
-      // normally next time this chat opens (matching guard in _js/chat/chat-send.js's
-      // _attachAIActions()).
+      // Only touch #messages if this chat is still on screen — otherwise
+      // the saved reply renders normally next time it opens (matching
+      // guard in chat-send.js's _attachAIActions()).
       if (chat === currentChat()) {
-        // Upgrade the just-finished live bubble into its final interactive
-        // form — same helper the normal streaming path uses, so agent
-        // replies get the same action bar instead of staying a placeholder.
-        // Drop the live run footer (token counter + stop button) before
-        // finalizing — it's a this-run-only indicator, not part of the saved
-        // message.
+        // Upgrade the live bubble into its final interactive form (same
+        // helper the streaming path uses), after dropping the run-only
+        // footer (token counter + stop button).
         const finishFooterEl = finishBubbleRow && finishBubbleRow.querySelector('.agent-run-footer');
         if (finishFooterEl && finishFooterEl.parentNode) finishFooterEl.parentNode.removeChild(finishFooterEl);
 
@@ -1824,8 +1679,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     name = (name || '').trim();
     if (!name || !path) return null;
     // A previous UI version could remove a project locally even when proxy
-    // deletion failed, leaving an invisible registration — reuse that
-    // matching server-side project instead of rejecting its folder.
+    // deletion failed — reuse the matching server-side project instead of
+    // rejecting its folder.
     const normalizedPath = String(path).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
     const localMatch = state.folders.find(f => f.agentProject && String(f.agentProjectPath || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() === normalizedPath);
     if (localMatch) throw new Error(t('agent.projectAlreadyAdded'));
@@ -1852,9 +1707,8 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     try {
       await apiDeleteProject(folder.agentProject);
     } catch (e) {
-      // Don't remove the local folder/chats if the proxy couldn't remove its
-      // registry entry, or the UI would claim success while it's still
-      // registered and unselectable.
+      // Don't remove the local folder/chats if the proxy failed to, or the
+      // UI would claim success while it's still registered.
       showToast(`❌ ${e.message}`);
       return;
     }
@@ -1873,8 +1727,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   }
 
   // Focuses a project for the composer: reuses the current chat if empty,
-  // else starts a fresh one filed into that project — like a workspace
-  // picker in Codex-like tools.
+  // else starts a fresh one filed into that project.
   function focusProject(folder) {
     const chat = currentChat();
     if (chat && chat.messages.length === 0) { chat.folderId = folder ? folder.id : null; save(); }
@@ -2008,9 +1861,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     `;
     inputZone.insertBefore(confirmBar, inputZone.firstChild);
 
-    // Project chip + settings gear + stop button sit in the same row as the
-    // mic/read-aloud controls, in their own framed group so they read as
-    // one unit.
+    // Project chip + settings gear + stop button share a framed group with
+    // the mic/read-aloud controls.
     const bar = document.createElement('div');
     bar.className = 'agent-context-bar';
     bar.id = 'agentContextBar';
@@ -2131,14 +1983,11 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return String(n);
   }
-  // Live running total under the streaming bubble it belongs to, not the
-  // composer bar (which can't tie to a specific run). Created fresh per run
-  // as a sibling of the bubble inside .bubble-wrap, so rerenderCurrentRun()'s
-  // innerHTML resets never wipe it out; removed in `finally` when the run
-  // ends. A "cost right now" indicator; MAX_ITERATIONS allows up to 200
-  // round-trips per turn and without this the only way to see actual cost
-  // was inspecting network traffic. `run` should be passed explicitly by
-  // the tool loop; falls back to _agentRun() otherwise.
+  // Live running-cost total under the streaming bubble (composer bar can't
+  // tie to a specific run). Created as a sibling of the bubble so
+  // rerenderCurrentRun()'s innerHTML resets never wipe it; removed when the
+  // run ends. `run` should be passed explicitly by the tool loop; falls
+  // back to _agentRun() otherwise.
   function updateTokenCounterUI(usage, run) {
     run = run || _agentRun();
     if (run) run.usage = usage; // stored so a reattached bubble can prefill the counter immediately
@@ -2236,16 +2085,14 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       openGitHistoryPanel(folder);
     });
     panel.addEventListener('click', e => e.stopPropagation());
-    // Close on any click elsewhere (autonomy/shell changes already save()
-    // immediately, nothing to flush here). Gear button and panel handlers
-    // both stop propagation, so opening/clicking inside never triggers this.
+    // Close on any click elsewhere — gear button and panel handlers both
+    // stop propagation, so clicking inside never triggers this.
     document.addEventListener('click', () => panel.classList.remove('open'));
   }
 
-  // Folder picker: browse real OS folders to pick/create a project root
-  // anywhere on disk. editFolder is null for a new project, or the
-  // existing project's folder object when re-pointing one (see
-  // openFolderPickerForEdit()/confirmFolderPicker() below).
+  // Folder picker: browse real OS folders to pick/create a project root.
+  // editFolder is null for a new project, or the existing folder object
+  // when re-pointing one.
   let _fp = { path: '', parent: null, shortcuts: [], editFolder: null };
   function injectFolderPicker() {
     const overlay = document.createElement('div');
@@ -2290,9 +2137,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     document.getElementById('fpProjectName').disabled = false;
     loadFolderPickerDir('');
   }
-  // Re-opens the folder picker scoped to changing an EXISTING project's
-  // target folder (see the ✏️ button in renderProjectList()). Name field
-  // is locked (renaming happens elsewhere); starts at the current path.
+  // Re-opens the folder picker to change an EXISTING project's target
+  // folder. Name field is locked; starts at the current path.
   function openFolderPickerForEdit(folder) {
     const overlay = document.getElementById('agentFolderPickerOverlay');
     if (!overlay) return;
@@ -2440,21 +2286,18 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     addBtn.addEventListener('click', onCreateProjectClick);
     list.appendChild(addBtn);
   }
-  // ── Git history / restore panel ──────────────────────────────────────
-  // Browses a project's local checkpoint history (see /agent/git/* in
-  // kiconnect-proxy.py) and lets the user restore either a single file
-  // (including ones since deleted) or the whole project to any earlier
-  // checkpoint. Every restore itself becomes a new checkpoint server-side,
-  // so nothing here is a one-way door.
+  // ── Git history / restore panel ─────────────────────────────────────
+  // Browses checkpoint history and restores a single file (incl. deleted
+  // ones) or the whole project to an earlier state. Every restore itself
+  // becomes a new checkpoint, so nothing here is a one-way door.
   const STATUS_BADGE = { added: '🟢', modified: '🟡', deleted: '🔴', renamed: '🔀' };
   const STATUS_LABEL_KEY = { added: 'agent.ghStatusAdded', modified: 'agent.ghStatusModified', deleted: 'agent.ghStatusDeleted', renamed: 'agent.ghStatusRenamed' };
   function ghStatusLabel(status) {
     return t(STATUS_LABEL_KEY[status] || status, status);
   }
   let _gh = { folder: null, tab: 'log', commits: [], deleted: [], expanded: null, expandedData: null, loading: false, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false };
-  // Strings for this panel go through the same t()/tf() as everything else
-  // in this file — see _lang/*.js's "Git history / restore panel (agent.gh*)"
-  // block for the translated entries.
+  // Strings go through the same t()/tf() as elsewhere; see _lang/*.js's
+  // "agent.gh*" entries.
 
   function injectGitHistoryModal() {
     const overlay = document.createElement('div');
@@ -2514,12 +2357,9 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (overlay) overlay.classList.remove('open');
   }
   function ghFormatDate(iso) {
-    // git's `--date=iso` (%ci) format is "YYYY-MM-DD HH:MM:SS +ZZZZ" — two
-    // spaces, not one. A plain .replace(' ', 'T') (single-arg string, so it
-    // only swaps the *first* match) leaves the space before the timezone
-    // offset in place, which Date() can't parse → "Invalid Date". Strip
-    // both spaces instead, and localize with the app's current language
-    // rather than the browser's default.
+    // git's `--date=iso` format has two spaces, not one — a plain
+    // single-match .replace(' ','T') leaves one behind and Date() can't
+    // parse it. Strip both, and localize with the app's language.
     try {
       const d = new Date(iso.replace(' ', 'T').replace(' ', ''));
       if (isNaN(d.getTime())) return iso;
@@ -2534,14 +2374,11 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
     return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
   }
-  // Groups consecutive commits that share a "Run: <id>" trailer (see
-  // checkpointMessage()) into one collapsible entry for the 🕘 modal,
-  // instead of one flat row per tool call. Commits are already newest-first
-  // from git log, and a run's own checkpoints are always made back-to-back,
-  // so a simple "same runId as the previous one" scan is enough — no need
-  // to bucket by runId across the whole list. Commits without a runId
-  // (manual/baseline/restore checkpoints, or history from before this
-  // feature existed) each become their own one-commit group.
+  // Groups consecutive commits sharing a "Run: <id>" trailer (see
+  // checkpointMessage()) into one collapsible entry. Since git log is
+  // newest-first and a run's checkpoints are always back-to-back, a simple
+  // "same runId as previous" scan suffices. Commits without a runId each
+  // become their own group.
   function ghGroupCommits(commits) {
     const groups = [];
     let cur = null;
@@ -2619,11 +2456,9 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         body.appendChild(buildGhCommitRow(g.commits[0]));
         return;
       }
-      // Multi-commit group: newest commit heads the collapsed row (its
-      // content is what "restore whole project" for the group restores to
-      // — restoring to the newest commit already includes every earlier
-      // one in the same run); expanding reveals the individual checkpoints,
-      // each still independently inspectable/restorable as usual.
+      // Multi-commit group: newest commit heads the row (restoring to it
+      // already includes every earlier one in the run); expanding reveals
+      // the individual checkpoints.
       const head = g.commits[0];
       const wrap = document.createElement('div');
       wrap.className = 'gh-commit';
@@ -2791,9 +2626,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       return orig(idx);
     });
 
-    // renderSidebar(): mark project folders + keep the composer chip in
-    // sync whenever redrawn — covers newChat()/switchChat() too, since both
-    // call renderSidebar() internally.
+    // Mark project folders + sync the composer chip whenever the sidebar
+    // redraws — also covers newChat()/switchChat(), which call it internally.
     onRenderSidebar(function () {
       document.querySelectorAll('#folderContainer .folder[data-folder-id]').forEach(div => {
         const f = state.folders.find(x => x.id === div.dataset.folderId);
@@ -2807,10 +2641,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     });
   }
 
-  // Language change hook, called by _js/core/i18n.js's setLang() (same pattern
-  // as kiconnect-voice.js's onLanguageChange). Re-reads
-  // translated text/title/placeholder in place so open panels and
-  // in-progress runs update immediately, not just on next re-render.
+  // Language change hook (see i18n.js's setLang()). Re-reads translated
+  // text/title/placeholder in place so open panels update immediately.
   onLanguageChange(function () {
     // Composer chip + gear
     syncComposerChip();
@@ -2890,28 +2722,22 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     // Re-render any tool-call trace open in the live bubble so its
     // labels/status pick up the new language immediately.
     rerenderCurrentRun();
-    // Already-finished agent replies: their tool labels/status words are UI
-    // chrome baked in at the time the run finished — previously stuck in
-    // whatever language was active when created. Re-render every visible one
-    // from its stored `_agentSteps` and persist the translated markdown so a
-    // reload shows the new language too.
+    // Already-finished agent replies had their tool labels baked in at
+    // creation time — re-render each visible one from its stored
+    // `_agentSteps` and persist the translated markdown.
     retranslateAgentHistory();
 
-    // Git-history/restore modal: static chrome (title, tab labels) plus a
-    // full re-render of the currently visible tab if the modal is open —
-    // commit messages/dates/status words/restore-confirm text are all
-    // recomputed from t()/tf() at render time, so this is enough to bring
-    // them to the new language without needing a page reload.
+    // Git-history/restore modal: static chrome plus a full re-render of
+    // the visible tab if open — commit text is recomputed from t()/tf() at
+    // render time, so no reload is needed.
     const ghTitleEl = document.getElementById('ghTitle');
     if (ghTitleEl) ghTitleEl.textContent = _gh.folder ? `${t('agent.gitHistory')} — ${_gh.folder.name}` : t('agent.gitHistory');
     const ghTabLogEl = document.getElementById('ghTabLog');
     if (ghTabLogEl) ghTabLogEl.textContent = t('agent.ghTabCheckpoints');
     const ghTabDeletedEl = document.getElementById('ghTabDeleted');
     if (ghTabDeletedEl) ghTabDeletedEl.textContent = t('agent.ghTabDeleted');
-    // GC button: also static chrome, and — unlike the tab labels above —
-    // its label carries state (⏳ while running vs 🧹 idle), so re-set only
-    // the icon-appropriate half rather than clobbering an in-progress run's
-    // "⏳ ..." with the idle label.
+    // GC button label carries state (⏳ running vs 🧹 idle) — re-set only
+    // the icon-appropriate half so an in-progress run isn't clobbered.
     const ghGcBtnEl = document.getElementById('ghGcBtn');
     if (ghGcBtnEl) {
       ghGcBtnEl.textContent = `${_gh.gcRunning ? '⏳' : '🧹'} ${t('agent.ghGc')}`;
@@ -2959,12 +2785,9 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (tries > 150) return;
     setTimeout(() => waitForHost(tries + 1), 100);
   }
-  // Deferred via setTimeout(0) even on the "DOM already ready" branch: with
-  // ES modules, this file's own evaluation order (set by the import
-  // dependency graph, not script-tag order) is no longer guaranteed to run
-  // after every other module has initialized just because the static HTML
-  // is already parsed - especially given the circular import back to
-  // core/state.js et al. A macrotask boundary guarantees the whole
-  // synchronous module-evaluation pass has completed first.
+  // Deferred via setTimeout(0) even when DOM is already ready: ES module
+  // evaluation order follows the import graph, not script-tag order, so
+  // other modules aren't guaranteed to be initialized yet. A macrotask
+  // boundary guarantees the whole sync module-evaluation pass has finished.
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
   else setTimeout(waitForHost, 0);

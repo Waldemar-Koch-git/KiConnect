@@ -3,6 +3,7 @@ import { save } from '../auth/storage.js';
 import { renderEditFileChips } from './chat-attachments.js';
 import { _buildBattleTileGridRow, _buildLiveRunBubble, activeRuns, regenerate, syncComposerStreamingUI } from './chat-send.js';
 import { currentChat, getActivePath, renderSidebar } from './chat-sidebar.js';
+import { escHtml } from '../core/html-utils.js';
 import { retranslateCodeBlockButtons, t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { buildKbSourcesRow } from '../db.js';
@@ -53,18 +54,13 @@ export function renderMessages(messages, limitCount) {
   // about-to-be-replaced assistant bubble out of the DOM entirely.
   if (typeof limitCount === 'number') path = path.slice(0, limitCount);
 
-  // Reattach mechanism: any still-running run belonging to THIS chat gets a
-  // fresh live bubble appended, pre-filled with what the registry has so far.
-  // activeRuns is the source of truth; the DOM is just a rebuildable
-  // projection. A run can supply its own buildLiveEl() (agent runs do, for
-  // tool-trace cards), else falls back to the generic bubble builder.
-  // Battle-variant runs are EXCLUDED here: they already get reattached to
-  // their own tile bubble inside _buildBattleTileGridRow() (called from the
-  // path.forEach() above, via buildMsgEl()). Including them here too used
-  // to double-append a full-size generic bubble UNDER the tile grid and
-  // clobber run.bubbleEl to point at it instead of the tile — the model
-  // would stream into that stray bubble until the next full render pulled
-  // the (already-accumulated) text back into its proper tile.
+  // Reattach mechanism: any still-running run for THIS chat gets a fresh
+  // live bubble, pre-filled from the registry (source of truth; DOM is a
+  // rebuildable projection). A run can supply buildLiveEl() (agent runs do,
+  // for tool-trace cards), else falls back to the generic builder.
+  // Battle-variant runs are EXCLUDED — they're already reattached to their
+  // own tile bubble inside _buildBattleTileGridRow(); including them here
+  // too used to double-append a stray bubble under the tile grid.
   const liveRuns = chat
     ? [...activeRuns.values()].filter(r => r.chatId === chat.id && r.status === 'running' && r.kind !== 'battle-variant')
     : [];
@@ -86,18 +82,16 @@ export function renderMessages(messages, limitCount) {
   container.scrollTop = container.scrollHeight;
   typesetMath();
   updateChatTokenTotal();
-  // The send/stop button must always reflect whichever chat this render
-  // just put on screen, not "is anything streaming anywhere" — this covers
-  // switchChat/newChat/deleteChat in one place, same as the bubbleEl-nulling
-  // loop above covers those for the run registry.
+  // The send/stop button must reflect whichever chat this render just put
+  // on screen, not "is anything streaming anywhere" — covers
+  // switchChat/newChat/deleteChat in one place.
   syncComposerStreamingUI();
 }
 
 export function buildMsgEl(msg, idx) {
-  // Battle-Modus: a message from sendBattleMessage() renders as a side-by-side
-  // tile grid until a winner is chosen (msg._winnerChosen). Once chosen,
-  // msg._siblingIdx points at it and it falls through to the normal
-  // single-bubble path, reusing the existing sibling-nav infrastructure.
+  // Battle-Modus: a sendBattleMessage() message renders as a side-by-side
+  // tile grid until a winner is chosen (msg._winnerChosen), then falls
+  // through to the normal single-bubble sibling-nav path.
   if (msg.role === 'assistant' && msg._battle && !msg._winnerChosen) {
     return _buildBattleTileGridRow(msg, idx);
   }
@@ -182,10 +176,9 @@ export function buildMsgEl(msg, idx) {
     bubble.appendChild(buildWebSourcesRow(msg._webSources));
   }
 
-  // Knowledge-base sources ("Wissensbasis") — populated by kiconnect-db.js's
-  // sendMessageCore hook (see installKbHooks() there). Same rendering idea
-  // as _webSources above, kept as its own list/renderer since KB citations
-  // carry a source file + page instead of a URL.
+  // Knowledge-base sources — populated by db.js's sendMessageCore hook.
+  // Same idea as _webSources above, kept separate since KB citations carry
+  // a source file + page instead of a URL.
   if (msg._kbSources && msg._kbSources.length && typeof buildKbSourcesRow === 'function') {
     bubble.appendChild(buildKbSourcesRow(msg._kbSources));
   }
@@ -411,9 +404,8 @@ export function buildNoteSection(msg) {
     save();
     showPreview();
     // Defensive re-assert: if something else re-rendered the message list
-    // right around this blur (e.g. a concurrent save/stream update touching
-    // the same message), make sure the preview still wins on the next frame
-    // instead of leaving the raw textarea visible until the next full render.
+    // around this blur (concurrent save/stream update), make sure the
+    // preview still wins next frame.
     requestAnimationFrame(() => {
       if (document.body.contains(notePreview) && msg._noteOpen) showPreview();
     });
@@ -500,10 +492,9 @@ export function updateChatTokenTotal() {
   const chat=currentChat();
   let total=document.getElementById('chatTokenTotal');
   if (!chat) { if(total) total.remove(); return; }
-  // Sum tokens along the currently active path only — getActivePath() follows
-  // the active sibling branch at every fork, so the total matches exactly what
-  // the user sees on screen. Iterating chat.messages directly would miss tail
-  // messages inside non-root sibling branches.
+  // Sum tokens along the active path only (getActivePath() follows the
+  // active sibling at every fork), matching what's on screen — iterating
+  // chat.messages directly would miss non-root sibling branches.
   const activePath = getActivePath(chat);
   const sum=activePath.reduce((acc,m)=>{
     if(!m._usage) return acc;
@@ -858,10 +849,13 @@ export function toBase64Utf8(str) {
   return btoa(bin);
 }
 
-export function escHtml(s) {
-  if(s===null||s===undefined) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
+// escHtml itself now lives in core/html-utils.js (was duplicated there as
+// agent.js's/db.js's esc()) — re-exported here (as a real local binding,
+// not a bare `export {x} from` re-export, since this file also calls
+// escHtml() directly throughout) so every existing
+// `import { escHtml } from '.../chat-render.js'` call site keeps working
+// unchanged.
+export { escHtml };
 
 export function ensureDompurifyNoopenerHook() {
   if (state._dompurifyNoopenerHookInstalled || typeof DOMPurify === 'undefined') return;
@@ -876,12 +870,9 @@ export function ensureDompurifyNoopenerHook() {
 export function formatText(raw) {
   if (!raw) return '';
   const blocks = [];
-  // Placeholder: plain alnum sentinel (NOT HTML) so it survives even if a
-  // fallback path below ends up escHtml()-ing `s` — HTML comments like
-  // "<!--KICBLK0-->" get mangled into "&lt;!--KICBLK0--&gt;" by escHtml(),
-  // which then no longer matches PH_RE in Step 3 and leaks into the
-  // rendered message as visible text. A char-class-free token can't be
-  // corrupted by HTML-escaping.
+  // Placeholder: plain alnum sentinel (NOT HTML), since an HTML-comment
+  // token would get mangled by a fallback escHtml() call, no longer match
+  // PH_RE in Step 3, and leak into the rendered message as visible text.
   const PH_TOKEN = 'KICBLK' + Math.random().toString(36).slice(2, 10);
   const PH = (i) => `${PH_TOKEN}${i}x`;
   const PH_RE = new RegExp(`${PH_TOKEN}(\\d+)x`, 'g');
@@ -898,10 +889,9 @@ export function formatText(raw) {
     return i;
   }
 
-  // Strips up to `indent`'s worth of leading whitespace from every line of
-  // a fenced code block's content — fences nested inside list items or
-  // blockquotes are written indented to match their container, and that
-  // indentation is part of the surrounding structure, not the code itself.
+  // Strips up to `indent`'s worth of leading whitespace from each line of a
+  // fenced code block — fences nested in list items/blockquotes are
+  // indented to match their container, which isn't part of the code itself.
   function _stripFenceIndent(code, indent) {
     if (!indent) return code;
     const re = new RegExp('^' + indent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
@@ -910,17 +900,12 @@ export function formatText(raw) {
 
   // Step 1: Code and LaTeX blocks VOR protect from marked
 
-  // 4+-Backtick-Fences
-  // Leading [ \t]* tolerates fences indented under a list item or
-  // blockquote (very common — e.g. "- Beispiel:\n    ```js\n    ...\n
-  // ```"). Without it, an indented fence isn't recognized as a fence HERE,
-  // so its content falls through to the inline-code regex below and gets
-  // its backticks replaced by placeholders while still raw markdown text —
-  // but marked.js DOES recognize the indented fence per CommonMark's list
-  // rules, wraps that already-placeholder-corrupted text in a NEW code
-  // block, and the single-pass placeholder restore in Step 3 can't reach
-  // the now doubly-nested placeholders inside it. Matching the fence here
-  // first (before inline-code) avoids the whole nesting problem.
+  // 4+-Backtick fences: leading [ \t]* tolerates fences indented under a
+  // list item/blockquote (common). Without it, an indented fence isn't
+  // recognized HERE and falls through to the inline-code regex, but
+  // marked.js DOES recognize it per CommonMark and wraps the already-
+  // placeholder-corrupted text in a new code block the Step-3 restore
+  // can't reach. Matching the fence here first avoids the nesting problem.
   s = s.replace(/^([ \t]*)(`{4,})([^\n]*)\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm, (_, indent, fence, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
 
   // 3-Backtick-Fences
@@ -969,25 +954,19 @@ export function formatText(raw) {
     return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
-  // Step 1a: cap pathological blockquote/list nesting depth
-  // marked's block-level parser recurses once per nesting level. Input with
-  // very deep leading ">" chains (or chained "- "/"1. " list markers) makes
-  // it recurse hundreds/thousands of levels deep, which can throw
-  // "Maximum call stack size exceeded" — or, worse, blow up memory and
-  // crash the whole tab/process before any catch() even runs (reproduced
-  // with ~2000 lines of incrementally deeper ">" nesting). A try/catch
-  // around marked.parse() cannot protect against that, so nesting depth is
-  // capped here, before marked ever sees the text: markers beyond
-  // MAX_NEST_DEPTH on a line are escaped to literal characters, which stops
-  // marked from recursing further on that line while leaving normal
-  // (realistic) nesting completely untouched.
+  // Step 1a: cap pathological blockquote/list nesting depth. marked's
+  // block parser recurses once per nesting level — deep leading ">" or
+  // list-marker chains can recurse thousands of levels deep, throwing
+  // "Maximum call stack size exceeded" or crashing the tab before any
+  // catch() runs (reproduced with ~2000 lines of nesting). A try/catch
+  // can't protect against that, so depth is capped before marked sees the
+  // text: markers beyond MAX_NEST_DEPTH on a line are escaped to literal
+  // characters, leaving realistic nesting untouched.
   {
     const MAX_NEST_DEPTH = 20;
-    // Lists can also nest purely via indentation, one marker per line but
-    // each line indented further than the last (no same-line marker chain
-    // to catch) — that recurses just as deep and must be capped too, via a
-    // hard ceiling on leading whitespace (indentation drives list nesting
-    // level in CommonMark, so bounding it bounds nesting depth).
+    // Lists can also nest purely via indentation (one marker per line,
+    // each indented further) — capped too via a ceiling on leading
+    // whitespace, since indentation drives CommonMark list nesting depth.
     const MAX_INDENT = MAX_NEST_DEPTH * 4;
     const markerRe = /^(>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)/;
     const indentRe = /^[ \t]+/;
@@ -1012,11 +991,9 @@ export function formatText(raw) {
     }).join('\n');
   }
 
-  // Step 1b: ensure a blank line precedes list blocks
-  // CommonMark/marked only starts a list at the start of the text or after
-  // a blank line — without it, "-"/"*"/"1." lines get pulled into the
-  // previous paragraph as literal text instead of becoming a list. This is
-  // why notes (usually typed without blank lines) rendered flat text.
+  // Step 1b: ensure a blank line precedes list blocks. CommonMark/marked
+  // only starts a list at text-start or after a blank line — without it,
+  // "-"/"*"/"1." lines get pulled into the previous paragraph as text.
   {
     const isListLine = (line) => /^[ \t]*([-*+]|\d+[.)])[ \t]+/.test(line);
     const lines = s.split('\n');

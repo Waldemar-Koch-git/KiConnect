@@ -69,10 +69,9 @@ export function syncSettingsPanel() {
   if (webCountEl) webCountEl.value = state.config.webSearchResultCount || 8;
   if (webCountVal) webCountVal.textContent = state.config.webSearchResultCount || 8;
   updateWebSearchButton();
-  // ttsProvider/sttProvider are chosen values that live in kiconnect-voice.js's own
-  // (unencrypted, non-sensitive) settings object, not in `config` — only the API
-  // keys themselves live in config.audioProviders. window.kicVoiceGetSetting/
-  // SetSetting is the small bridge kiconnect-voice.js exposes for that.
+  // ttsProvider/sttProvider live in voice.js's own unencrypted settings
+  // object, not `config` (only API keys live in config.audioProviders).
+  // window.kicVoiceGetSetting/SetSetting bridges to that.
   const ttsProviderEl = document.getElementById('ttsProviderSelect');
   const sttProviderEl = document.getElementById('sttProviderSelect');
   if (ttsProviderEl) ttsProviderEl.value = (kicVoiceGetSetting?.('ttsProvider')) || 'browser';

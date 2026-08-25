@@ -108,9 +108,7 @@ export function setupEventListeners(){
   document.getElementById('langToggleBtn').addEventListener('click', toggleLangDropdown);
   document.getElementById('overlay').addEventListener('click', closePanels);
   // Was inline onchange="onEmbedModelSelectChange()" in the HTML — moved
-  // here since inline handlers can't reach a module-scoped function
-  // (`onEmbedModelSelectChange` is no longer a `window` global now that
-  // the app is `type="module"`).
+  // here since inline handlers can't reach a module-scoped function.
   document.getElementById('pvEmbedModelSelect').addEventListener('change', onEmbedModelSelectChange);
 
   // Tuning Panel
