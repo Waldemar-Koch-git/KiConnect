@@ -723,9 +723,19 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
   // variant's own model explicitly so it searches with itself.
   modelId = modelId || splitModelId(state.config.model).modelId;
   if (provider.type === 'anthropic') {
-    const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages: msgs, tools: AGENTIC_WEB_TOOLS_ANTHROPIC, tool_choice: { type: 'auto' } };
+    // Cache breakpoints on the (tiny but byte-identical-every-turn) tool
+    // schema and system prompt — same idea as kiconnect-agent.js's
+    // callModel(). Cheap here since there are only 2 tools, but the message
+    // history breakpoint below matters a lot across AGENTIC_TOOL_MAX_ITERS
+    // iterations of a single reply, whose tool results otherwise get
+    // rebilled at full price on every iteration.
+    const toolsForModel = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({ ...tl }));
+    toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
+    const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages: msgs, tools: toolsForModel, tool_choice: { type: 'auto' } };
     if (isTemperatureSupported(modelId)) body.temperature = state.config.temperature;
-    if (state.config.systemPrompt) body.system = state.config.systemPrompt;
+    // Same global Agent-Profiles master switch as chat-send.js's request
+    // builders — see core/state.js DEFAULT_CONFIG.profilesEnabled.
+    if (state.config.profilesEnabled && state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
     const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
       method: 'POST',
       headers: {
@@ -744,7 +754,7 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
   // Every other provider speaks the OpenAI-compatible /chat/completions shape.
   const endpoint = getProviderEndpoint(provider);
   const apiMsgs = [];
-  if (state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
+  if (state.config.profilesEnabled && state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
   apiMsgs.push(...msgs);
   const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
   const reqBody = { model: modelId, messages: apiMsgs, tools: AGENTIC_WEB_TOOLS_OPENAI, tool_choice: 'auto', stream: false };

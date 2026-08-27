@@ -35,8 +35,21 @@ state._anthropicModelCaps = {};
 export const DEFAULT_CONFIG = {
   model: '', temperature: 0.7, maxTokens: null, systemPrompt: '',
   activeProfileId: null, userModelMaxOverrides: {}, chatMaxWidth: 880,
+  // Global master switch for the Agent-Profiles/Persona feature. Off by
+  // default. While off, activeProfile() reports "no profile" everywhere
+  // (badge, effectiveMaxTokens(), the agentic profileAddendum() in
+  // agent.js) and chat-send.js skips attaching state.config.systemPrompt
+  // to outgoing requests entirely — not just an empty string, the key is
+  // simply absent — so a disabled account sends zero extra system-prompt
+  // tokens per message. Saved profiles/temperature/max-tokens data itself
+  // is untouched; re-enabling picks the previously active profile back up.
+  profilesEnabled: false,
   thinkingEnabled: false, thinkingIntensity: 2, thinkingBudget: 8000,
+  // Valid values: 'manual' | 'off' | 'agentic'. ('auto' and 'always' were
+  // retired in the v4.0.0 refactor — see auth/storage.js load() for the
+  // migration that normalizes any old accounts still holding one of those.)
   webSearchMode: 'manual', webSearchEngine: 'free', webSearchApiKey: '', webSearchResultCount: 8,
+  webSearchAgenticMaxIters: 4,
   webSearchEnabled: false, webLinkEnabled: false,
   // TTS/STT provider API keys (OpenAI, ElevenLabs, Groq). Lives inside `config` (not
   // localStorage) so it goes through the same AES-GCM-256 encrypt/decrypt cycle as

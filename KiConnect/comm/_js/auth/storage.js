@@ -261,10 +261,17 @@ export async function load() {
     try { return JSON.parse(raw); } catch { return fallback; }
   }
   try { state.config = {...freshConfig(), ...state.config, ...await loadKey('config', {})}; } catch{}
-  if (!['manual','auto','always','off','agentic'].includes(state.config.webSearchMode)) state.config.webSearchMode = 'manual';
+  // 'auto' and 'always' were retired as of the v4.0.0 refactor (dead weight —
+  // no UI ever reachable that could set them again). Accounts saved before
+  // that refactor may still have one of those two strings persisted; fold
+  // them into 'manual' here so old data can't resurrect a code path that no
+  // longer exists elsewhere in the app.
+  if (state.config.webSearchMode === 'auto' || state.config.webSearchMode === 'always') state.config.webSearchMode = 'manual';
+  if (!['manual','off','agentic'].includes(state.config.webSearchMode)) state.config.webSearchMode = 'manual';
   if (!['free','duckduckgo','searxng','qwant','yahoo','startpage','brave','google','bing','mojeek','yandex','langsearch'].includes(state.config.webSearchEngine)) state.config.webSearchEngine = 'free';
   state.config.webSearchResultCount = Math.max(3, Math.min(WEB_SEARCH_RESULT_MAX, parseInt(state.config.webSearchResultCount) || 8));
   state.config.webLinkEnabled = !!state.config.webLinkEnabled;
+  state.config.profilesEnabled = !!state.config.profilesEnabled;
   try {
     const rawProviders = await loadKey('providers', []);
     state.providers = await Promise.all(rawProviders.map(decryptProvider));

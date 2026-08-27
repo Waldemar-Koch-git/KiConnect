@@ -1,5 +1,6 @@
 import { getAccount } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
+import { AGENTIC_TOOL_MAX_ITERS_CAP } from '../chat/chat-send.js';
 import { escHtml, getBubbleRow, getFormulaData, nodeToPlainText, safeIdx, wireCodeCopyButtons } from '../chat/chat-render.js';
 import { currentChat, getActivePath } from '../chat/chat-sidebar.js';
 import { initSettingsSectionCollapse, initTuningSectionCollapse } from '../core/boot.js';
@@ -68,6 +69,13 @@ export function syncSettingsPanel() {
   updateWebSearchKeyUI(state.config.webSearchEngine || 'free');
   if (webCountEl) webCountEl.value = state.config.webSearchResultCount || 8;
   if (webCountVal) webCountVal.textContent = state.config.webSearchResultCount || 8;
+  const webItersEl = document.getElementById('webSearchAgenticIters');
+  const webItersVal = document.getElementById('webSearchAgenticItersVal');
+  const webIters = state.config.webSearchAgenticMaxIters || 4;
+  // Drive the slider's ceiling from the single shared constant instead of
+  // trusting the static HTML `max` attribute, so the two can't drift apart.
+  if (webItersEl) { webItersEl.max = AGENTIC_TOOL_MAX_ITERS_CAP; webItersEl.value = webIters; }
+  if (webItersVal) webItersVal.textContent = webIters;
   updateWebSearchButton();
   // ttsProvider/sttProvider live in voice.js's own unencrypted settings
   // object, not `config` (only API keys live in config.audioProviders).

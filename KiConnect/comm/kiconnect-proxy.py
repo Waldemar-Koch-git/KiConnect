@@ -215,6 +215,12 @@ _SAFE_PROJECT_ID_RE = re.compile(r'^p_[A-Za-z0-9]{1,64}$')
 # trailing ~N suffix (e.g. "a1b2c3d~1"). Rejects anything else (branch
 # names, flags, ...) since these values flow into `git` subprocess argv.
 _SAFE_GIT_REF_RE = re.compile(r'^[0-9a-fA-F]{4,40}(~[0-9]+)?$')
+# Milestone tag names (user-chosen labels, e.g. "before-refactor"). Kept
+# deliberately narrow - no slashes/spaces/leading dashes - since these also
+# flow straight into `git` subprocess argv as ref names.
+_SAFE_TAG_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$')
+_MILESTONE_TAG_PREFIX = 'ms/'
+_AGENT_NOTES_REF = 'agent-notes'
 
 # Agent Session (per-account, in-RAM only). The AES-256 key is derived
 # client-side and handed to the server once at unlock, kept only in this
@@ -321,17 +327,29 @@ def _project_root_for_id(pid, sess):
 
 def _safe_rel_path(project_dir, rel_path):
     """Resolve+confine a path inside a project dir. Rejects '..', absolute
-    paths, null bytes, blocked filenames, and any symlink escape."""
+    paths, null bytes, blocked filenames, any symlink escape, and anything
+    inside the project's own .git/ (config, hooks, etc. - never exposed to
+    the agent's generic file read/write/delete, since e.g. a written
+    .git/config with core.fsmonitor/core.pager/hooksPath would get run by
+    git itself on the very next automatic checkpoint commit)."""
     if rel_path is None:
         return None
     rel_path = rel_path.replace('\\', '/').strip('/')
     if not rel_path or '\x00' in rel_path or '..' in rel_path.split('/'):
+        return None
+    segments = rel_path.split('/')
+    if segments[0].lower() == '.git':
         return None
     basename = os.path.basename(rel_path).lower()
     if basename in AGENT_BLOCKED_NAMES or any(basename.endswith(s) for s in AGENT_BLOCKED_SUFFIXES):
         return None
     full = os.path.realpath(os.path.join(project_dir, rel_path))
     if full != project_dir and not full.startswith(project_dir + os.sep):
+        return None
+    # Belt-and-braces: a symlink inside the project could otherwise still
+    # resolve into .git/ despite the check above.
+    git_dir = os.path.realpath(os.path.join(project_dir, '.git'))
+    if full == git_dir or full.startswith(git_dir + os.sep):
         return None
     return full
 
@@ -604,16 +622,13 @@ def _git_checkpoint(pdir, message):
         if diff.returncode == 0:
             return {'ok': True, 'committed': False}
         commit = _sp.run(['git', 'commit', '-q', '-m', message or 'Agent checkpoint'],
-                          cwd=pdir, capture_output=True, timeout=30, text=True)
+                          cwd=pdir, capture_output=True, timeout=30, encoding='utf-8', errors='replace')
         if commit.returncode != 0:
             return {'ok': False, 'reason': (commit.stderr or 'commit failed')[:200]}
-        # `--auto` is git's own built-in threshold check (default >6700
-        # loose objects / >50 packfiles) - a near-instant no-op below that,
-        # cheap to call every checkpoint. NOT the same as the 🧹 button's
-        # forced `--aggressive --prune=now` (agent_git_gc() below), which
-        # would be O(n²) over a session if run unconditionally here. Just
-        # keeps loose objects from piling up; failure is swallowed like
-        # everything else in this function.
+        # `--auto` is a near-instant no-op below git's own threshold, cheap
+        # to call every checkpoint. Not the same as the 🧹 button's forced
+        # `--aggressive --prune=now` (agent_git_gc() below) - that would be
+        # too expensive to run unconditionally here.
         try:
             _sp.run(['git', 'gc', '--auto', '-q'], cwd=pdir, capture_output=True, timeout=60)
         except Exception:
@@ -675,13 +690,61 @@ def agent_checkpoint(sess, pid):
 
 def _run_git(pdir, args, timeout=30, text=True):
     import subprocess as _sp
-    return _sp.run(['git'] + args, cwd=pdir, capture_output=True, timeout=timeout, text=text)
+    # Explicit UTF-8 (git's own output encoding) instead of bare text=True:
+    # on Windows that falls back to the system codepage, which can't decode
+    # accents/emoji in commit messages and silently leaves res.stdout as
+    # None instead of raising - crashing every caller. errors='replace'
+    # guarantees a string either way.
+    if text:
+        return _sp.run(['git'] + args, cwd=pdir, capture_output=True, timeout=timeout, encoding='utf-8', errors='replace')
+    return _sp.run(['git'] + args, cwd=pdir, capture_output=True, timeout=timeout)
 
 def _require_git_ref(raw):
     raw = (raw or '').strip()
     if not _SAFE_GIT_REF_RE.match(raw):
         return None
     return raw
+
+# %b (body) included so the "Run: <id>" trailer (appended by
+# checkpointMessage() in agent.js) can be parsed back out, letting the
+# 🕘 modal group a turn's checkpoints. %N (notes, from our own
+# refs/notes/agent-notes - see _AGENT_NOTES_REF) carries a user-added
+# comment/rename, kept as a note rather than editing the commit message
+# itself so hashes never change (restore/deleted/milestone all reference
+# checkpoints by hash - see module comment above _run_git).
+_GIT_LOG_FORMAT = '--pretty=format:%x01%H%x02%h%x02%ci%x02%s%x03%b%x04%N'
+
+def _parse_git_log_output(stdout):
+    """Shared parser for the %x01-delimited log format above. Used by both
+    the log listing and the history search below."""
+    commits = []
+    for line in stdout.split('\x01'):
+        line = line.strip('\n')
+        if not line:
+            continue
+        parts = line.split('\x02', 3)
+        if len(parts) != 4:
+            continue
+        full_hash, short_hash, date, rest = parts
+        rest, _, note = rest.partition('\x04')
+        subject, _, body = rest.partition('\x03')
+        run_match = re.search(r'^Run:\s*(\S+)\s*$', body, re.MULTILINE)
+        commit = {'hash': full_hash, 'shortHash': short_hash, 'date': date, 'message': subject}
+        if run_match:
+            commit['runId'] = run_match.group(1)
+        note = note.strip('\n')
+        if note:
+            commit['note'] = note
+        commits.append(commit)
+    return commits
+
+def _git_log_args(limit, scope_path=None, extra=None):
+    args = ['log', f'-{limit}', f'--notes={_AGENT_NOTES_REF}', _GIT_LOG_FORMAT, '--date=iso']
+    if extra:
+        args += extra
+    if scope_path:
+        args += ['--', scope_path]
+    return args
 
 # /agent/git/<id>/log - checkpoint history, newest first. Optional
 # ?path= to only show commits touching one file; ?limit= (default 200,
@@ -700,41 +763,54 @@ def agent_git_log(sess, pid):
         limit = min(max(int(request.args.get('limit', 200)), 1), 500)
     except (TypeError, ValueError):
         limit = 200
-    # %b (body) included so the "Run: <id>" trailer (appended by
-    # checkpointMessage() in agent.js) can be parsed back out, letting the
-    # 🕘 modal group a turn's checkpoints. Commits without it render as
-    # their own one-commit group (see renderGhGroups()).
-    args = ['log', f'-{limit}', '--pretty=format:%x01%H%x02%h%x02%ci%x02%s%x03%b', '--date=iso']
     scope = (request.args.get('path') or '').strip()
+    rel = None
     if scope:
         resolved = _safe_rel_path(pdir, scope)
         if not resolved:
             return _agent_error(f'Invalid path "{scope}".')
         rel = os.path.relpath(resolved, pdir).replace(os.sep, '/')
-        args += ['--', rel]
-    res = _run_git(pdir, args)
+    res = _run_git(pdir, _git_log_args(limit, rel))
     if res.returncode != 0:
         # Empty repo (no commits yet) exits non-zero; anything else is a
         # genuine failure worth surfacing.
         if 'does not have any commits' in (res.stderr or '') or 'unknown revision' in (res.stderr or ''):
             return _agent_ok({'commits': []})
         return _agent_error((res.stderr or 'git log failed')[:300])
-    commits = []
-    for line in res.stdout.split('\x01'):
-        line = line.strip('\n')
-        if not line:
-            continue
-        parts = line.split('\x02', 3)
-        if len(parts) != 4:
-            continue
-        full_hash, short_hash, date, rest = parts
-        subject, _, body = rest.partition('\x03')
-        run_match = re.search(r'^Run:\s*(\S+)\s*$', body, re.MULTILINE)
-        commit = {'hash': full_hash, 'shortHash': short_hash, 'date': date, 'message': subject}
-        if run_match:
-            commit['runId'] = run_match.group(1)
-        commits.append(commit)
-    return _agent_ok({'commits': commits})
+    return _agent_ok({'commits': _parse_git_log_output(res.stdout)})
+
+# /agent/git/<id>/search?q=&mode=message|content - find checkpoints by
+# commit-message text (default) or by content added/removed in the diff
+# (mode=content, git's "pickaxe" search). Same response shape as /log so
+# the frontend can reuse its rendering.
+@app.route('/agent/git/<pid>/search', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_search(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_ok({'commits': []})
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return _agent_error('Search term is required.')
+    if len(q) > 200:
+        return _agent_error('Search term is too long.')
+    mode = request.args.get('mode') or 'message'
+    try:
+        limit = min(max(int(request.args.get('limit', 200)), 1), 500)
+    except (TypeError, ValueError):
+        limit = 200
+    if mode == 'content':
+        extra = [f'-S{q}']
+        if request.args.get('regex'):
+            extra.append('--pickaxe-regex')
+    else:
+        extra = ['--grep', q, '-i']
+    res = _run_git(pdir, _git_log_args(limit, extra=extra))
+    if res.returncode != 0:
+        return _agent_error((res.stderr or 'search failed')[:300])
+    return _agent_ok({'commits': _parse_git_log_output(res.stdout)})
 
 # /agent/git/<id>/commit/<hash> - which files a checkpoint touched, and how
 # (Added/Modified/Deleted/Renamed), for the "expand a checkpoint" view.
@@ -877,18 +953,40 @@ def agent_git_restore(sess, pid):
         return _agent_error(f'Restore failed: {(checkout.stderr or "")[:300]}')
     # Remove anything present now that didn't exist in the target snapshot
     # (checkout only ever adds/updates paths that ARE in <ref>'s tree).
-    removed = []
+    # Candidates first, then filter out anything .gitignore'd (vendor
+    # folders, local .env, etc.) via one batched `git check-ignore` call -
+    # those are intentionally untracked at EVERY commit, so without this
+    # they'd be wiped out by any whole-project restore regardless of
+    # target ref. `discard` already gets this right via `git clean -fd`
+    # (no -x), which likewise leaves ignored files alone.
+    candidates = []
     for root, dirs, files in os.walk(pdir):
         dirs[:] = [d for d in dirs if d != '.git']
         for fname in files:
             full = os.path.join(root, fname)
             rel = os.path.relpath(full, pdir).replace(os.sep, '/')
             if rel not in target_files:
-                try:
-                    os.remove(full)
-                    removed.append(rel)
-                except OSError:
-                    pass
+                candidates.append((full, rel))
+    ignored = set()
+    if candidates:
+        # _run_git has no stdin support, so call check-ignore directly.
+        import subprocess as _sp
+        try:
+            check = _sp.run(['git', 'check-ignore', '--stdin'], cwd=pdir, capture_output=True,
+                             timeout=30, encoding='utf-8', errors='replace',
+                             input='\n'.join(rel for _, rel in candidates))
+            ignored = set(l for l in check.stdout.split('\n') if l)
+        except Exception:
+            ignored = set()
+    removed = []
+    for full, rel in candidates:
+        if rel in ignored:
+            continue
+        try:
+            os.remove(full)
+            removed.append(rel)
+        except OSError:
+            pass
     # Clean up now-empty directories left behind by the removals above.
     for root, dirs, files in os.walk(pdir, topdown=False):
         if root == pdir or os.path.basename(root) == '.git' or '.git' + os.sep in root:
@@ -934,6 +1032,279 @@ def agent_git_gc(sess, pid):
         return _agent_error(f'git gc failed: {(res.stderr or "")[:300]}')
     after = _dir_size(git_dir)
     return _agent_ok({'before': before, 'after': after})
+
+# /agent/git/<id>/commit - manual, user-triggered checkpoint with a custom
+# message. Unlike /agent/checkpoint/<id> (called automatically by agent.js
+# before mutating tool calls) this works even when auto-checkpointing is
+# OFF for the project, since it's an explicit action the user asked for,
+# not something happening silently in the background.
+@app.route('/agent/git/<pid>/commit', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_manual_commit(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available():
+        return _agent_error('git is not installed on this machine.', 400)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    message = (body.get('message') or 'Manual checkpoint').strip()[:200] or 'Manual checkpoint'
+    result = _git_checkpoint(pdir, message)
+    if not result.get('ok'):
+        return _agent_error(result.get('reason') or 'Commit failed.')
+    if not result.get('committed'):
+        return _agent_ok({**result, 'info': 'Nothing to commit - no changes since the last checkpoint.'})
+    return _agent_ok(result)
+
+# /agent/git/<id>/note/<hash> - GET the note attached to a checkpoint
+# (empty string if none), PUT/DELETE to set or clear it. Stored as a git
+# note (refs/notes/agent-notes), never by editing the commit message or
+# amending/rebasing - that would change the commit's hash and break every
+# other place a checkpoint is referenced by hash (restore, deleted-files,
+# milestones, diff). This is effectively "rename/comment a checkpoint"
+# without history rewriting.
+@app.route('/agent/git/<pid>/note/<hash_>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@_agent_authed
+def agent_git_note(sess, pid, hash_):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    ref = _require_git_ref(hash_)
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    notes_args = ['notes', f'--ref={_AGENT_NOTES_REF}']
+    if request.method == 'GET':
+        res = _run_git(pdir, notes_args + ['show', ref])
+        note = res.stdout.strip() if res.returncode == 0 else ''
+        return _agent_ok({'hash': ref, 'note': note})
+    if request.method == 'DELETE':
+        _run_git(pdir, notes_args + ['remove', '--ignore-missing', ref])
+        return _agent_ok({'hash': ref, 'note': ''})
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    note = (body.get('note') or '').strip()[:500]
+    if not note:
+        _run_git(pdir, notes_args + ['remove', '--ignore-missing', ref])
+        return _agent_ok({'hash': ref, 'note': ''})
+    res = _run_git(pdir, notes_args + ['add', '-f', '-m', note, ref])
+    if res.returncode != 0:
+        return _agent_error(f'Could not save note: {(res.stderr or "")[:200]}')
+    return _agent_ok({'hash': ref, 'note': note})
+
+# /agent/git/<id>/diff?from=&to=&path= - unified diff between two
+# checkpoints (optionally scoped to one file). `to` may be omitted to mean
+# the current working tree (uncommitted changes since `from`), which also
+# covers "diff against the last checkpoint".
+@app.route('/agent/git/<pid>/diff', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_diff(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    from_ref = _require_git_ref(request.args.get('from'))
+    if not from_ref:
+        return _agent_error('Invalid "from" commit reference.')
+    to_raw = (request.args.get('to') or '').strip()
+    to_ref = None
+    if to_raw:
+        to_ref = _require_git_ref(to_raw)
+        if not to_ref:
+            return _agent_error('Invalid "to" commit reference.')
+    args = ['diff', from_ref] + ([to_ref] if to_ref else [])
+    scope = (request.args.get('path') or '').strip()
+    if scope:
+        resolved = _safe_rel_path(pdir, scope)
+        if not resolved:
+            return _agent_error(f'Invalid path "{scope}".')
+        rel = os.path.relpath(resolved, pdir).replace(os.sep, '/')
+        args += ['--', rel]
+    res = _run_git(pdir, args)
+    if res.returncode not in (0, 1):  # git diff exits 1 when there ARE differences - not an error
+        return _agent_error((res.stderr or 'git diff failed')[:300])
+    return _agent_ok({'from': from_ref, 'to': to_ref or 'worktree', 'diff': res.stdout})
+
+# /agent/git/<id>/discard - throws away everything changed since the last
+# checkpoint: reverts tracked files to HEAD and removes untracked files/
+# dirs that aren't gitignored. Only runs on a repo that already has at
+# least one commit; on a brand-new empty repo there's nothing to discard
+# to. Reports what was touched so the frontend can show a summary. This
+# only ever moves the working tree back to an existing commit - it never
+# deletes or rewrites a commit, so it can't destroy checkpoint history.
+@app.route('/agent/git/<pid>/discard', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_discard(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_error('This project has no checkpoint history yet.', 400)
+    head = _run_git(pdir, ['rev-parse', 'HEAD'])
+    if head.returncode != 0:
+        return _agent_error('No checkpoints yet - nothing to discard to.', 400)
+    status = _run_git(pdir, ['status', '--porcelain'])
+    changed = [l[3:] for l in status.stdout.split('\n') if l.strip()]
+    if not changed:
+        return _agent_ok({'discarded': [], 'info': 'No changes since the last checkpoint.'})
+    reset = _run_git(pdir, ['reset', '--hard', 'HEAD'])
+    if reset.returncode != 0:
+        return _agent_error(f'Discard failed: {(reset.stderr or "")[:300]}')
+    clean = _run_git(pdir, ['clean', '-fd'])
+    return _agent_ok({'discarded': changed})
+
+# ── Milestones (pinned checkpoints) ─────────────────────────────────────
+# Lightweight tags under refs/tags/ms/<name>, kept in their own namespace
+# so they never collide with tags a user might create by hand outside this
+# tool. Purely a label on an existing commit - never moves/changes history.
+
+def _milestone_tag(name):
+    return _MILESTONE_TAG_PREFIX + name
+
+@app.route('/agent/git/<pid>/milestones', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_milestones(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_ok({'milestones': []})
+    # NB: unlike `git log --pretty=format`, `for-each-ref --format` has no
+    # %x02-style hex-byte escape - that sequence would print literally as
+    # the four characters "%x02" instead of a delimiter byte, so every
+    # line would silently fail the len(parts)==3 check below and the list
+    # would always come back empty. Splice in a real \x02 from Python.
+    res = _run_git(pdir, ['for-each-ref', f'refs/tags/{_MILESTONE_TAG_PREFIX}',
+                           '--format=%(objectname)\x02%(refname:short)\x02%(creatordate:iso)'])
+    milestones = []
+    if res.returncode == 0:
+        for line in res.stdout.split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split('\x02')
+            if len(parts) != 3:
+                continue
+            full_hash, tag_ref, date = parts
+            name = tag_ref[len(_MILESTONE_TAG_PREFIX):] if tag_ref.startswith(_MILESTONE_TAG_PREFIX) else tag_ref
+            milestones.append({'hash': full_hash, 'name': name, 'date': date})
+    return _agent_ok({'milestones': milestones})
+
+@app.route('/agent/git/<pid>/milestone', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_add_milestone(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_error('This project has no checkpoint history yet.', 400)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    ref = _require_git_ref(body.get('hash'))
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    name = (body.get('name') or '').strip()
+    if not name or not _SAFE_TAG_NAME_RE.match(name):
+        return _agent_error('Milestone name must be 1-80 characters: letters, numbers, dot, dash, underscore.')
+    res = _run_git(pdir, ['tag', _milestone_tag(name), ref])
+    if res.returncode != 0:
+        if 'already exists' in (res.stderr or ''):
+            return _agent_error(f'A milestone named "{name}" already exists.')
+        return _agent_error(f'Could not create milestone: {(res.stderr or "")[:200]}')
+    return _agent_ok({'hash': ref, 'name': name})
+
+@app.route('/agent/git/<pid>/milestone/<name>', methods=['DELETE', 'OPTIONS'])
+@_agent_authed
+def agent_git_remove_milestone(sess, pid, name):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _SAFE_TAG_NAME_RE.match(name or ''):
+        return _agent_error('Invalid milestone name.')
+    res = _run_git(pdir, ['tag', '-d', _milestone_tag(name)])
+    if res.returncode != 0:
+        return _agent_error(f'Milestone "{name}" not found.', 404)
+    return _agent_ok({'name': name, 'removed': True})
+
+# /agent/git/<id>/export?hash= - a checkpoint's full snapshot as a
+# downloadable zip (`git archive`), without touching the working tree.
+@app.route('/agent/git/<pid>/export', methods=['GET', 'OPTIONS'])
+@_agent_authed
+def agent_git_export(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    ref = _require_git_ref(request.args.get('hash'))
+    if not ref:
+        return _agent_error('Invalid commit reference.')
+    res = _run_git(pdir, ['archive', '--format=zip', ref], timeout=60, text=False)
+    if res.returncode != 0:
+        return _agent_error(f'Export failed: {(res.stderr or b"").decode("utf-8", "replace")[:200]}', 404)
+    fname = f'checkpoint-{ref[:12]}.zip'
+    return Response(res.stdout, 200, content_type='application/zip',
+                     headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+
+# /agent/git/<id>/squash - collapse a run of consecutive checkpoints ending
+# at HEAD into a single commit. Restricted to a HEAD-anchored range (fromHash
+# must be an ancestor of HEAD) so nothing else can be referencing the
+# commits being rewritten - the one case where rewriting history is safe
+# here. Refuses if a milestone tag points into the range (would orphan it).
+@app.route('/agent/git/<pid>/squash', methods=['POST', 'OPTIONS'])
+@_agent_authed
+def agent_git_squash(sess, pid):
+    pdir = _project_root_for_id(pid, sess)
+    if not pdir:
+        return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+        return _agent_error('This project has no checkpoint history yet.', 400)
+    try: body = request.get_json(force=True, silent=True) or {}
+    except Exception: body = {}
+    from_ref = _require_git_ref(body.get('fromHash'))
+    if not from_ref:
+        return _agent_error('Invalid "fromHash" commit reference.')
+    head = _run_git(pdir, ['rev-parse', 'HEAD'])
+    if head.returncode != 0:
+        return _agent_error('No checkpoints yet.', 400)
+    is_root = _run_git(pdir, ['rev-parse', f'{from_ref}^']).returncode != 0
+    anc = _run_git(pdir, ['merge-base', '--is-ancestor', from_ref, 'HEAD'])
+    if anc.returncode != 0:
+        return _agent_error('That checkpoint is not on the current history.', 400)
+    range_spec = 'HEAD' if is_root else f'{from_ref}^..HEAD'
+    commits = _run_git(pdir, ['rev-list', '--reverse', range_spec])
+    commit_hashes = set(l for l in commits.stdout.split('\n') if l.strip())
+    if len(commit_hashes) < 2:
+        return _agent_error('Pick a range of at least two checkpoints to squash.')
+    tags = _run_git(pdir, ['for-each-ref', f'refs/tags/{_MILESTONE_TAG_PREFIX}', '--format=%(objectname) %(refname:short)'])
+    for line in tags.stdout.split('\n'):
+        if not line.strip():
+            continue
+        obj, tag_ref = line.split(' ', 1)
+        if obj in commit_hashes:
+            pinned = tag_ref[len(_MILESTONE_TAG_PREFIX):]
+            return _agent_error(f'Checkpoint range includes pinned milestone "{pinned}" - unpin it first.')
+    message = (body.get('message') or '').strip()[:200] or f'Squashed {len(commit_hashes)} checkpoints'
+    # `git reset --soft --root` isn't valid (--root only exists for
+    # git-rebase). Build the squashed commit directly via commit-tree +
+    # update-ref instead: reuses HEAD's tree as-is and only moves the
+    # branch pointer, so it works the same whether from_ref is the first
+    # commit or not, without touching the working tree/index.
+    tree = _run_git(pdir, ['rev-parse', 'HEAD^{tree}'])
+    if tree.returncode != 0:
+        return _agent_error(f'Squash failed: {(tree.stderr or "")[:300]}')
+    tree_hash = tree.stdout.strip()
+    commit_tree_args = ['commit-tree', tree_hash, '-m', message]
+    if not is_root:
+        parent = _run_git(pdir, ['rev-parse', f'{from_ref}^'])
+        if parent.returncode != 0:
+            return _agent_error(f'Squash failed: {(parent.stderr or "")[:300]}')
+        commit_tree_args += ['-p', parent.stdout.strip()]
+    new_commit = _run_git(pdir, commit_tree_args)
+    if new_commit.returncode != 0:
+        return _agent_error(f'Squash failed: {(new_commit.stderr or "")[:300]}')
+    new_hash = new_commit.stdout.strip()
+    branch = _run_git(pdir, ['symbolic-ref', '-q', '--short', 'HEAD'])
+    ref_to_move = f'refs/heads/{branch.stdout.strip()}' if branch.returncode == 0 and branch.stdout.strip() else 'HEAD'
+    moved = _run_git(pdir, ['update-ref', ref_to_move, new_hash])
+    if moved.returncode != 0:
+        return _agent_error(f'Squash failed: {(moved.stderr or "")[:300]}')
+    return _agent_ok({'squashed': len(commit_hashes), 'hash': new_hash, 'message': message})
 
 # /agent/projects/<id>/shell - enable/disable shell execution. Its own
 # explicit endpoint so enabling is a distinct action, independently

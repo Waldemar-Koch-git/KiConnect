@@ -7,7 +7,36 @@ import { getSelectedColor, renderColorRow, syncSettingsPanel, toast } from './mi
 
 export const PROFILE_COLORS = ['#3d7eff','#7c5cfc','#2ecc71','#e74c3c','#f39c12','#1abc9c','#e91e63','#ff6b35'];
 
-export function activeProfile() { return state.profiles.find(p => p.id === state.config.activeProfileId) || null; }
+// Single choke point: everything that cares about "is there a profile in
+// effect right now" (badge, effectiveMaxTokens() in provider-models.js,
+// the agentic profileAddendum() in agent.js) goes through this function.
+// Gating it here — rather than at every call site — means the global
+// master switch (state.config.profilesEnabled) automatically also turns
+// off the profile's temperature/max-tokens overrides and the agentic
+// persona addendum, not just the composer's system prompt.
+export function activeProfile() {
+  if (!state.config.profilesEnabled) return null;
+  return state.profiles.find(p => p.id === state.config.activeProfileId) || null;
+}
+
+// Toggles the whole Agent-Profiles/Persona feature on or off. Off by
+// default (see DEFAULT_CONFIG in core/state.js). Does not touch
+// state.config.activeProfileId or any saved profile data — turning the
+// switch back on picks the previous selection right back up.
+export function setProfilesEnabled(enabled) {
+  state.config.profilesEnabled = !!enabled;
+  save();
+  syncProfilesEnabledUI();
+  renderProfileList();
+  updateProfileBadge();
+}
+
+export function syncProfilesEnabledUI() {
+  const toggle = document.getElementById('profilesEnabledToggle');
+  if (toggle) toggle.checked = !!state.config.profilesEnabled;
+  const panel = document.getElementById('profilePanel');
+  if (panel) panel.classList.toggle('profiles-disabled', !state.config.profilesEnabled);
+}
 
 export function applyProfile(p) {
   if (!p) return;
@@ -21,7 +50,10 @@ export function applyProfile(p) {
     const inp = document.getElementById('modelInput');
     if (inp) inp.value = state.config.model;
   }
-  save(); toast(`${t('js.profileActivated')}: „${p.name}"`);
+  save();
+  toast(state.config.profilesEnabled
+    ? `${t('js.profileActivated')}: „${p.name}"`
+    : `${t('js.profileSelectedButDisabled')}: „${p.name}"`);
 }
 
 export function updateProfileBadge() {
@@ -417,4 +449,4 @@ export function moveProfileFolder(id, dir) {
   save(); renderProfileList();
 }
 
-export function openProfilePanel(){renderProfileList();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}
+export function openProfilePanel(){renderProfileList();syncProfilesEnabledUI();document.getElementById('profilePanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="profilePanel"]')?.classList.add('active');}

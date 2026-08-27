@@ -2,7 +2,7 @@ import { applySessionDuration, changeAccountName, changeLoginPassword, deleteAcc
 import { load, save } from '../auth/storage.js';
 import { clearAttachments, handleDrop, handleEditFileAttach, handleEditImageAttach, handleFileAttach, handleImageAttach, handlePaste } from '../chat/chat-attachments.js';
 import { handleExternalLinkClick, renderMessages, wireCodeCopyButtons } from '../chat/chat-render.js';
-import { handleSendStop, isAgenticWebMode, sendMessage, sendSuggestion } from '../chat/chat-send.js';
+import { AGENTIC_TOOL_MAX_ITERS_CAP, handleSendStop, isAgenticWebMode, sendMessage, sendSuggestion } from '../chat/chat-send.js';
 import { currentChat, handleDragEnter, handleDragLeave, handleDragOver, newChat, newFolder, renderSidebar, toggleSidebar } from '../chat/chat-sidebar.js';
 import { applyTranslations, t, tf, toggleLangDropdown } from './i18n.js';
 import { state } from './state.js';
@@ -10,10 +10,10 @@ import { applyTheme } from './theme.js';
 import { cancelProviderEditor, openProviderPanel, saveProviderEditor, selectProviderType, startNewProvider, updateAudioProviderKeyUI } from '../providers/provider-crud.js';
 import { fetchModels, isAdaptiveThinkingModel, loadEmbeddingModelCandidates, onEmbedModelSelectChange, openModelMaxPanel, resetAllModelMax, splitModelId, testEmbeddingModel, toggleThinking, updatePeMaxTokensUI, updateThinkingIntensityUI, usesTokenBudget } from '../providers/provider-models.js';
 import { applyChatWidth, closePrintSingleOverlay, copyFullChat, openSettings, openTuningPanel, printFullChat, printSingleBubble, resetMathJaxSettings, scheduleTuningSave, setMaxImageStorageBytes, syncSettingsPanel, toast } from '../ui/misc-ui.js';
-import { activeProfile, cancelProfileEditor, newProfileFolder, openProfilePanel, saveProfileEditor, startNewProfile, updateProfileBadge } from '../ui/profiles.js';
+import { activeProfile, cancelProfileEditor, newProfileFolder, openProfilePanel, saveProfileEditor, setProfilesEnabled, startNewProfile, syncProfilesEnabledUI, updateProfileBadge } from '../ui/profiles.js';
 import { endGuidedIntro, nextTourStep, positionTourCard, prevTourStep, shouldAutoStartGuidedIntro, startGuidedIntro } from '../ui/tour.js';
 import { kicVoiceSetSetting } from '../voice.js';
-import { WEB_SEARCH_RESULT_MAX, renderDetectedLinks, syncWebContextPopover, toggleWebContextPopover, toggleWebSearch, updateWebSearchButton, updateWebSearchKeyUI } from '../websearch/web-search.js';
+import { WEB_SEARCH_RESULT_MAX, openAgentSettingsFromWebNotice, renderDetectedLinks, syncWebContextPopover, toggleWebContextPopover, toggleWebSearch, updateWebSearchButton, updateWebSearchKeyUI } from '../websearch/web-search.js';
 
 if (typeof pdfjsLib !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = '_render/pdf.worker.js';
@@ -199,8 +199,18 @@ export function setupEventListeners(){
     syncWebContextPopover();
     scheduleTuningSave();
   });
+  document.getElementById('webSearchAgenticIters')?.addEventListener('input', e=>{
+    const val = Math.max(1, Math.min(AGENTIC_TOOL_MAX_ITERS_CAP, parseInt(e.target.value) || 4));
+    document.getElementById('webSearchAgenticItersVal').textContent = val;
+    state.config.webSearchAgenticMaxIters = val;
+    scheduleTuningSave();
+  });
   document.getElementById('webSearchMode')?.addEventListener('change', e=>{
-    state.config.webSearchMode = e.target.value || 'manual';
+    // 'auto'/'always' no longer exist as options (retired in v4.0.0 — see
+    // auth/storage.js load() for the migration of any old stored value),
+    // so fall back to 'manual' for anything outside the surviving set.
+    const val = e.target.value;
+    state.config.webSearchMode = ['manual','off','agentic'].includes(val) ? val : 'manual';
     if(state.config.webSearchMode==='off') state.config.webSearchEnabled=false;
     updateWebSearchButton();
     save();
@@ -272,6 +282,9 @@ export function setupEventListeners(){
   // Profile Panel
   document.getElementById('profilePanelClose').addEventListener('click', closePanels);
   document.getElementById('addProfileBtn').addEventListener('click', startNewProfile);
+  document.getElementById('profilesEnabledToggle')?.addEventListener('change', e=>{
+    setProfilesEnabled(e.target.checked);
+  });
   document.getElementById('addProfileFolderBtn')?.addEventListener('click', newProfileFolder);
   document.getElementById('saveProfileBtn').addEventListener('click', saveProfileEditor);
   document.getElementById('cancelProfileBtn').addEventListener('click', cancelProfileEditor);
@@ -318,6 +331,7 @@ export function setupEventListeners(){
   });
   document.getElementById('webContextPopover')?.addEventListener('click', e => e.stopPropagation());
   document.getElementById('webSearchToggle')?.addEventListener('click', toggleWebSearch);
+  document.getElementById('webContextAgentNoticeBtn')?.addEventListener('click', openAgentSettingsFromWebNotice);
   document.getElementById('webAgenticToggle')?.addEventListener('click', () => {
     if (isAgenticWebMode()) {
       state.config.webSearchMode = 'manual';
@@ -429,6 +443,7 @@ export async function bootApp() {
   await load();
   applyTranslations();
   updateProfileBadge();
+  syncProfilesEnabledUI();
   syncSettingsPanel();
   loadSessionSettings();
   if (state.config.chatMaxWidth) applyChatWidth(state.config.chatMaxWidth);

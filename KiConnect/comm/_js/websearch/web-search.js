@@ -1,30 +1,66 @@
 import { formatLinkedPagesBlock, formatWebSearchBlock, stripQuotedAndCodeBlocks } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { escHtml } from '../chat/chat-render.js';
+import { currentChat } from '../chat/chat-sidebar.js';
 import { isAgenticWebMode, setMiniToggle } from '../chat/chat-send.js';
 import { getAcceptLanguage, t } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { proxyPublicUrl, proxyUrl } from '../providers/provider-crud.js';
-import { openSettings, toast } from '../ui/misc-ui.js';
+import { onLanguageChange, openSettings, toast } from '../ui/misc-ui.js';
 
 export let webSearchCache = new Map();
 
 export const WEB_SEARCH_RESULT_MAX = 30;
 
+// Lets agent.js hand us a way to jump straight to its ⚙ Agent Settings
+// panel (set via registerAgentSettingsOpener() at boot, if the coding-agent
+// module is present at all). Kept as an optional callback — rather than a
+// direct import of agent.js — so this module has no hard dependency on the
+// agent feature and there's no import cycle (agent.js already imports THIS
+// module for performWebSearch/fetchLinkedPage).
+let _openAgentSettings = null;
+export function registerAgentSettingsOpener(fn) { _openAgentSettings = typeof fn === 'function' ? fn : null; }
+
+// The project (if any) the composer is currently filed into. Returns null
+// for a plain chat, so every call site below can treat "focused project"
+// and "normal chat" as the two branches of one flag instead of re-deriving
+// this from state.folders/currentChat() in three different places.
+function focusedAgentProject() {
+  const chat = currentChat();
+  const folder = chat && state.folders.find(f => f.id === chat.folderId);
+  return (folder && folder.agentProject) ? folder : null;
+}
+
 export function updateWebSearchButton(searching=false) {
   const btn = document.getElementById('webSearchBtn');
   if (!btn) return;
+  const project = focusedAgentProject();
   const mode = state.config.webSearchMode || 'manual';
-  const active = mode === 'always' || mode === 'agentic' || state.config.webSearchEnabled;
-  btn.classList.toggle('active', active && mode !== 'off');
+  const active = mode === 'agentic' || state.config.webSearchEnabled;
+  btn.classList.toggle('active', active && mode !== 'off' && !project);
+  // Distinct visual state in project/agent mode: this button's own setting
+  // has no effect there (the agent has its own web_search/fetch_url tools,
+  // gated separately in ⚙ Agent Settings — see agent.js toolSchema()), so it
+  // must not look "on"/"off" as if it did.
+  btn.classList.toggle('agent-scope', !!project);
   btn.classList.toggle('link-active', !!state.config.webLinkEnabled && getSelectedReadableUrls().length > 0);
   btn.classList.toggle('searching', searching);
-  btn.disabled = mode === 'off' || searching;
-  btn.textContent = searching ? '...' : (mode === 'agentic' ? 'Web 🕵🏻🌐' : 'Web ▾');
+  // Never fully disabled in project mode — it stays clickable so the
+  // popover's clarification banner (see syncWebContextPopover) is reachable.
+  btn.disabled = (mode === 'off' && !project) || searching;
+  btn.textContent = searching ? '...' : (project ? '🤖 Web' : (mode === 'agentic' ? 'Web 🕵🏻🌐' : 'Web ▾'));
+  btn.title = project ? t('web.agentModeTitle') : t('web.buttonTitle');
   syncWebContextPopover();
 }
 
 export function toggleWebSearch() {
+  // In project/agent mode this toggle doesn't govern anything the agent
+  // reads (see updateWebSearchButton) — redirect to the real control
+  // instead of silently flipping a setting with no effect.
+  if (focusedAgentProject()) {
+    toast(t('web.agentModeToast'));
+    return;
+  }
   if ((state.config.webSearchMode || 'manual') === 'off') {
     toast(t('web.offToast'));
     return;
@@ -44,6 +80,18 @@ export function toggleWebContextPopover(force) {
 }
 
 export function syncWebContextPopover() {
+  const project = focusedAgentProject();
+  const notice = document.getElementById('webContextAgentNotice');
+  const controls = document.getElementById('webContextControls');
+  if (notice) {
+    notice.hidden = !project;
+    const label = document.getElementById('webContextAgentNoticeText');
+    if (label) label.textContent = project ? t('web.agentModeNotice') : '';
+  }
+  // Hide the manual/agentic/link controls entirely while a project is
+  // focused instead of leaving them visible-but-inert — they read/write
+  // state.config.webSearch*, none of which the agent's tool loop consults.
+  if (controls) controls.hidden = !!project;
   setMiniToggle(document.getElementById('webSearchToggle'), shouldUseWebSearch(document.getElementById('messageInput')?.value || ''));
   setMiniToggle(document.getElementById('webAgenticToggle'), isAgenticWebMode());
   setMiniToggle(document.getElementById('webLinkToggle'), !!state.config.webLinkEnabled);
@@ -53,6 +101,15 @@ export function syncWebContextPopover() {
   if (countEl && `${countEl.value}` !== `${count}`) countEl.value = count;
   if (countVal) countVal.textContent = count;
   renderDetectedLinks();
+}
+
+// Wired to #webContextAgentNoticeBtn's click in boot.js. Closes the popover
+// and hands off to agent.js's own settings panel — a no-op (button hidden
+// via CSS, see kiconnect.css) if the agent module never registered itself.
+export function openAgentSettingsFromWebNotice() {
+  if (!_openAgentSettings) return;
+  toggleWebContextPopover(false);
+  _openAgentSettings();
 }
 
 export function hostLabel(url) {
@@ -109,9 +166,7 @@ export function shouldAutoWebSearch(text) {
 export function shouldUseWebSearch(text) {
   const mode = state.config.webSearchMode || 'manual';
   if (mode === 'off' || mode === 'agentic') return false;
-  if (mode === 'always') return true;
-  if (state.config.webSearchEnabled) return true;
-  return mode === 'auto' && shouldAutoWebSearch(text);
+  return !!state.config.webSearchEnabled;
 }
 
 export function cleanSearchQuery(text) {
@@ -640,3 +695,15 @@ export function buildLinkedPageAugmentedContent(originalContent, pages) {
   if (Array.isArray(originalContent)) return [linkPart, ...originalContent];
   return [linkPart, { type: 'text', text: originalContent || '' }];
 }
+
+// The button's label/title and the popover's notice text are set in JS
+// (they depend on whether a project is focused, not just the language), so
+// the generic data-i18n pass in setLang() can't retranslate them on its
+// own — re-derive both after it runs. See i18n.js: this listener list is
+// invoked after applyTranslations(), so this correctly wins over any stale
+// data-i18n markup for #webSearchBtn's title.
+onLanguageChange(() => {
+  updateWebSearchButton();
+  const popover = document.getElementById('webContextPopover');
+  if (popover && !popover.hidden) syncWebContextPopover();
+});

@@ -20,7 +20,7 @@ import { getProviderEndpoint, proxyUrl } from './providers/provider-crud.js';
 import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
 import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
 import { activeProfile } from './ui/profiles.js';
-import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
+import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateWebSearchButton } from './websearch/web-search.js';
 
 // ── i18n helper (falls back to the given text if no TRANSLATIONS
   // entry exists — this module doesn't require editing the i18n file) ─
@@ -64,7 +64,15 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
   // calls queue behind one confirm bar (known limitation).
   let pendingConfirm = null;
 
-  const MAX_ITERATIONS = 200;
+  const MAX_ITERATIONS = 200; // fallback/default — see effectiveMaxIterations()
+
+  // Per-project override for MAX_ITERATIONS, set via the ⚙ Agent Settings
+  // panel's number field. Falls back to the 200 default when unset or
+  // out of the sane 10–1000 range (e.g. corrupted localStorage).
+  function effectiveMaxIterations(folder) {
+    const v = parseInt(folder && folder.agentMaxIterations, 10);
+    return Number.isFinite(v) && v >= 10 && v <= 1000 ? v : MAX_ITERATIONS;
+  }
 
   // Shrinks old tool_results in `history` to save tokens on providers
   // WITHOUT automatic prefix caching (see KNOWN_CACHING_PROVIDERS — for
@@ -190,27 +198,70 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       { type: 'function', function: { name: 'create_directories', description: 'Creates several (possibly nested) folders in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
       { type: 'function', function: { name: 'delete_directory', description: 'Permanently deletes a folder and all of its contents.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
       { type: 'function', function: { name: 'delete_directories', description: 'Permanently deletes several folders (and their contents) in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
-      { type: 'function', function: { name: 'web_search', description: 'Searches the web via the search engine configured in KI Connect and returns title, URL, and short description of the results. Useful for current information, documentation, or library/API research while working on the project.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
-      { type: 'function', function: { name: 'fetch_url', description: 'Fetches a single webpage and returns its readable text content (e.g. to read a documentation page or search result more closely).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
-      { type: 'function', function: { name: 'git_log', description: 'Lists this project\'s local checkpoint history (newest first) — every automatic git commit made as files were changed. Use this to see what has changed over time, find a specific earlier state to inspect or restore, or figure out which checkpoint a bug was introduced in. Pass `path` to only show checkpoints that touched one specific file (useful to find that file\'s own history, including checkpoints from before it was later deleted). Each entry has a `hash` (full) and `shortHash` you can pass to git_show_commit, git_file_at, or git_restore. Returns an empty list if checkpointing was never enabled for this project or nothing has changed yet — that is not an error.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Optional: only show checkpoints that touched this file (path relative to the project root).' }, limit: { type: 'integer', description: 'Optional: max number of checkpoints to return (default 200, capped at 500).' } } } } },
-      { type: 'function', function: { name: 'git_show_commit', description: 'Shows the details of one checkpoint (commit): its message, date, and exactly which files it added, modified, deleted, or renamed. Use this after git_log to see what a specific checkpoint actually changed before deciding whether to inspect its files (git_file_at) or restore from it (git_restore).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash from git_log (full or shortHash).' } }, required: ['hash'] } } },
-      { type: 'function', function: { name: 'git_file_at', description: 'Reads a file\'s content exactly as it was at a given checkpoint — without changing anything on disk. Use this to inspect an older version of a file (e.g. to compare it with the current one, or to decide whether it\'s worth restoring) before calling git_restore. Also works for files that have since been deleted, by passing a hash from BEFORE the deletion (e.g. the `restoreHash` from git_list_deleted, or "<deleteCommitHash>~1" for the commit right before a file was removed).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash (full or shortHash), optionally suffixed with "~1" etc. to mean "N commits before this one".' }, path: { type: 'string', description: 'File path relative to the project root.' } }, required: ['hash', 'path'] } } },
-      { type: 'function', function: { name: 'git_list_deleted', description: 'Lists files that were deleted at some point in this project\'s checkpoint history and are still missing now (files that were deleted and later recreated are not included). Each entry includes a ready-to-use `restoreHash` — pass it straight to git_restore (with that file\'s `path`) to bring the file back. Use this whenever the user asks to recover, undelete, or restore a file whose exact name/path you don\'t already know.', parameters: { type: 'object', properties: {} } } },
-      { type: 'function', function: { name: 'git_restore', description: 'Restores content from an earlier checkpoint. This actually changes files on disk (a fresh checkpoint of the result is taken automatically afterwards, so a restore can itself always be undone the same way). Two modes: pass `paths` to restore only those specific files/folders to their state at `hash` (this also recreates files that were deleted — get the right hash from git_list_deleted or git_log first); omit `paths` to restore the ENTIRE project to its state at `hash`, which also removes any file that did not exist yet at that checkpoint. Only use whole-project restore when the user actually wants to roll back everything, not just recover one or two files — prefer the `paths` form whenever possible since it is far less destructive.', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'The checkpoint to restore from (a hash from git_log/git_show_commit/git_list_deleted).' }, paths: { type: 'array', items: { type: 'string' }, description: 'Optional: restore only these files/folders instead of the whole project.' } }, required: ['hash'] } } },
     ];
+    // Marks where the always-present "core" tools end and the toggleable
+    // ones (web_search/fetch_url, run_command, git checkpoints — each
+    // gated by its own ⚙ Agent Settings flag) begin. callModel() uses this
+    // to put a SECOND, earlier cache_control breakpoint here (in addition
+    // to the one at the very end of the array): without it, a single
+    // end-of-array breakpoint means flipping ANY one of those toggles
+    // busts the cache for the entire tools+system prefix, even though the
+    // core tools (used on every single request) never changed. With two
+    // breakpoints, toggling web search only re-bills the small toggleable
+    // tail, not the whole prefix. Non-enumerable so it doesn't leak into
+    // JSON.stringify(tools) if that's ever logged/sent anywhere.
+    Object.defineProperty(tools, '_coreEnd', { value: tools.length, enumerable: false });
+    // web_search/fetch_url are on by default (unlike shell/checkpoints,
+    // which default OFF) — most projects benefit from them and there's no
+    // security dimension, only a token-cost one. `!== false` so existing
+    // folders from before this setting existed (agentWebSearchEnabled is
+    // undefined) keep working exactly as before. Independent of the
+    // composer's own "Web" button/mode (state.config.webSearchMode) — see
+    // ⚙ Agent Settings, and the composer-side clarification in
+    // web-search.js's syncWebContextPopover().
+    if (!folder || folder.agentWebSearchEnabled !== false) {
+      tools.push(
+        { type: 'function', function: { name: 'web_search', description: 'Searches the web via the search engine configured in KI Connect and returns title, URL, and short description of the results. Useful for current information, documentation, or library/API research while working on the project.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
+        { type: 'function', function: { name: 'fetch_url', description: 'Fetches a single webpage and returns its readable text content (e.g. to read a documentation page or search result more closely).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
+      );
+    }
     // Only offered to the model at all if the user explicitly enabled shell
     // execution for THIS project (⚙ Agent Settings) — see agentExec().
     if (folder && folder.agentShellEnabled) {
       tools.push({ type: 'function', function: { name: 'run_command', description: 'Runs a terminal command in the project folder (e.g. npm install, pytest, ls) and returns stdout/stderr/exit code. Runs with the same permissions as the local server — use sparingly and precisely.', parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string', description: 'Optional: subfolder relative to the project root in which the command runs.' } }, required: ['command'] } } });
     }
+    // Git/checkpoint tools only make sense — and only ever return non-empty
+    // results — when checkpointing is enabled for THIS project (⚙ Agent
+    // Settings, same toggle as agentCheckpointsEnabled below). Keeping them
+    // out of the schema otherwise saves ~5 verbose tool definitions worth of
+    // tokens on every request for projects that never turned checkpoints on.
+    if (folder && folder.agentCheckpointsEnabled) {
+      tools.push(
+        { type: 'function', function: { name: 'git_log', description: 'Lists this project\'s local checkpoint history (newest first) — every automatic git commit made as files were changed. Use this to see what has changed over time, find a specific earlier state to inspect or restore, or figure out which checkpoint a bug was introduced in. Pass `path` to only show checkpoints that touched one specific file (useful to find that file\'s own history, including checkpoints from before it was later deleted). Each entry has a `hash` (full) and `shortHash` you can pass to git_show_commit, git_file_at, or git_restore.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Optional: only show checkpoints that touched this file (path relative to the project root).' }, limit: { type: 'integer', description: 'Optional: max number of checkpoints to return (default 200, capped at 500).' } } } } },
+        { type: 'function', function: { name: 'git_show_commit', description: 'Shows the details of one checkpoint (commit): its message, date, and exactly which files it added, modified, deleted, or renamed. Use this after git_log to see what a specific checkpoint actually changed before deciding whether to inspect its files (git_file_at) or restore from it (git_restore).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash from git_log (full or shortHash).' } }, required: ['hash'] } } },
+        { type: 'function', function: { name: 'git_file_at', description: 'Reads a file\'s content exactly as it was at a given checkpoint — without changing anything on disk. Use this to inspect an older version of a file (e.g. to compare it with the current one, or to decide whether it\'s worth restoring) before calling git_restore. Also works for files that have since been deleted, by passing a hash from BEFORE the deletion (e.g. the `restoreHash` from git_list_deleted, or "<deleteCommitHash>~1" for the commit right before a file was removed).', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'A commit hash (full or shortHash), optionally suffixed with "~1" etc. to mean "N commits before this one".' }, path: { type: 'string', description: 'File path relative to the project root.' } }, required: ['hash', 'path'] } } },
+        { type: 'function', function: { name: 'git_list_deleted', description: 'Lists files that were deleted at some point in this project\'s checkpoint history and are still missing now (files that were deleted and later recreated are not included). Each entry includes a ready-to-use `restoreHash` — pass it straight to git_restore (with that file\'s `path`) to bring the file back. Use this whenever the user asks to recover, undelete, or restore a file whose exact name/path you don\'t already know.', parameters: { type: 'object', properties: {} } } },
+        { type: 'function', function: { name: 'git_restore', description: 'Restores content from an earlier checkpoint. This actually changes files on disk (a fresh checkpoint of the result is taken automatically afterwards, so a restore can itself always be undone the same way). Two modes: pass `paths` to restore only those specific files/folders to their state at `hash` (this also recreates files that were deleted — get the right hash from git_list_deleted or git_log first); omit `paths` to restore the ENTIRE project to its state at `hash`, which also removes any file that did not exist yet at that checkpoint. Only use whole-project restore when the user actually wants to roll back everything, not just recover one or two files — prefer the `paths` form whenever possible since it is far less destructive.', parameters: { type: 'object', properties: { hash: { type: 'string', description: 'The checkpoint to restore from (a hash from git_log/git_show_commit/git_list_deleted).' }, paths: { type: 'array', items: { type: 'string' }, description: 'Optional: restore only these files/folders instead of the whole project.' } }, required: ['hash'] } } },
+      );
+    }
     return tools;
   }
   // Same tools in Anthropic's `tools` shape, for the Messages API.
   function toolSchemaAnthropic(folder) {
-    return toolSchema(folder).map(f => ({ name: f.function.name, description: f.function.description, input_schema: f.function.parameters }));
+    const tools = toolSchema(folder);
+    const mapped = tools.map(f => ({ name: f.function.name, description: f.function.description, input_schema: f.function.parameters }));
+    // .map() drops non-enumerable/custom props, so re-attach _coreEnd —
+    // see toolSchema() for what it's for.
+    Object.defineProperty(mapped, '_coreEnd', { value: tools._coreEnd, enumerable: false });
+    return mapped;
   }
   // Internal system prompt, always English regardless of UI language.
-  function systemPrompt(projectName) {
+  // `folder` is optional for backwards compatibility with any external
+  // caller that still invokes this with just a name; omitting it just
+  // means the web_search/fetch_url line below is included by default,
+  // matching toolSchema()'s own default-on behavior.
+  function systemPrompt(projectName, folder) {
+    const webSearchOffered = !folder || folder.agentWebSearchEnabled !== false;
     return [
       `You are an autonomous coding agent with access to the local project folder "${projectName}".`,
       `That project folder itself is the root every path you pass to a tool is relative to — it already IS "${projectName}", so paths must NOT repeat that name. To create a file directly in the project, pass "file.txt", not "${projectName}/file.txt". Never create a new top-level folder that just repeats the project's own name ("${projectName}/${projectName}/...") — if list_files already shows a folder with that name at the root, that is almost always a mistake from an earlier step, not something to build on; ask yourself whether you actually meant the project root itself before adding another folder like it.`,
@@ -220,10 +271,14 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       `Prefer the batch tools (read_files, write_files, delete_files, create_directories, delete_directories) over calling their single-file counterparts repeatedly whenever a task touches more than one file — e.g. for "delete all files in this folder" call list_files once, then delete_files once with every matching path, not one delete_file call per file.`,
       `Prefer edit_file over write_file for a small change to an otherwise-large file — it only needs the exact snippet being changed, not the whole file; pass edit_file's \`edits\` array when a file needs several separate changes, instead of calling edit_file once per change. Use move_file to rename/relocate a file or folder instead of reading and rewriting its content — but move_file DELETES the original, so never use it for "copy"/"duplicate" requests; use copy_file (or copy_files for several items) for those instead, since it leaves the original in place. Use replace_in_files instead of read_file+edit_file per file when the exact same text needs to change in several files at once (e.g. renaming a function everywhere it's used) — search_in_files first to find which files are affected.`,
       `Tool results can be large (e.g. a big file's content) and may be shown to you truncated with a note saying how much was cut off. NEVER call write_file on a file you only saw truncated or partially — you would overwrite the rest of the file with content you never actually saw. For reorganizing, reformatting, or otherwise touching most of a large file, use several edit_file/replace_in_files calls on the specific parts that change instead of write_file with the whole new content.`,
-      `Use web_search and fetch_url when you need current information, documentation, or details about a library/API that you're not sure about.`,
+      // Omitted (instead of e.g. "web_search is unavailable") when the tools
+      // themselves aren't offered — no point telling the model about a
+      // capability it doesn't have and that it might otherwise ask the user
+      // to confirm/retry.
+      webSearchOffered ? `Use web_search and fetch_url when you need current information, documentation, or details about a library/API that you're not sure about.` : null,
       `Only make changes that belong to the given task. At the end, reply in short, plain prose about what you did — that ends the run.`,
       `If important information is missing, make a reasonable assumption, state it briefly, and continue instead of asking back.`,
-    ].join(' ') + profileAddendum();
+    ].filter(Boolean).join(' ') + profileAddendum();
   }
 
   // Appends the active profile's custom system prompt (if any) AFTER the
@@ -404,6 +459,71 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(paths ? { hash, paths } : { hash }),
     }, true);
+  }
+  // ── New git controls (see kiconnect-proxy.py /agent/git/* additions) ──
+  async function apiGitManualCommit(project, message) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/commit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }),
+    }, true);
+  }
+  async function apiGitDiscard(project) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/discard`, { method: 'POST' }, true);
+  }
+  async function apiGitDiff(project, from, to, path) {
+    const params = new URLSearchParams({ from });
+    if (to) params.set('to', to);
+    if (path) params.set('path', path);
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/diff?${params.toString()}`, undefined, true);
+  }
+  async function apiGitGetNote(project, hash) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/note/${encodeURIComponent(hash)}`, undefined, true);
+  }
+  async function apiGitSetNote(project, hash, note) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/note/${encodeURIComponent(hash)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
+    }, true);
+  }
+  async function apiGitDeleteNote(project, hash) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/note/${encodeURIComponent(hash)}`, { method: 'DELETE' }, true);
+  }
+  async function apiGitMilestones(project) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/milestones`, undefined, true);
+  }
+  async function apiGitAddMilestone(project, hash, name) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/milestone`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hash, name }),
+    }, true);
+  }
+  async function apiGitRemoveMilestone(project, name) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/milestone/${encodeURIComponent(name)}`, { method: 'DELETE' }, true);
+  }
+  async function apiGitSearch(project, q, mode) {
+    const params = new URLSearchParams({ q, mode: mode || 'message' });
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/search?${params.toString()}`, undefined, true);
+  }
+  async function apiGitSquash(project, fromHash, message) {
+    return agentJson(`/agent/git/${encodeURIComponent(project)}/squash`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fromHash, message }),
+    }, true);
+  }
+  // Binary download (zip) - can't go through agentJson (expects JSON), and
+  // a plain <a href> would skip agentFetch()'s auth header, so fetch as a
+  // blob and trigger the save via a throwaway object URL instead.
+  async function apiGitExportDownload(project, hash, filenameHint) {
+    const res = await agentFetch(`/agent/git/${encodeURIComponent(project)}/export?hash=${encodeURIComponent(hash)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filenameHint || `checkpoint-${hash.slice(0, 12)}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
   }
   // Stages+commits whatever changed since the last checkpoint. Called before
   // a mutating tool runs; never blocks the tool on failure (a missing safety
@@ -607,6 +727,14 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       for (const p of paths) files.push({ path: p, ...(await cachedReadFile(project, p)) });
       return { files };
     }
+    if (name === 'web_search' || name === 'fetch_url') {
+      // Defense in depth, not the primary gate: toolSchema() already leaves
+      // these two out of the model's tool list when disabled, so this only
+      // matters if a call still comes in — e.g. a tool_use queued from a
+      // response that started before the setting was flipped mid-run.
+      const f = state.folders.find(x => x.agentProject === project);
+      if (f && f.agentWebSearchEnabled === false) return { error: t('agent.err.webSearchDisabled') };
+    }
     if (name === 'web_search') {
       if (!args.query) return { error: t('agent.err.missingQuery') };
       try {
@@ -694,15 +822,11 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     }
 
     // Real mutation about to happen — checkpoint first if enabled, so the
-    // change stays recoverable. A failed/unavailable git never blocks the
-    // tool call; it's surfaced once per project per session instead of
-    // failing silently forever. `run.hadMutation` is tracked regardless of
-    // whether checkpoints are enabled (see runAgentCompletion's `finally`).
-    // This checkpoint actually captures the PREVIOUS mutating call's effect
-    // (whatever changed since the last checkpoint), since `name` hasn't run
-    // yet — hence labeled with `run._pendingCheckpointMsg` set by that
-    // previous call, not `name`/`args`, or every checkpoint would be
-    // mislabeled one action late.
+    // change stays recoverable. `name` hasn't run yet, so this actually
+    // commits the PREVIOUS mutating call's effect — hence the label comes
+    // from `run._pendingCheckpointMsg` (set by that call), not `name`/`args`,
+    // or every checkpoint would be mislabeled one action late. A failed/
+    // unavailable git never blocks the tool call, just surfaces once.
     if (MUTATING_TOOL_NAMES.has(name)) {
       if (run) run.hadMutation = true;
       if (project && projectCheckpointsEnabled(project)) {
@@ -911,7 +1035,25 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
       // every iteration, so `ephemeral` lets Anthropic serve them from
       // cache instead of billing fresh input.
       const toolsForModel = toolSchemaAnthropic(folder);
-      if (toolsForModel.length) toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
+      if (toolsForModel.length) {
+        // Two breakpoints, not one: an earlier one right after the
+        // always-present "core" tools (_coreEnd, set in toolSchema()), and
+        // the usual one at the very end. Without the first, toggling any
+        // per-project tool switch (web search, shell, git checkpoints)
+        // would bust the cache for the ENTIRE tools+system prefix, since
+        // one end-of-array breakpoint covers everything up to it. With
+        // both, the core segment — used on every request regardless of
+        // those toggles — keeps its own independent, unaffected cache;
+        // only the smaller toggleable tail gets reprocessed. Uses our 4th
+        // and last available Anthropic cache_control slot (system + this
+        // + last message = the other 3 — see below and toAnthropicHistory
+        // call site).
+        const coreEnd = toolsForModel._coreEnd;
+        if (coreEnd && coreEnd > 0 && coreEnd < toolsForModel.length) {
+          toolsForModel[coreEnd - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
+        }
+        toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
+      }
       // Second cache breakpoint on the message history: without it, only
       // tool schema/system prompt were cached and every follow-up re-billed
       // the entire growing history (a "read this file, split it up" task
@@ -1004,6 +1146,14 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     // Mistral's caching is automatic but more reliable with a reused
     // prompt_cache_key across requests sharing a prefix (docs.mistral.ai).
     if (provider.type === 'mistral' && sessionId) reqBody.prompt_cache_key = String(sessionId);
+    // OpenAI's caching is also automatic (no cache_control needed, unlike
+    // Anthropic above) but lives on individual backend machines — a
+    // request only hits the cache if it's ROUTED to a machine that has it.
+    // prompt_cache_key is OpenAI's own documented routing hint for exactly
+    // this (developers.openai.com/api/docs/guides/prompt-caching); without
+    // it, requests for the same chat can bounce between machines under
+    // load and miss a cache that's genuinely still there.
+    if (provider.type === 'openai-direct' && sessionId) reqBody.prompt_cache_key = String(sessionId);
     const extraHeaders = {};
     if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
     if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
@@ -1552,7 +1702,7 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     rerenderCurrentRun(run);
 
     let history = [
-      { role: 'system', text: systemPrompt(folder.name) },
+      { role: 'system', text: systemPrompt(folder.name, folder) },
       ...priorHistory,
       Array.isArray(content) ? { role: 'user', text: task, content } : { role: 'user', text: task },
     ];
@@ -1561,12 +1711,13 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
     _readFileCache.clear();
 
     let iterations = 0, aborted = false;
+    const maxIterations = effectiveMaxIterations(folder);
     // A single agent "turn" can involve several model calls (one per
     // tool round-trip) — sum them so the badge reflects the full cost.
     const totalUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     let sawUsage = false;
     try {
-      while (iterations < MAX_ITERATIONS) {
+      while (iterations < maxIterations) {
         iterations++;
         // Only compact for providers without confirmed prefix caching (see
         // KNOWN_CACHING_PROVIDERS).
@@ -1614,15 +1765,12 @@ import { fetchLinkedPage, performWebSearch } from './websearch/web-search.js';
         history.push({ role: 'tool_results', results: toolResults });
         if (aborted) break;
       }
-      if (iterations >= MAX_ITERATIONS) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: MAX_ITERATIONS })}` }); rerenderCurrentRun(run); }
+      if (iterations >= maxIterations) { steps.push({ kind: 'text', text: `⚠️ ${tf('agent.maxIterations', { n: maxIterations })}` }); rerenderCurrentRun(run); }
       if (aborted) { steps.push({ kind: 'text', text: `⏹ ${t('agent.aborted')}` }); rerenderCurrentRun(run); }
     } finally {
-      // Every mutating tool checkpoints BEFORE it runs (see executeTool),
-      // so the run's LAST mutation is never itself committed by that
-      // mechanism — it would sit uncommitted until some future call
-      // (possibly next session) mislabels it. Take one final checkpoint
-      // here after the loop ends for any reason, so the run's true final
-      // state always gets its own commit.
+      // Every mutating tool checkpoints BEFORE it runs (see executeTool), so
+      // the run's LAST mutation is never committed by that mechanism. Take
+      // one final checkpoint here so the run's true end state is captured.
       if (run.hadMutation && folder.agentProject && projectCheckpointsEnabled(folder.agentProject)) {
         const fallbackMsg = run.runId ? `Agent: end of turn\n\nRun: ${run.runId}` : 'Agent: end of turn';
         try { await apiCheckpoint(folder.agentProject, run._pendingCheckpointMsg || fallbackMsg); }
@@ -1840,6 +1988,14 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
 .gh-group-badge{flex-shrink:0;font-size:10.5px;color:var(--muted,#888);border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;padding:1px 7px;}
 .gh-group-inner{border-top:1px solid var(--border,rgba(128,128,128,.15));padding:6px 8px 2px;display:flex;flex-direction:column;gap:6px;}
 .gh-group-inner .gh-commit{margin-bottom:0;}
+.gh-actions{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;}
+.gh-search-row{display:flex;align-items:center;gap:4px;flex:1;min-width:160px;}
+.gh-search-row select{padding:4px 5px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.25));background:var(--surface2,rgba(128,128,128,.08));color:var(--text,#eee);font-size:11px;}
+.gh-search-row input{flex:1;min-width:0;padding:4px 7px;border-radius:6px;border:1px solid var(--border,rgba(128,128,128,.25));background:var(--surface2,rgba(128,128,128,.08));color:var(--text,#eee);font-size:11.5px;}
+.gh-commit-actions{display:flex;align-items:center;gap:2px;flex-shrink:0;}
+.gh-commit-actions .agent-small-btn{padding:2px 6px;font-size:12px;}
+.gh-commit-diff{border-top:1px solid var(--border,rgba(128,128,128,.15));padding:6px;}
+.gh-diff-pre{margin:0;font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-all;max-height:280px;overflow-y:auto;font-family:ui-monospace,Consolas,monospace;color:var(--text,#eee);}
 `;
     document.head.appendChild(s);
   }
@@ -1975,6 +2131,11 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       hdrBtn.firstChild.textContent = focused ? '🤖 ' : '📁 ';
       hdrLabel.textContent = focused ? folder.name : t('agent.noProject');
     }
+    // The composer's own "Web" button/popover looks and behaves differently
+    // while a project is focused (see web-search.js) — nothing else calls
+    // updateWebSearchButton() on a chat/project switch, only on the web
+    // module's own state changes, so it needs an explicit nudge here.
+    updateWebSearchButton();
   }
   // Compact human-readable token count (850 -> "850", 12400 -> "12.4K").
   // Kept local, not a currency formatter — only needs to be short and rough.
@@ -2023,11 +2184,23 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         </div>
         <div class="agent-hint" id="agentShellHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.shellHint'))}</div>
         <div class="setting-label" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;">
+          <span id="agentWebSearchLabel">🌐 ${esc(t('agent.webSearchLabel'))}</span>
+          <label class="agent-toggle-switch"><input type="checkbox" id="agentWebSearchToggle"><span class="agent-toggle-slider"></span></label>
+        </div>
+        <div class="agent-hint" id="agentWebSearchHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.webSearchHint'))}</div>
+        <div class="setting-label" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;">
           <span id="agentCheckpointLabel">🕘 ${esc(t('agent.checkpointLabel'))}</span>
           <label class="agent-toggle-switch"><input type="checkbox" id="agentCheckpointToggle"><span class="agent-toggle-slider"></span></label>
         </div>
         <div class="agent-hint" id="agentCheckpointHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.checkpointHint'))}</div>
         <button class="agent-small-btn" id="agentOpenHistoryBtn" style="margin-top:6px;width:100%;padding:6px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:none;color:var(--text,#eee);cursor:pointer;font-size:11.5px;">🕘 ${esc(t('agent.gitHistory'))}</button>
+        <div class="setting-group" style="margin-top:12px;">
+          <div class="setting-label" style="display:flex;align-items:center;justify-content:space-between;">
+            <span id="agentMaxIterLabel">🔁 ${esc(t('agent.maxIterLabel'))}</span>
+            <input type="number" id="agentMaxIterInput" min="10" max="1000" step="10" style="width:68px;text-align:right;background:none;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:6px;color:var(--text,#eee);font-size:12px;padding:3px 6px;">
+          </div>
+          <div class="agent-hint" id="agentMaxIterHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.maxIterHint'))}</div>
+        </div>
       </div>
       <div class="setting-label" id="agentProjectsLabel" style="margin-top:12px;">${esc(t('agent.projects'))}</div>
       <div id="agentProjList"></div>
@@ -2060,6 +2233,19 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         showToast(`❌ ${err.message}`);
       }
     });
+    document.getElementById('agentWebSearchToggle').addEventListener('change', e => {
+      // Purely a client-side/per-folder flag (unlike Shell/Checkpoints,
+      // there's no server-side re-check to update — web_search/fetch_url
+      // run entirely through the already-configured search proxy, with no
+      // extra permission for the server to grant). See toolSchema() for
+      // where this actually takes effect.
+      const folder = currentProjectFolder();
+      const box = e.target;
+      if (!folder) { box.checked = true; return; }
+      folder.agentWebSearchEnabled = box.checked;
+      save();
+      showToast(box.checked ? t('agent.webSearchOn') : t('agent.webSearchOff'));
+    });
     document.getElementById('agentCheckpointToggle').addEventListener('change', async e => {
       const folder = currentProjectFolder();
       const box = e.target;
@@ -2083,6 +2269,15 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       if (!folder) return;
       panel.classList.remove('open');
       openGitHistoryPanel(folder);
+    });
+    document.getElementById('agentMaxIterInput').addEventListener('change', e => {
+      const folder = currentProjectFolder();
+      const input = e.target;
+      if (!folder) return;
+      const val = Math.max(10, Math.min(1000, parseInt(input.value, 10) || MAX_ITERATIONS));
+      input.value = val;
+      folder.agentMaxIterations = val;
+      save();
     });
     panel.addEventListener('click', e => e.stopPropagation());
     // Close on any click elsewhere — gear button and panel handlers both
@@ -2244,8 +2439,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const mode = folder.agentAutonomy;
     const shellToggle = document.getElementById('agentShellToggle');
     if (shellToggle) shellToggle.checked = !!folder.agentShellEnabled;
+    const webSearchToggle = document.getElementById('agentWebSearchToggle');
+    if (webSearchToggle) webSearchToggle.checked = folder.agentWebSearchEnabled !== false;
     const checkpointToggle = document.getElementById('agentCheckpointToggle');
     if (checkpointToggle) checkpointToggle.checked = !!folder.agentCheckpointsEnabled;
+    const maxIterInput = document.getElementById('agentMaxIterInput');
+    if (maxIterInput) maxIterInput.value = effectiveMaxIterations(folder);
     document.querySelectorAll('#agentAutonomyRow .agent-chip').forEach(c => c.classList.toggle('selected', c.dataset.mode === mode));
     const d = document.getElementById('agentAutonomyDesc');
     if (d) d.textContent = t('agent.mode.' + mode);
@@ -2267,6 +2466,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const focused = currentProjectFolder();
     if (shellToggle && focused) shellToggle.checked = !!focused.agentShellEnabled;
     if (checkpointToggle && focused) checkpointToggle.checked = !!focused.agentCheckpointsEnabled;
+    const maxIterInput = document.getElementById('agentMaxIterInput');
+    if (maxIterInput && focused) maxIterInput.value = effectiveMaxIterations(focused);
     list.innerHTML = projectFolders.length ? '' : `<div style="font-size:11px;color:var(--muted);">${esc(t('agent.noProjects'))}</div>`;
     projectFolders.forEach(f => {
       const missing = missingIds.has(f.agentProject);
@@ -2295,7 +2496,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   function ghStatusLabel(status) {
     return t(STATUS_LABEL_KEY[status] || status, status);
   }
-  let _gh = { folder: null, tab: 'log', commits: [], deleted: [], expanded: null, expandedData: null, loading: false, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false };
+  let _gh = { folder: null, tab: 'log', commits: [], deleted: [], milestones: [], expanded: null, expandedData: null, loading: false, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false, searchQuery: '', searchMode: 'message', searching: false, searchActive: false, diffFor: null, diffText: null, diffLoading: false, busyHash: null };
   // Strings go through the same t()/tf() as elsewhere; see _lang/*.js's
   // "agent.gh*" entries.
 
@@ -2308,7 +2509,20 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         <div class="agent-modal-title"><span>🕘 <span id="ghTitle">${esc(t('agent.gitHistory'))}</span></span><button class="close-btn" id="ghClose">✕</button></div>
         <div class="gh-tabs">
           <button class="gh-tab active" data-tab="log" id="ghTabLog">${esc(t('agent.ghTabCheckpoints'))}</button>
+          <button class="gh-tab" data-tab="milestones" id="ghTabMilestones">${esc(t('agent.ghTabMilestones'))}</button>
           <button class="gh-tab" data-tab="deleted" id="ghTabDeleted">${esc(t('agent.ghTabDeleted'))}</button>
+        </div>
+        <div class="gh-actions" id="ghActions">
+          <button class="agent-small-btn" id="ghCommitBtn" title="${esc(t('agent.ghCommitNowHint'))}">📸 ${esc(t('agent.ghCommitNow'))}</button>
+          <button class="agent-small-btn" id="ghDiscardBtn" title="${esc(t('agent.ghDiscardHint'))}">↺ ${esc(t('agent.ghDiscard'))}</button>
+          <div class="gh-search-row">
+            <select id="ghSearchMode">
+              <option value="message">${esc(t('agent.ghSearchMessage'))}</option>
+              <option value="content">${esc(t('agent.ghSearchContent'))}</option>
+            </select>
+            <input type="text" id="ghSearchInput" placeholder="${esc(t('agent.ghSearchPlaceholder'))}" />
+            <button class="agent-small-btn" id="ghSearchClearBtn" hidden>✕</button>
+          </div>
         </div>
         <div class="gh-toolbar" id="ghToolbar">
           <span id="ghRepoSize"></span>
@@ -2321,30 +2535,51 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     document.getElementById('ghClose').addEventListener('click', closeGitHistoryPanel);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeGitHistoryPanel(); });
     document.getElementById('ghGcBtn').addEventListener('click', runGhGc);
+    document.getElementById('ghCommitBtn').addEventListener('click', runGhManualCommit);
+    document.getElementById('ghDiscardBtn').addEventListener('click', runGhDiscard);
+    const searchInput = document.getElementById('ghSearchInput');
+    const searchModeSel = document.getElementById('ghSearchMode');
+    searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') runGhSearch(); });
+    document.getElementById('ghSearchClearBtn').addEventListener('click', () => {
+      searchInput.value = ''; _gh.searchActive = false; _gh.searchQuery = '';
+      document.getElementById('ghSearchClearBtn').hidden = true;
+      renderGitHistoryBody();
+    });
     overlay.querySelector('.gh-tabs').addEventListener('click', e => {
       const btn = e.target.closest('.gh-tab'); if (!btn) return;
       _gh.tab = btn.dataset.tab; _gh.expanded = null;
       overlay.querySelectorAll('.gh-tab').forEach(b => b.classList.toggle('active', b === btn));
+      document.getElementById('ghActions').style.display = _gh.tab === 'log' ? '' : 'none';
+      document.getElementById('ghToolbar').style.display = _gh.tab === 'log' ? '' : 'none';
       renderGitHistoryBody();
     });
   }
   async function openGitHistoryPanel(folder) {
     const overlay = document.getElementById('agentGitHistoryOverlay');
     if (!overlay || !folder) return;
-    _gh = { folder, tab: 'log', commits: [], deleted: [], expanded: null, expandedData: null, loading: true, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false };
+    _gh = { folder, tab: 'log', commits: [], deleted: [], milestones: [], expanded: null, expandedData: null, loading: true, noRepo: false, expandedGroups: new Set(), repoBytes: null, gcRunning: false, searchQuery: '', searchMode: 'message', searching: false, searchActive: false, diffFor: null, diffText: null, diffLoading: false, busyHash: null };
     const sizeElInit = document.getElementById('ghRepoSize');
     if (sizeElInit) sizeElInit.textContent = '';
     document.getElementById('ghTitle').textContent = `${t('agent.gitHistory')} — ${folder.name}`;
     overlay.querySelectorAll('.gh-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'log'));
+    const actionsEl = document.getElementById('ghActions'), toolbarEl = document.getElementById('ghToolbar');
+    if (actionsEl) actionsEl.style.display = '';
+    if (toolbarEl) toolbarEl.style.display = '';
+    const searchInput = document.getElementById('ghSearchInput');
+    if (searchInput) searchInput.value = '';
+    const clearBtn = document.getElementById('ghSearchClearBtn');
+    if (clearBtn) clearBtn.hidden = true;
     overlay.classList.add('open');
     renderGitHistoryBody();
     try {
-      const [logRes, delRes] = await Promise.all([
+      const [logRes, delRes, msRes] = await Promise.all([
         apiGitLog(folder.agentProject),
         apiGitDeleted(folder.agentProject),
+        apiGitMilestones(folder.agentProject),
       ]);
       _gh.commits = logRes.commits || [];
       _gh.deleted = delRes.files || [];
+      _gh.milestones = msRes.milestones || [];
       _gh.noRepo = _gh.commits.length === 0 && _gh.deleted.length === 0;
     } catch (e) {
       showToast(`❌ ${e.message}`);
@@ -2418,36 +2653,68 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       return;
     }
     if (_gh.tab === 'deleted') { renderGhDeletedTab(body); return; }
+    if (_gh.tab === 'milestones') { renderGhMilestonesTab(body); return; }
     renderGhLogTab(body);
+  }
+  function _ghMilestoneFor(hash) {
+    return _gh.milestones.find(m => m.hash === hash) || null;
   }
   function buildGhCommitRow(c) {
     const row = document.createElement('div');
     row.className = 'gh-commit';
     const expanded = _gh.expanded === c.hash;
+    const diffOpen = _gh.diffFor === c.hash;
+    const pin = _ghMilestoneFor(c.hash);
+    const index = _gh.commits.findIndex(x => x.hash === c.hash);
     row.innerHTML = `
       <div class="gh-commit-head">
         <div class="gh-commit-main">
-          <div class="gh-commit-msg">${esc(c.message)}</div>
-          <div class="gh-commit-meta">${esc(ghFormatDate(c.date))} · <code>${esc(c.shortHash)}</code></div>
+          <div class="gh-commit-msg">${pin ? `📌 ${esc(pin.name)} — ` : ''}${esc(c.message)}</div>
+          <div class="gh-commit-meta">${esc(ghFormatDate(c.date))} · <code>${esc(c.shortHash)}</code>${c.note ? ` · 📝 ${esc(c.note)}` : ''}</div>
         </div>
-        <button class="agent-small-btn gh-restore-all" title="${esc(t('agent.ghRestoreWholeProject'))}">⏪</button>
+        <div class="gh-commit-actions">
+          <button class="agent-small-btn gh-note-btn" title="${esc(t('agent.ghEditNote'))}">📝</button>
+          <button class="agent-small-btn gh-pin-btn" title="${esc(pin ? t('agent.ghUnpin') : t('agent.ghPin'))}">📌</button>
+          <button class="agent-small-btn gh-diff-btn" title="${esc(t('agent.ghShowDiff'))}">🔀</button>
+          <button class="agent-small-btn gh-export-btn" title="${esc(t('agent.ghExport'))}">📦</button>
+          ${index > 0 ? `<button class="agent-small-btn gh-squash-btn" title="${esc(t('agent.ghSquashFromHere'))}">✂️</button>` : ''}
+          <button class="agent-small-btn gh-restore-all" title="${esc(t('agent.ghRestoreWholeProject'))}">⏪</button>
+        </div>
       </div>
+      <div class="gh-commit-diff" ${diffOpen ? '' : 'hidden'}></div>
       <div class="gh-commit-files" ${expanded ? '' : 'hidden'}></div>
     `;
     row.querySelector('.gh-commit-head').addEventListener('click', e => {
-      if (e.target.closest('.gh-restore-all')) return;
+      if (e.target.closest('.gh-commit-actions')) return;
       toggleGhCommit(c.hash);
     });
     row.querySelector('.gh-restore-all').addEventListener('click', async e => {
       e.stopPropagation();
       await confirmAndRestore({ hash: c.hash, label: tf('agent.ghRestoreWholeProjectConfirm', { msg: c.message, date: ghFormatDate(c.date) }) });
     });
+    row.querySelector('.gh-note-btn').addEventListener('click', e => { e.stopPropagation(); runGhEditNote(c); });
+    row.querySelector('.gh-pin-btn').addEventListener('click', e => { e.stopPropagation(); runGhTogglePin(c); });
+    row.querySelector('.gh-diff-btn').addEventListener('click', e => { e.stopPropagation(); toggleGhDiff(c); });
+    row.querySelector('.gh-export-btn').addEventListener('click', e => { e.stopPropagation(); runGhExport(c); });
+    const squashBtn = row.querySelector('.gh-squash-btn');
+    if (squashBtn) squashBtn.addEventListener('click', e => { e.stopPropagation(); runGhSquash(c, index); });
+    if (diffOpen) {
+      const diffEl = row.querySelector('.gh-commit-diff');
+      if (_gh.diffLoading) diffEl.innerHTML = `<div class="gh-empty" style="padding:8px;">${esc(t('agent.loading'))}</div>`;
+      else diffEl.innerHTML = `<pre class="gh-diff-pre">${esc(_gh.diffText || t('agent.ghNoDiff'))}</pre>`;
+    }
     if (expanded) renderGhCommitFiles(row.querySelector('.gh-commit-files'), c);
     return row;
   }
   function renderGhLogTab(body) {
+    if (_gh.searching) {
+      body.innerHTML = `<div class="gh-empty">${esc(t('agent.loading'))}</div>`;
+      return;
+    }
     if (!_gh.commits.length) {
-      body.innerHTML = `<div class="gh-empty">${esc(_gh.folder && _gh.folder.agentCheckpointsEnabled ? t('agent.ghNoCommitsYet') : t('agent.ghCheckpointsOff'))}</div>`;
+      const emptyMsg = _gh.searchActive ? t('agent.ghNoSearchResults')
+        : (_gh.folder && _gh.folder.agentCheckpointsEnabled ? t('agent.ghNoCommitsYet') : t('agent.ghCheckpointsOff'));
+      body.innerHTML = `<div class="gh-empty">${esc(emptyMsg)}</div>`;
       return;
     }
     body.innerHTML = '';
@@ -2560,6 +2827,211 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     }
   }
 
+  // Shared re-fetch for anything that changes the commit list (manual
+  // commit, discard, note edit, pin/unpin, squash) without a full restore.
+  async function refreshGhAfterMutation() {
+    try {
+      const [logRes, msRes] = await Promise.all([
+        apiGitLog(_gh.folder.agentProject),
+        apiGitMilestones(_gh.folder.agentProject),
+      ]);
+      _gh.commits = logRes.commits || [];
+      _gh.milestones = msRes.milestones || [];
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+    _gh.expanded = null;
+    _gh.diffFor = null;
+    renderGitHistoryBody();
+  }
+
+  // ── Manual "commit now" (📸) — works even with auto-checkpoints off,
+  // see agent_git_manual_commit() in kiconnect-proxy.py.
+  async function runGhManualCommit() {
+    if (!_gh.folder) return;
+    const message = prompt(t('agent.ghCommitNowPrompt'), '');
+    if (message === null) return;
+    const btn = document.getElementById('ghCommitBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await apiGitManualCommit(_gh.folder.agentProject, message);
+      if (res.committed === false) showToast(`ℹ️ ${t('agent.ghNothingToCommit')}`);
+      else showToast(`✅ ${t('agent.ghCommitted')}`);
+      await refreshGhAfterMutation();
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ── Discard everything since the last checkpoint (↺). Destructive and
+  // irreversible for anything that was never committed, so confirm first.
+  async function runGhDiscard() {
+    if (!_gh.folder) return;
+    if (!confirm(t('agent.ghDiscardConfirm'))) return;
+    const btn = document.getElementById('ghDiscardBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await apiGitDiscard(_gh.folder.agentProject);
+      if (!res.discarded || !res.discarded.length) showToast(`ℹ️ ${t('agent.ghNothingToDiscard')}`);
+      else showToast(`✅ ${tf('agent.ghDiscarded', { n: res.discarded.length })}`);
+      _readFileCache.clear();
+      await refreshGhAfterMutation();
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // ── History search (🔍) — by commit message or by content added/removed
+  // (git's "pickaxe" search). Replaces the log tab's list in place; clear
+  // via the ✕ button to go back to the full history.
+  async function runGhSearch() {
+    if (!_gh.folder) return;
+    const input = document.getElementById('ghSearchInput');
+    const q = (input && input.value || '').trim();
+    if (!q) return;
+    _gh.searchMode = document.getElementById('ghSearchMode').value;
+    _gh.searching = true;
+    renderGhLogTab(document.getElementById('ghBody'));
+    try {
+      const res = await apiGitSearch(_gh.folder.agentProject, q, _gh.searchMode);
+      _gh.commits = res.commits || [];
+      _gh.searchActive = true;
+      _gh.searchQuery = q;
+      document.getElementById('ghSearchClearBtn').hidden = false;
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+    _gh.searching = false;
+    renderGhLogTab(document.getElementById('ghBody'));
+  }
+
+  // ── Note / rename (📝) — stored as a git note, never rewrites the
+  // commit itself (see /agent/git/<id>/note/<hash> comment in the proxy).
+  async function runGhEditNote(c) {
+    const value = prompt(t('agent.ghNotePrompt'), c.note || '');
+    if (value === null) return;
+    try {
+      await apiGitSetNote(_gh.folder.agentProject, c.hash, value.trim());
+      showToast(`✅ ${t('agent.ghNoteSaved')}`);
+      await refreshGhAfterMutation();
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+  }
+
+  // ── Milestone pin/unpin (📌) — lightweight tag under refs/tags/ms/.
+  async function runGhTogglePin(c) {
+    const existing = _ghMilestoneFor(c.hash);
+    if (existing) {
+      if (!confirm(tf('agent.ghUnpinConfirm', { name: existing.name }))) return;
+      try {
+        await apiGitRemoveMilestone(_gh.folder.agentProject, existing.name);
+        showToast(`✅ ${t('agent.ghUnpinned')}`);
+        await refreshGhAfterMutation();
+      } catch (e) {
+        showToast(`❌ ${e.message}`);
+      }
+      return;
+    }
+    const name = prompt(t('agent.ghPinPrompt'), '');
+    if (!name) return;
+    try {
+      await apiGitAddMilestone(_gh.folder.agentProject, c.hash, name.trim());
+      showToast(`✅ ${t('agent.ghPinned')}`);
+      await refreshGhAfterMutation();
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+  }
+
+  // ── Diff vs. the previous checkpoint (🔀) — toggled inline under the row.
+  async function toggleGhDiff(c) {
+    if (_gh.diffFor === c.hash) { _gh.diffFor = null; renderGhLogTab(document.getElementById('ghBody')); return; }
+    _gh.diffFor = c.hash;
+    _gh.diffText = null;
+    _gh.diffLoading = true;
+    renderGhLogTab(document.getElementById('ghBody'));
+    try {
+      const res = await apiGitDiff(_gh.folder.agentProject, `${c.hash}~1`, c.hash);
+      _gh.diffText = res.diff || '';
+    } catch (e) {
+      // No parent (first-ever checkpoint) or other failure - show as text
+      // instead of a toast so it doesn't get lost once the row re-renders.
+      _gh.diffText = `⚠️ ${e.message}`;
+    }
+    _gh.diffLoading = false;
+    renderGhLogTab(document.getElementById('ghBody'));
+  }
+
+  // ── Export a checkpoint's full snapshot as a zip (📦).
+  async function runGhExport(c) {
+    try {
+      await apiGitExportDownload(_gh.folder.agentProject, c.hash);
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+  }
+
+  // ── Squash this checkpoint through HEAD into one commit (✂️). Only
+  // offered on non-newest rows (squashing needs at least 2 commits, and
+  // the backend refuses ranges containing a pinned milestone - see
+  // agent_git_squash()).
+  async function runGhSquash(c, index) {
+    if (index === 0) return; // nothing after it to squash together with
+    const n = index + 1;
+    const message = prompt(tf('agent.ghSquashPrompt', { n }), '');
+    if (message === null) return;
+    try {
+      const res = await apiGitSquash(_gh.folder.agentProject, c.hash, message);
+      showToast(`✅ ${tf('agent.ghSquashed', { n: res.squashed })}`);
+      await refreshGhAfterMutation();
+    } catch (e) {
+      showToast(`❌ ${e.message}`);
+    }
+  }
+
+  function renderGhMilestonesTab(body) {
+    if (!_gh.milestones.length) {
+      body.innerHTML = `<div class="gh-empty">${esc(t('agent.ghNoMilestones'))}</div>`;
+      return;
+    }
+    body.innerHTML = '';
+    _gh.milestones.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(m => {
+      const commit = _gh.commits.find(c => c.hash === m.hash);
+      const row = document.createElement('div');
+      row.className = 'gh-commit';
+      row.innerHTML = `
+        <div class="gh-commit-head">
+          <div class="gh-commit-main">
+            <div class="gh-commit-msg">📌 ${esc(m.name)}</div>
+            <div class="gh-commit-meta">${esc(commit ? commit.message : t('agent.ghCheckpointNotInRange'))} · <code>${esc(m.hash.slice(0, 12))}</code></div>
+          </div>
+          <button class="agent-small-btn gh-restore-all" title="${esc(t('agent.ghRestoreWholeProject'))}">⏪</button>
+          <button class="agent-small-btn gh-unpin-btn" title="${esc(t('agent.ghUnpin'))}">📌</button>
+        </div>
+      `;
+      row.querySelector('.gh-restore-all').addEventListener('click', async () => {
+        await confirmAndRestore({ hash: m.hash, label: tf('agent.ghRestoreWholeProjectConfirm', { msg: m.name, date: ghFormatDate(m.date) }) });
+      });
+      row.querySelector('.gh-unpin-btn').addEventListener('click', async () => {
+        if (!confirm(tf('agent.ghUnpinConfirm', { name: m.name }))) return;
+        try {
+          await apiGitRemoveMilestone(_gh.folder.agentProject, m.name);
+          showToast(`✅ ${t('agent.ghUnpinned')}`);
+          _gh.milestones = _gh.milestones.filter(x => x.name !== m.name);
+          renderGitHistoryBody();
+        } catch (e) {
+          showToast(`❌ ${e.message}`);
+        }
+      });
+      body.appendChild(row);
+    });
+  }
+
   function positionAgentSettingsPanel() {
     const panel = document.getElementById('agentSettingsPanel');
     const gear = document.getElementById('agentGearBtn');
@@ -2641,25 +3113,38 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     });
   }
 
+  // Applies t(key) to a batch of elements found by id, in place. Centralizes
+  // the repetitive "getElementById -> null-guard -> set text/title/
+  // placeholder from a translation, maybe with an icon prefix" triple that
+  // used to be hand-rolled per element below. Adding a new translated hint
+  // now means adding one row to a table next to its siblings, instead of a
+  // standalone getElementById/if/set block that's easy to leave out (see:
+  // agentMaxIterLabel/agentMaxIterHint, which shipped in the settings panel
+  // markup but were missing here until this pass).
+  // entries: [elementId, i18nKey, { attr?: 'textContent'|'title'|'placeholder', prefix?: string }]
+  function _applyI18nBatch(entries) {
+    entries.forEach(([id, key, opts]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el[opts?.attr || 'textContent'] = (opts?.prefix || '') + t(key);
+    });
+  }
+
   // Language change hook (see i18n.js's setLang()). Re-reads translated
   // text/title/placeholder in place so open panels update immediately.
   onLanguageChange(function () {
     // Composer chip + gear
     syncComposerChip();
-    const gearBtn = document.getElementById('agentGearBtn');
-    if (gearBtn) gearBtn.title = t('agent.settings');
+    _applyI18nBatch([
+      ['agentGearBtn', 'agent.settings', { attr: 'title' }],
+      ['agentConfirmAccept', 'agent.accept'],
+      ['agentConfirmReject', 'agent.reject'],
+      ['agentHeaderToggle', 'agent.headerToggleTitle', { attr: 'title' }],
+    ]);
     // Inline stop buttons under any currently-running run's bubble.
     document.querySelectorAll('.agent-inline-stop-btn').forEach(btn => {
       btn.textContent = '⏹ ' + t('agent.stop');
     });
-    const acceptBtn = document.getElementById('agentConfirmAccept');
-    if (acceptBtn) acceptBtn.textContent = t('agent.accept');
-    const rejectBtn = document.getElementById('agentConfirmReject');
-    if (rejectBtn) rejectBtn.textContent = t('agent.reject');
-
-    // Header toggle
-    const hdrBtn = document.getElementById('agentHeaderToggle');
-    if (hdrBtn) hdrBtn.title = t('agent.headerToggleTitle');
 
     // Context menu (rebuilt fresh each open, nothing to patch while closed)
     const ctxMenuEl = document.getElementById('agentContextMenu');
@@ -2671,48 +3156,41 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (settingsTitle && !currentProjectFolder()) settingsTitle.textContent = t('agent.settingsTitle');
     const panel = document.getElementById('agentSettingsPanel');
     if (panel) {
-      const modelHint = document.getElementById('agentModelHint');
-      if (modelHint) modelHint.textContent = t('agent.modelHint');
-      const noProjectEl = document.getElementById('agentSettingsNoProject');
-      if (noProjectEl) noProjectEl.textContent = t('agent.pickProjectFirst');
-      const autonomyLabel = document.getElementById('agentAutonomyLabel');
-      if (autonomyLabel) autonomyLabel.textContent = t('agent.autonomy');
+      _applyI18nBatch([
+        ['agentModelHint', 'agent.modelHint'],
+        ['agentSettingsNoProject', 'agent.pickProjectFirst'],
+        ['agentAutonomyLabel', 'agent.autonomy'],
+        ['agentShellLabel', 'agent.shellLabel', { prefix: '⚡ ' }],
+        ['agentShellHint', 'agent.shellHint'],
+        ['agentWebSearchLabel', 'agent.webSearchLabel', { prefix: '🌐 ' }],
+        ['agentWebSearchHint', 'agent.webSearchHint'],
+        ['agentCheckpointLabel', 'agent.checkpointLabel', { prefix: '🕘 ' }],
+        ['agentCheckpointHint', 'agent.checkpointHint'],
+        ['agentMaxIterLabel', 'agent.maxIterLabel', { prefix: '🔁 ' }],
+        ['agentMaxIterHint', 'agent.maxIterHint'],
+        ['agentProjectsLabel', 'agent.projects'],
+        ['agentOpenHistoryBtn', 'agent.gitHistory', { prefix: '🕘 ' }],
+      ]);
       const chipAuto = panel.querySelector('.agent-chip[data-mode="auto"]');
       if (chipAuto) chipAuto.textContent = t('agent.autoMode');
       const chipConfirm = panel.querySelector('.agent-chip[data-mode="confirm"]');
       if (chipConfirm) chipConfirm.textContent = t('agent.confirmMode');
       const chipSimulate = panel.querySelector('.agent-chip[data-mode="simulate"]');
       if (chipSimulate) chipSimulate.textContent = t('agent.simulateMode');
-      const shellLabel = document.getElementById('agentShellLabel');
-      if (shellLabel) shellLabel.textContent = '⚡ ' + t('agent.shellLabel');
-      const shellHint = document.getElementById('agentShellHint');
-      if (shellHint) shellHint.textContent = t('agent.shellHint');
-      const checkpointLabel = document.getElementById('agentCheckpointLabel');
-      if (checkpointLabel) checkpointLabel.textContent = '🕘 ' + t('agent.checkpointLabel');
-      const checkpointHint = document.getElementById('agentCheckpointHint');
-      if (checkpointHint) checkpointHint.textContent = t('agent.checkpointHint');
-      const projectsLabel = document.getElementById('agentProjectsLabel');
-      if (projectsLabel) projectsLabel.textContent = t('agent.projects');
-      const openHistoryBtn = document.getElementById('agentOpenHistoryBtn');
-      if (openHistoryBtn) openHistoryBtn.textContent = '🕘 ' + t('agent.gitHistory');
       if (panel.classList.contains('open')) { renderAutonomyChips(); renderProjectList(); }
     }
 
     // Folder picker modal
     const fpTitle = document.querySelector('#agentFolderPickerModal .agent-modal-title span');
     if (fpTitle) fpTitle.textContent = '📁 ' + t('agent.pickFolder');
-    const fpUpBtn = document.getElementById('fpUpBtn');
-    if (fpUpBtn) fpUpBtn.title = t('agent.up');
-    const fpPathInput = document.getElementById('fpPathInput');
-    if (fpPathInput) fpPathInput.placeholder = t('agent.absPath');
-    const fpGoBtn = document.getElementById('fpGoBtn');
-    if (fpGoBtn) fpGoBtn.textContent = t('agent.go');
-    const fpNewFolderName = document.getElementById('fpNewFolderName');
-    if (fpNewFolderName) fpNewFolderName.placeholder = t('agent.newSubfolder');
-    const fpProjectName = document.getElementById('fpProjectName');
-    if (fpProjectName) fpProjectName.placeholder = t('agent.projectNamePh');
-    const fpConfirm = document.getElementById('fpConfirm');
-    if (fpConfirm) fpConfirm.textContent = t('agent.useFolder');
+    _applyI18nBatch([
+      ['fpUpBtn', 'agent.up', { attr: 'title' }],
+      ['fpPathInput', 'agent.absPath', { attr: 'placeholder' }],
+      ['fpGoBtn', 'agent.go'],
+      ['fpNewFolderName', 'agent.newSubfolder', { attr: 'placeholder' }],
+      ['fpProjectName', 'agent.projectNamePh', { attr: 'placeholder' }],
+      ['fpConfirm', 'agent.useFolder'],
+    ]);
     // Re-render the empty-state note in the folder list, if showing.
     const fpList = document.getElementById('fpList');
     if (fpList && fpList.querySelector('.fp-list-empty')) {
@@ -2736,6 +3214,33 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (ghTabLogEl) ghTabLogEl.textContent = t('agent.ghTabCheckpoints');
     const ghTabDeletedEl = document.getElementById('ghTabDeleted');
     if (ghTabDeletedEl) ghTabDeletedEl.textContent = t('agent.ghTabDeleted');
+    const ghTabMilestonesEl = document.getElementById('ghTabMilestones');
+    if (ghTabMilestonesEl) ghTabMilestonesEl.textContent = t('agent.ghTabMilestones');
+    // Checkpoint-toolbar (📸/↺ buttons + search bar) — added after the
+    // original git-history-modal live-retranslate fix above, so it needs
+    // the same treatment: static chrome only, no re-render needed.
+    const ghCommitBtnEl = document.getElementById('ghCommitBtn');
+    if (ghCommitBtnEl) {
+      ghCommitBtnEl.textContent = `📸 ${t('agent.ghCommitNow')}`;
+      ghCommitBtnEl.title = t('agent.ghCommitNowHint');
+    }
+    const ghDiscardBtnEl = document.getElementById('ghDiscardBtn');
+    if (ghDiscardBtnEl) {
+      ghDiscardBtnEl.textContent = `↺ ${t('agent.ghDiscard')}`;
+      ghDiscardBtnEl.title = t('agent.ghDiscardHint');
+    }
+    const ghSearchModeEl = document.getElementById('ghSearchMode');
+    if (ghSearchModeEl) {
+      // Re-set each option's label in place (not innerHTML) so the
+      // currently selected value survives the language switch.
+      const ghSearchModeLabels = { message: 'agent.ghSearchMessage', content: 'agent.ghSearchContent' };
+      Array.from(ghSearchModeEl.options).forEach(opt => {
+        const key = ghSearchModeLabels[opt.value];
+        if (key) opt.textContent = t(key);
+      });
+    }
+    const ghSearchInputEl = document.getElementById('ghSearchInput');
+    if (ghSearchInputEl) ghSearchInputEl.placeholder = t('agent.ghSearchPlaceholder');
     // GC button label carries state (⏳ running vs 🧹 idle) — re-set only
     // the icon-appropriate half so an in-progress run isn't clobbered.
     const ghGcBtnEl = document.getElementById('ghGcBtn');
@@ -2769,6 +3274,10 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
 
   // Boot
   installHooks();
+  // Lets the composer's Web-button popover (web-search.js) jump straight
+  // into this panel when a project is focused, instead of just explaining
+  // where the real control lives.
+  registerAgentSettingsOpener(openAgentSettingsPanel);
 
   function waitForHost(tries) {
     tries = tries || 0;

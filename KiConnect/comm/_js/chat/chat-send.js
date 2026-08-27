@@ -10,7 +10,7 @@ import { buildKbAugmentedContent, buildKbSourcesRow, kbClearActiveSelection, kbR
 import { getProviderEndpoint, openProviderPanel, proxyUrl } from '../providers/provider-crud.js';
 import { _stripStoredThinking, callModelForAgenticWebTurn, effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from '../providers/provider-models.js';
 import { getMaxImageStorageBytes, openSettings, setStatus, toast } from '../ui/misc-ui.js';
-import { buildLinkedPageAugmentedContent, buildWebAugmentedContent, extractReadableHttpUrls, fetchLinkedPage, fetchLinkedPagesFromText, performWebSearch, renderDetectedLinks, shouldUseWebSearch, updateWebSearchButton, webEngineNeedsKey } from '../websearch/web-search.js';
+import { buildLinkedPageAugmentedContent, buildWebAugmentedContent, extractReadableHttpUrls, fetchLinkedPage, fetchLinkedPagesFromText, performWebSearch, renderDetectedLinks, shouldAutoWebSearch, shouldUseWebSearch, updateWebSearchButton, webEngineNeedsKey } from '../websearch/web-search.js';
 
 export const activeRuns = new Map();
 
@@ -362,7 +362,11 @@ function _buildAnthropicBody(modelId, messages) {
   if (isTemperatureSupported(modelId)) {
     body.temperature = state.config.temperature;
   }
-  if (state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
+  // profilesEnabled is the global Agent-Profiles/Persona master switch
+  // (default off, see core/state.js). Off means the field is skipped
+  // entirely rather than sent empty — saves the system-prompt tokens on
+  // every single request while disabled.
+  if (state.config.profilesEnabled && state.config.systemPrompt) body.system = [{ type: 'text', text: state.config.systemPrompt, cache_control: { type: 'ephemeral', ttl: '1h' } }];
   if (state.config.thinkingEnabled && isThinkingCapable(modelId)) {
     if (isAdaptiveThinkingModel(modelId)) {
       // Claude 4+: adaptive thinking via output_config.effort
@@ -404,7 +408,8 @@ function _fetchAnthropicStream(provider, body, signal) {
 // Both callers need it (see CHANGELOG: "Battle-Modus agentic search 400").
 function _buildOpenAiApiMessages(messages, includeToolStuff) {
   const apiMsgs = [];
-  if (state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
+  // See _buildAnthropicBody() above: same master switch, same reasoning.
+  if (state.config.profilesEnabled && state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
   messages.forEach(m => {
     if (m.role === 'user' || m.role === 'assistant') {
       const msg = { role: m.role, content: m.content };
@@ -1037,7 +1042,69 @@ export function isAgenticWebMode() {
   return (state.config.webSearchMode || 'manual') === 'agentic';
 }
 
+// Default/fallback — actual cap is user-configurable (⚙ Settings → Web
+// search → "Max. tool rounds"), stored in state.config.webSearchAgenticMaxIters.
 export const AGENTIC_TOOL_MAX_ITERS = 4;
+
+// Single source of truth for the upper bound of that setting. Drives the
+// range input's `max`, the input-handler's clamp, and the runtime clamp
+// below — change it here only, everything else reads from this constant.
+export const AGENTIC_TOOL_MAX_ITERS_CAP = 50;
+
+export function agenticMaxIters() {
+  const v = parseInt(state.config.webSearchAgenticMaxIters, 10);
+  return Number.isFinite(v) && v >= 1 ? Math.min(v, AGENTIC_TOOL_MAX_ITERS_CAP) : AGENTIC_TOOL_MAX_ITERS;
+}
+
+// Pulls the plain-text of the most recent user turn out of a wire-format
+// message list (Anthropic content-block array or a plain OpenAI-style
+// string), so the pre-filter below can look at it without caring which
+// provider shape it's in.
+function _lastUserText(msgs) {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== 'user') continue;
+    const c = m.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) return c.filter(b => b && b.type === 'text').map(b => b.text).join(' ');
+    return '';
+  }
+  return '';
+}
+
+// Cheap client-side pre-filter for agentic web mode: skip the extra
+// tool-calling round-trip entirely (an extra model call + its tokens)
+// for messages that obviously don't need a web lookup, using the same
+// keyword heuristic already trusted for "auto" mode's single-shot search
+// decision. Errs toward NOT skipping — no text to judge (e.g. an
+// attachment-only message), or any hint of a time-/fact-sensitive
+// question, and the model still gets the tools and decides for itself.
+function _agenticLikelyNeedsSearch(msgs) {
+  const text = _lastUserText(msgs);
+  if (!text.trim()) return true;
+  return shouldAutoWebSearch(text);
+}
+
+// Resets and re-applies a single cache_control breakpoint on the very last
+// content block of the last message. Called before every iteration of the
+// agentic tool loop (Anthropic only) since `msgs` grows by an
+// assistant+tool_result pair each round — without this, only the very
+// first call benefited from caching and every further iteration rebilled
+// the whole (and growing) tool-result history at full price. Clearing old
+// breakpoints first keeps the request under Anthropic's 4-breakpoint cap
+// (this + tools + system = 3) no matter how many iterations have run.
+function _applyAgenticLoopCache(msgs) {
+  msgs.forEach(m => {
+    if (Array.isArray(m.content)) m.content.forEach(b => { if (b && b.cache_control) delete b.cache_control; });
+  });
+  const last = msgs[msgs.length - 1];
+  if (!last) return;
+  if (typeof last.content === 'string' && last.content) {
+    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral', ttl: '1h' } }];
+  } else if (Array.isArray(last.content) && last.content.length) {
+    last.content[last.content.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
+  }
+}
 
 export async function runAgenticWebTool(name, args) {
   try {
@@ -1083,7 +1150,12 @@ export function buildAgenticTraceHtml(calls) {
 export async function runAgenticWebToolLoop(initialMsgs, provider, modelId) {
   let msgs = initialMsgs.slice();
   const allCalls = [];
-  for (let iter = 0; iter < AGENTIC_TOOL_MAX_ITERS; iter++) {
+  // Skip the whole extra round-trip for messages that plainly don't need a
+  // web lookup — see _agenticLikelyNeedsSearch() above.
+  if (!_agenticLikelyNeedsSearch(msgs)) return { msgs, traceHtml: '' };
+  const maxIters = agenticMaxIters();
+  for (let iter = 0; iter < maxIters; iter++) {
+    if (provider.type === 'anthropic') _applyAgenticLoopCache(msgs);
     let turn;
     try { turn = await callModelForAgenticWebTurn(msgs, provider, modelId); }
     catch (err) { break; } // give up on tool use for this reply; fall back to the plain streaming call below
