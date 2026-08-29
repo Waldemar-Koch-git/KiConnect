@@ -11,6 +11,7 @@
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow, onSessionLock, onSessionRekey, onSessionUnlock } from './auth/accounts.js';
 import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
+import { deferUntilDomReady, makeSessionFetch, makeToastFn, pollUntilReady } from './core/bolton-utils.js';
 import { escHtml as esc } from './core/html-utils.js';
 import { tf as hostTf } from './core/i18n.js';
 import { getProviderEndpoint, listEmbeddingProviders } from './providers/provider-crud.js';
@@ -32,10 +33,7 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
     }
     return boltonSubstitute(t(key), vars);
   }
-  function showToast(msg) {
-    if (typeof hostToast === 'function') { hostToast(msg); return; }
-    console.log('[KB]', msg);
-  }
+  const showToast = makeToastFn(hostToast, msg => console.log('[KB]', msg));
   // esc() used to be a local copy of the same escaping logic duplicated in
   // agent.js (also as esc()) and chat-render.js (as escHtml) — now a single
   // shared implementation in core/html-utils.js, aliased back to `esc` so
@@ -45,19 +43,16 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
   // a 401 (session gone) sends the user back to login, like agent.js's
   // agentFetch().
   /* global agentSessionHeader, logoutNow, currentChat */
-  async function kbFetch(url, opts) {
-    opts = opts || {};
-    const sessionHeaders = typeof agentSessionHeader === 'function' ? agentSessionHeader() : {};
-    const headers = { ...(opts.headers || {}), ...sessionHeaders };
-    const res = await fetch(url, { ...opts, headers });
-    // A 401 while we never had a session token just means "not logged in
-    // yet", not an expired session - shouldn't force a logout.
-    if (res.status === 401 && Object.keys(sessionHeaders).length) {
+  // Same shared wrapper as agent.js's agentFetch(): a 401 while we never
+  // had a session token just means "not logged in yet", not an expired
+  // session - shouldn't force a logout.
+  const kbFetch = makeSessionFetch(
+    () => (typeof agentSessionHeader === 'function' ? agentSessionHeader() : {}),
+    () => {
       showToast(t('agent.err.sessionExpired'));
       if (typeof logoutNow === 'function') logoutNow();
     }
-    return res;
-  }
+  );
   const JH = { 'Content-Type': 'application/json' };
 
   async function listKnowledgeBases() {
@@ -1413,24 +1408,23 @@ import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
   }
 
   // Boot
-  function waitForHost(tries) {
-    tries = tries || 0;
-    if (document.querySelector('.input-zone') && document.getElementById('assetBtnGroup')) {
-      injectStyles();
-      injectComposerUI();
-      installHooks();
-      // Only worth trying eagerly if a session token already exists in RAM
-      // (SPA-internal re-boot, not a real page load) - on an actual F5 the
-      // agent session is empty until the user re-enters their password.
-      if (typeof agentSessionHeader === 'function' && Object.keys(agentSessionHeader()).length) {
-        refreshKbList();
+  function waitForHost() {
+    pollUntilReady(
+      () => document.querySelector('.input-zone') && document.getElementById('assetBtnGroup'),
+      () => {
+        injectStyles();
+        injectComposerUI();
+        installHooks();
+        // Only worth trying eagerly if a session token already exists in
+        // RAM (SPA-internal re-boot, not a real page load) - on an actual
+        // F5 the agent session is empty until the user re-enters their
+        // password.
+        if (typeof agentSessionHeader === 'function' && Object.keys(agentSessionHeader()).length) {
+          refreshKbList();
+        }
       }
-      return;
-    }
-    if (tries > 150) return;
-    setTimeout(() => waitForHost(tries + 1), 100);
+    );
   }
   // Deferred via setTimeout(0) even on the "DOM already ready" branch - same
   // module-evaluation-order reasoning as _js/agent.js's waitForHost().
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
-  else setTimeout(waitForHost, 0);
+  deferUntilDomReady(waitForHost);

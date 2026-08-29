@@ -717,6 +717,18 @@ export const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
   type: 'function', function: { name: tl.name, description: tl.description, parameters: tl.input_schema },
 }));
 
+// Shared response-shape parsing for Anthropic's /v1/messages, used by both
+// this file's own agentic-web-turn call and agent.js's callModel() — was
+// byte-identical in both places (only what each caller does with the
+// result differed: agent.js also wants data.usage, this file also wants
+// the raw content array).
+export function parseAnthropicToolResponse(data) {
+  const content = data.content || [];
+  const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  const toolCalls = content.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, arguments: b.input || {} }));
+  return { text, toolCalls, content };
+}
+
 export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
   // modelId is optional so single-model callers ("whatever's selected in
   // the composer") keep working unchanged; Battle-Modus passes each
@@ -746,9 +758,7 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
     });
     if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
     const data = await res.json();
-    const content = data.content || [];
-    const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-    const toolCalls = content.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, arguments: b.input || {} }));
+    const { text, toolCalls, content } = parseAnthropicToolResponse(data);
     return { text, toolCalls, rawContent: content };
   }
   // Every other provider speaks the OpenAI-compatible /chat/completions shape.

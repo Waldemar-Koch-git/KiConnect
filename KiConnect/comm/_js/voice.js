@@ -3,6 +3,7 @@ import { state } from './core/state.js';
 import { sendMessage } from './chat/chat-send.js';
 import { autoResize } from './core/boot.js';
 import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
+import { deferUntilDomReady, makeToastFn, pollUntilReady, positionPanelNearAnchor } from './core/bolton-utils.js';
 import { proxyUrl } from './providers/provider-crud.js';
 import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc-ui.js';
 
@@ -66,24 +67,19 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   }
 
   // DOM helper functions
-  function waitForElement(id, cb, tries) {
-    tries = tries || 0;
-    const el = document.getElementById(id);
-    if (el) { cb(el); return; }
-    if (tries > 150) return;
-    setTimeout(function () { waitForElement(id, cb, tries + 1); }, 100);
+  function waitForElement(id, cb) {
+    pollUntilReady(() => document.getElementById(id), cb);
   }
 
   function getTextarea()  { return document.getElementById('messageInput'); }
 
-  function showToast(msg) {
-    if (typeof hostToast === 'function') { hostToast(msg); return; }
+  const showToast = makeToastFn(hostToast, msg => {
     const el = document.getElementById('toast');
     if (!el) return;
     el.textContent = msg;
     el.classList.add('show');
     setTimeout(function () { el.classList.remove('show'); }, 3000);
-  }
+  });
 
   // SVG icons
   var SVG_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 19v3M9 22h6"/></svg>';
@@ -703,21 +699,8 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
   function positionVoiceSettingsPanel() {
     var panel = document.getElementById('voiceSettingsPanel');
     if (!panel || !btnVoiceSettings) return;
-    var rect = btnVoiceSettings.getBoundingClientRect();
-    var vw = window.innerWidth, vh = window.innerHeight;
-    var panelW = panel.offsetWidth || 310;
-    var left = rect.right - panelW;
-    left = Math.max(8, Math.min(left, vw - panelW - 8));
-    panel.style.left = left + 'px';
+    positionPanelNearAnchor(panel, btnVoiceSettings, { fallbackWidth: 310, aboveThreshold: 200 });
     panel.style.right = 'auto';
-    var spaceAbove = rect.top - 8, spaceBelow = vh - rect.bottom - 8;
-    if (spaceAbove >= 200 || spaceAbove >= spaceBelow) {
-      panel.style.bottom = (vh - rect.top + 8) + 'px';
-      panel.style.top = 'auto';
-    } else {
-      panel.style.top = (rect.bottom + 8) + 'px';
-      panel.style.bottom = 'auto';
-    }
   }
 
   function closeVoiceSettingsPanel() {
@@ -1771,11 +1754,7 @@ import { onLanguageChange, openTuningPanel, toast as hostToast } from './ui/misc
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    setTimeout(init, 300);
-  }
+  deferUntilDomReady(init, 300);
 
   window.addEventListener('resize', function () {
     var panel = document.getElementById('voiceSettingsPanel');

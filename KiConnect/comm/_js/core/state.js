@@ -158,6 +158,17 @@ state._countdownTimer = null;
 
 state._printSingleIdx = null;
 
+// Whichever project the current chat is filed under, or null for a plain
+// chat. Single source of truth for "are we in project/agent mode" -
+// websearch/web-search.js's web-search UI and this file's own
+// Battle-Modus toggle both need it, and neither should re-derive it
+// differently by hand.
+export function focusedAgentProject() {
+  const chat = state.chats.find(c => c.id === state.currentChatId);
+  const folder = chat && state.folders.find(f => f.id === chat.folderId);
+  return (folder && folder.agentProject) ? folder : null;
+}
+
 (function () {
   const toggleBtn = document.getElementById('battleToggleBtn');
   const popover = document.getElementById('battlePopover');
@@ -172,6 +183,14 @@ state._printSingleIdx = null;
   let open = false;
 
   function refreshToggleUI() {
+    // Battle-Modus (several models answering at once) has no meaning in
+    // project/agent mode - the agent always uses its own configured model,
+    // one at a time. Hide the whole entry point rather than leaving a
+    // dead-end button around, and drop an already-open popover if the user
+    // switches into a project while it's up.
+    const inProject = !!focusedAgentProject();
+    toggleBtn.hidden = inProject;
+    if (inProject && open) closePopover();
     toggleBtn.classList.toggle('active', state.battleModeActive && state.battleSelectedModels.length >= 2);
     toggleBtn.title = bt('battle.toggleTitle');
   }

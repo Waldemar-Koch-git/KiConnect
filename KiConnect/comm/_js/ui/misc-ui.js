@@ -120,13 +120,24 @@ export function setStatus(c) {
   d.style.animation = (c === 'yellow') ? 'pulse 1s infinite' : 'pulse 2s infinite';
 }
 
+// Shared "flash a copy button to its done-state, then revert" used by
+// every copy-to-clipboard button (code blocks, chat bubbles, formatted
+// bubble copy in chat-render.js). Was three near-identical inline
+// textContent/classList/setTimeout sequences that only differed in the
+// done-class name and the text to revert to.
+export function flashCopyButton(btn, doneClass, revertText, duration = 2000) {
+  if (!btn) return;
+  btn.textContent = t('js.copied');
+  btn.classList.add(doneClass);
+  setTimeout(() => { btn.textContent = revertText; btn.classList.remove(doneClass); }, duration);
+}
+
 export function copyCodeFromBtn(btn) {
   const b64=btn.dataset.b64; if(!b64) return;
   let text;
   try{text=decodeURIComponent(escape(atob(b64)));}catch{text=atob(b64);}
   navigator.clipboard.writeText(text).then(()=>{
-    btn.textContent=t('js.copied');btn.classList.add('done');
-    setTimeout(()=>{btn.textContent=t('js.codeCopy');btn.classList.remove('done');},2000);
+    flashCopyButton(btn, 'done', t('js.codeCopy'));
   }).catch(()=>toast(t('js.copyFailed')));
 }
 
@@ -138,7 +149,7 @@ export function copyBubble(btn, idx) {
   if(typeof msg.content==='string') text=msg.content;
   else if(Array.isArray(msg.content)) text=msg.content.filter(p=>p.type==='text').map(p=>p.text).join('\n');
   navigator.clipboard.writeText(text).then(()=>{
-    if(btn){btn.textContent=t('js.copied');btn.classList.add('copy-done');setTimeout(()=>{btn.textContent=t('js.copy');btn.classList.remove('copy-done');},2000);}
+    flashCopyButton(btn, 'copy-done', t('js.copy'));
   }).catch(()=>toast(t('js.copyFailed')));
 }
 
@@ -154,16 +165,11 @@ export async function copyBubbleFormatted(bubbleEl, btn) {
         'text/plain': new Blob([text], {type: 'text/plain'}),
       }),
     ]);
-    if (!btn) return;
-    const original = t('js.copyFormatted');
-    btn.textContent = t('js.copied'); btn.classList.add('copy-done');
-    setTimeout(() => { btn.textContent = original; btn.classList.remove('copy-done'); }, 2000);
+    flashCopyButton(btn, 'copy-done', t('js.copyFormatted'));
   } catch (_) {
     try {
       await navigator.clipboard.writeText(text);
-      if (!btn) return;
-      btn.textContent = t('js.copied'); btn.classList.add('copy-done');
-      setTimeout(() => { btn.textContent = t('js.copyFormatted'); btn.classList.remove('copy-done'); }, 2000);
+      flashCopyButton(btn, 'copy-done', t('js.copyFormatted'));
     } catch (_) {
       toast(t('js.copyFailed'));
     }

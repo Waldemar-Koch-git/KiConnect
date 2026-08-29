@@ -1,5 +1,6 @@
 import { save } from '../auth/storage.js';
 import { _buildFolderCtxMenu } from '../chat/chat-sidebar.js';
+import { wireFolderDragAndDrop } from '../core/dnd-utils.js';
 import { t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { getModelMaxOutput, splitModelId } from '../providers/provider-models.js';
@@ -104,31 +105,12 @@ export function renderProfileList() {
     const fp = state.profiles.filter(p => p.folderId === f.id);
     const folderDiv = document.createElement('div');
     folderDiv.className = 'folder';
-    folderDiv.draggable = true;
-    folderDiv.dataset.folderId = f.id;
-    folderDiv.addEventListener('dragstart', e => {
-      if (!state.draggedProfileId) {
-        e.stopPropagation();
-        onProfileFolderDragStart(e, f.id);
-        folderDiv.classList.add('folder-dragging');
-      }
-    });
-    folderDiv.addEventListener('dragend', () => {
-      folderDiv.classList.remove('folder-dragging');
-      document.querySelectorAll('.folder-drag-over').forEach(el => el.classList.remove('folder-drag-over'));
-    });
-    folderDiv.addEventListener('dragover', e => {
-      if (state.draggedProfileFolderId && state.draggedProfileFolderId !== f.id) {
-        e.preventDefault(); e.stopPropagation();
-        folderDiv.classList.add('folder-drag-over');
-      }
-    });
-    folderDiv.addEventListener('dragleave', e => {
-      if (!folderDiv.contains(e.relatedTarget)) folderDiv.classList.remove('folder-drag-over');
-    });
-    folderDiv.addEventListener('drop', e => {
-      if (state.draggedProfileFolderId) onProfileFolderDrop(e, f.id);
-      else onDropProfileFolder(e, f.id);
+    wireFolderDragAndDrop(folderDiv, f.id, {
+      isLeafDragActive: () => !!state.draggedProfileId,
+      draggedFolderId: () => state.draggedProfileFolderId,
+      startFolderDrag: onProfileFolderDragStart,
+      onFolderDrop: onProfileFolderDrop,
+      onItemDrop: onDropProfileFolder,
     });
 
     const header = document.createElement('div');

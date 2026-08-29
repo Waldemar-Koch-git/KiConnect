@@ -681,6 +681,20 @@ export function confirmEditBubble() {
   save(); renderMessages(chat.messages);
 }
 
+// Copies a chosen sibling variant's live fields onto its parent message —
+// shared invariant between navigateSibling() (below) and Battle-Modus's
+// chooseBattleWinner() (chat-send.js): both need msg's own fields to
+// mirror whichever variant is now "active" so rerunFromUserMsg's
+// context-building (which reads msg directly, not msg._siblings) picks up
+// the right one.
+export function applySiblingVariant(msg, variant) {
+  msg.content   = variant.content;
+  msg._model    = variant._model;
+  msg._usage    = variant._usage;
+  msg._note     = variant._note;
+  msg._noteOpen = variant._noteOpen;
+}
+
 export function navigateSibling(idx, delta) {
   const chat = currentChat(); if (!chat) return;
   const path = getActivePath(chat);
@@ -697,13 +711,7 @@ export function navigateSibling(idx, delta) {
   if (oldVariant) { oldVariant._note = msg._note; oldVariant._noteOpen = msg._noteOpen; }
 
   msg._siblingIdx = newIdx;
-  const variant   = msg._siblings[newIdx];
-  // Sync live fields (used by rerunFromUserMsg context-building)
-  msg.content   = variant.content;
-  msg._model    = variant._model;
-  msg._usage    = variant._usage;
-  msg._note     = variant._note;
-  msg._noteOpen = variant._noteOpen;
+  applySiblingVariant(msg, msg._siblings[newIdx]);
 
   save();
   renderMessages(chat.messages); // getActivePath will now follow new _siblingIdx

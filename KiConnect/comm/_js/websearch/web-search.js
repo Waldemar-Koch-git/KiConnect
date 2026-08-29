@@ -1,10 +1,9 @@
 import { formatLinkedPagesBlock, formatWebSearchBlock, stripQuotedAndCodeBlocks } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { escHtml } from '../chat/chat-render.js';
-import { currentChat } from '../chat/chat-sidebar.js';
 import { isAgenticWebMode, setMiniToggle } from '../chat/chat-send.js';
 import { getAcceptLanguage, t } from '../core/i18n.js';
-import { state } from '../core/state.js';
+import { focusedAgentProject, state } from '../core/state.js';
 import { proxyPublicUrl, proxyUrl } from '../providers/provider-crud.js';
 import { onLanguageChange, openSettings, toast } from '../ui/misc-ui.js';
 
@@ -21,15 +20,9 @@ export const WEB_SEARCH_RESULT_MAX = 30;
 let _openAgentSettings = null;
 export function registerAgentSettingsOpener(fn) { _openAgentSettings = typeof fn === 'function' ? fn : null; }
 
-// The project (if any) the composer is currently filed into. Returns null
-// for a plain chat, so every call site below can treat "focused project"
-// and "normal chat" as the two branches of one flag instead of re-deriving
-// this from state.folders/currentChat() in three different places.
-function focusedAgentProject() {
-  const chat = currentChat();
-  const folder = chat && state.folders.find(f => f.id === chat.folderId);
-  return (folder && folder.agentProject) ? folder : null;
-}
+// focusedAgentProject() now lives in core/state.js (core/state.js's own
+// Battle-Modus toggle needs the exact same check) — imported below instead
+// of kept as a local duplicate.
 
 export function updateWebSearchButton(searching=false) {
   const btn = document.getElementById('webSearchBtn');

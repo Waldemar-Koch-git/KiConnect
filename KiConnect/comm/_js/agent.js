@@ -14,10 +14,11 @@ import { _makeRunId, _runBubbleEl, _toAnthropicContent, _toOpenAIContent, active
 import { currentChat, getActiveContainer, getActivePath, newChat, onRenderSidebar, renderSidebar } from './chat/chat-sidebar.js';
 import { autoResize } from './core/boot.js';
 import { boltonSubstitute, boltonT } from './core/bolton-i18n.js';
+import { deferUntilDomReady, makeSessionFetch, makeToastFn, pollUntilReady, positionPanelNearAnchor } from './core/bolton-utils.js';
 import { escHtml as esc } from './core/html-utils.js';
 import { tf as hostTf } from './core/i18n.js';
 import { getProviderEndpoint, proxyUrl } from './providers/provider-crud.js';
-import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
+import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, parseAnthropicToolResponse, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
 import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
 import { activeProfile } from './ui/profiles.js';
 import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateWebSearchButton } from './websearch/web-search.js';
@@ -35,10 +36,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     }
     return boltonSubstitute(t(key), vars);
   }
-  function showToast(msg) {
-    if (typeof hostToast === 'function') { hostToast(msg); return; }
-    console.log('[Agent]', msg);
-  }
+  const showToast = makeToastFn(hostToast, msg => console.log('[Agent]', msg));
   // esc() used to be a local copy of the same escaping logic that lives in
   // chat-render.js (as escHtml) and used to live in db.js too (also as
   // esc()) — now a single shared implementation in core/html-utils.js,
@@ -293,19 +291,15 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   // Backend calls to /agent/* on the local proxy, carrying the current
   // agent-session token. A 401 is treated as an expired session (logout).
   /* global agentSessionHeader, logoutNow, toast */
-  async function agentFetch(url, opts) {
-    opts = opts || {};
-    const sessionHeaders = typeof agentSessionHeader === 'function' ? agentSessionHeader() : {};
-    const headers = { ...(opts.headers || {}), ...sessionHeaders };
-    const res = await fetch(url, { ...opts, headers });
-    // Same as kiconnect-db.js's kbFetch(): a 401 with no token sent just
-    // means "not logged in yet", not an expired session.
-    if (res.status === 401 && Object.keys(sessionHeaders).length) {
+  // Same shared wrapper as db.js's kbFetch(): a 401 with no token sent
+  // just means "not logged in yet", not an expired session.
+  const agentFetch = makeSessionFetch(
+    () => (typeof agentSessionHeader === 'function' ? agentSessionHeader() : {}),
+    () => {
       if (typeof hostToast === 'function') hostToast(t('agent.err.sessionExpired'));
       if (typeof logoutNow === 'function') logoutNow();
     }
-    return res;
-  }
+  );
   function encPath(p) {
     return String(p).replace(/\\/g, '/').split('/').filter(Boolean).map(encodeURIComponent).join('/');
   }
@@ -1113,9 +1107,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       });
       if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
       const data = await res.json();
-      const content = data.content || [];
-      const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-      const toolCalls = content.filter(b => b.type === 'tool_use').map(b => ({ id: b.id, name: b.name, arguments: b.input || {} }));
+      const { text, toolCalls } = parseAnthropicToolResponse(data);
       return { text, toolCalls, usage: data.usage || null };
     }
 
@@ -2126,6 +2118,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       chip.firstChild.textContent = focused ? '🤖 ' : '📁 ';
       label.textContent = focused ? folder.name : t('agent.noProject');
     }
+    // The gear only leads anywhere useful while a project is focused (its
+    // panel is entirely project-scoped settings + a "pick a project first"
+    // hint otherwise) - hide it in plain-chat mode instead of showing a
+    // button that mostly just tells you it can't do anything yet.
+    const gearBtn = document.getElementById('agentGearBtn');
+    if (gearBtn) gearBtn.hidden = !focused;
     if (hdrBtn && hdrLabel) {
       hdrBtn.classList.toggle('agent-focused', focused);
       hdrBtn.firstChild.textContent = focused ? '🤖 ' : '📁 ';
@@ -2136,6 +2134,10 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     // updateWebSearchButton() on a chat/project switch, only on the web
     // module's own state changes, so it needs an explicit nudge here.
     updateWebSearchButton();
+    // Same reasoning for Battle-Modus (core/state.js) — it has no meaning
+    // in project/agent mode and needs to hide/show on every chat switch,
+    // not just its own popover's internal state changes.
+    if (typeof window.refreshBattlePopoverUI === 'function') window.refreshBattlePopoverUI();
   }
   // Compact human-readable token count (850 -> "850", 12400 -> "12.4K").
   // Kept local, not a currency formatter — only needs to be short and rough.
@@ -3036,22 +3038,7 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     const panel = document.getElementById('agentSettingsPanel');
     const gear = document.getElementById('agentGearBtn');
     if (!panel || !gear) return;
-    requestAnimationFrame(() => {
-      const rect = gear.getBoundingClientRect();
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const panelW = panel.offsetWidth || 300;
-      let left = rect.right - panelW; // right-align panel to the gear icon
-      left = Math.max(8, Math.min(left, vw - panelW - 8));
-      panel.style.left = left + 'px';
-      const spaceAbove = rect.top - 8, spaceBelow = vh - rect.bottom - 8;
-      if (spaceAbove >= 220 || spaceAbove >= spaceBelow) {
-        panel.style.bottom = (vh - rect.top + 8) + 'px';
-        panel.style.top = 'auto';
-      } else {
-        panel.style.top = (rect.bottom + 8) + 'px';
-        panel.style.bottom = 'auto';
-      }
-    });
+    requestAnimationFrame(() => positionPanelNearAnchor(panel, gear, { fallbackWidth: 300, aboveThreshold: 220 }));
   }
   export function openAgentSettingsPanel() {
     const panel = document.getElementById('agentSettingsPanel');
@@ -3279,24 +3266,22 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   // where the real control lives.
   registerAgentSettingsOpener(openAgentSettingsPanel);
 
-  function waitForHost(tries) {
-    tries = tries || 0;
-    if (document.querySelector('.input-zone') && document.getElementById('folderContainer')) {
-      injectStyles();
-      injectComposerUI();
-      injectAgentSettingsPanel();
-      injectFolderPicker();
-      injectGitHistoryModal();
-      injectHeaderToggle();
-      syncComposerChip();
-      return;
-    }
-    if (tries > 150) return;
-    setTimeout(() => waitForHost(tries + 1), 100);
+  function waitForHost() {
+    pollUntilReady(
+      () => document.querySelector('.input-zone') && document.getElementById('folderContainer'),
+      () => {
+        injectStyles();
+        injectComposerUI();
+        injectAgentSettingsPanel();
+        injectFolderPicker();
+        injectGitHistoryModal();
+        injectHeaderToggle();
+        syncComposerChip();
+      }
+    );
   }
   // Deferred via setTimeout(0) even when DOM is already ready: ES module
   // evaluation order follows the import graph, not script-tag order, so
   // other modules aren't guaranteed to be initialized yet. A macrotask
   // boundary guarantees the whole sync module-evaluation pass has finished.
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => waitForHost());
-  else setTimeout(waitForHost, 0);
+  deferUntilDomReady(waitForHost);

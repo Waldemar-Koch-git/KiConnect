@@ -1,7 +1,7 @@
 import { _pullBackForOpenBlock } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { _runStreamAndAttach, buildAttachmentContent, clearAttachments, renderAttachments } from './chat-attachments.js';
-import { appendEmptyAI, appendToMessages, buildMsgEl, buildWebSourcesRow, escHtml, formatText, parseMistralContent, removeTyping, renderMessages, safeIdx, scrollToBottom, showTyping, typesetMath, typesetMathThrottled } from './chat-render.js';
+import { appendEmptyAI, appendToMessages, applySiblingVariant, buildMsgEl, buildWebSourcesRow, escHtml, formatText, parseMistralContent, removeTyping, renderMessages, safeIdx, scrollToBottom, showTyping, typesetMath, typesetMathThrottled } from './chat-render.js';
 import { currentChat, getActiveContainer, getActivePath, newChat, renderSidebar } from './chat-sidebar.js';
 import { autoResize } from '../core/boot.js';
 import { bt, btf, t, tf } from '../core/i18n.js';
@@ -178,11 +178,7 @@ export function chooseBattleWinner(idx, siblingIdx) {
   const variant = msg._siblings[siblingIdx]; if (!variant) return;
   msg._siblingIdx = siblingIdx;
   msg._winnerChosen = true;
-  msg.content   = variant.content;
-  msg._model    = variant._model;
-  msg._usage    = variant._usage;
-  msg._note     = variant._note;
-  msg._noteOpen = variant._noteOpen;
+  applySiblingVariant(msg, variant);
   save();
   renderMessages(chat.messages);
 }

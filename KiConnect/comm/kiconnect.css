@@ -1586,6 +1586,15 @@ textarea::placeholder { color: var(--muted); }
   line-height: 1.4;
   color: var(--muted);
 }
+/* `display: flex` above has the same specificity as the UA stylesheet's
+   `[hidden] { display: none; }` and comes later in source order, so it
+   always won - `webContextAgentNotice.hidden = !project` in web-search.js
+   had no visible effect and the notice (incl. its "Open agent settings"
+   button) stayed shown even in plain-chat mode. This re-asserts `hidden`
+   at higher specificity so the JS toggle actually takes effect. */
+.web-context-agent-notice[hidden] {
+  display: none;
+}
 .web-context-agent-notice-btn {
   align-self: flex-start;
   border: 1px solid var(--border);
@@ -1924,6 +1933,12 @@ textarea::placeholder { color: var(--muted); }
    turning it "on" would have nothing to do). */
 .battle-active-switch-wrap {
   display: flex; align-items: center; gap: 6px; cursor: pointer; flex-shrink: 0;
+}
+/* Same `display` vs. `[hidden]` specificity/source-order conflict as
+   .web-context-agent-notice above - state.js's `activeSwitchWrap.hidden =
+   !eligible` had no visible effect without this. */
+.battle-active-switch-wrap[hidden] {
+  display: none;
 }
 .battle-active-switch-label {
   font-size: 11px; font-family: 'IBM Plex Mono', monospace; color: var(--muted);

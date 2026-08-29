@@ -2,6 +2,7 @@ import { accountKey } from '../auth/accounts.js';
 import { _storePut, save } from '../auth/storage.js';
 import { renderMessages } from './chat-render.js';
 import { isChatStreaming, syncComposerStreamingUI } from './chat-send.js';
+import { wireFolderDragAndDrop } from '../core/dnd-utils.js';
 import { t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { toast } from '../ui/misc-ui.js';
@@ -451,32 +452,12 @@ export function renderSidebar() {
     const folderDiv = document.createElement('div');
     folderDiv.className = 'folder';
     // Folder-level drag for reordering
-    folderDiv.draggable = true;
-    folderDiv.dataset.folderId = f.id;
-    folderDiv.addEventListener('dragstart', e => {
-      // Only start folder drag if not dragging a chat item
-      if (!state.draggedChatId) {
-        e.stopPropagation();
-        onFolderDragStart(e, f.id);
-        folderDiv.classList.add('folder-dragging');
-      }
-    });
-    folderDiv.addEventListener('dragend', () => {
-      folderDiv.classList.remove('folder-dragging');
-      document.querySelectorAll('.folder-drag-over').forEach(el=>el.classList.remove('folder-drag-over'));
-    });
-    folderDiv.addEventListener('dragover', e => {
-      if (state.draggedFolderId && state.draggedFolderId !== f.id) {
-        e.preventDefault(); e.stopPropagation();
-        folderDiv.classList.add('folder-drag-over');
-      }
-    });
-    folderDiv.addEventListener('dragleave', e => {
-      if (!folderDiv.contains(e.relatedTarget)) folderDiv.classList.remove('folder-drag-over');
-    });
-    folderDiv.addEventListener('drop', e => {
-      if (state.draggedFolderId) { onFolderDrop(e, f.id); }
-      else { onDropFolder(e, f.id); }
+    wireFolderDragAndDrop(folderDiv, f.id, {
+      isLeafDragActive: () => !!state.draggedChatId,
+      draggedFolderId: () => state.draggedFolderId,
+      startFolderDrag: onFolderDragStart,
+      onFolderDrop,
+      onItemDrop: onDropFolder,
     });
 
     const header = document.createElement('div');
