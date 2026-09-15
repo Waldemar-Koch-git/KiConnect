@@ -56,11 +56,11 @@ export function renderMessages(messages, limitCount) {
 
   // Reattach mechanism: any still-running run for THIS chat gets a fresh
   // live bubble, pre-filled from the registry (source of truth; DOM is a
-  // rebuildable projection). A run can supply buildLiveEl() (agent runs do,
-  // for tool-trace cards), else falls back to the generic builder.
-  // Battle-variant runs are EXCLUDED — they're already reattached to their
-  // own tile bubble inside _buildBattleTileGridRow(); including them here
-  // too used to double-append a stray bubble under the tile grid.
+  // rebuildable projection). buildLiveEl() is used if the run supplies one
+  // (agent runs do, for tool-trace cards), else the generic builder.
+  // Battle-variant runs are excluded — they're already reattached inside
+  // _buildBattleTileGridRow(), so including them here double-appended a
+  // stray bubble under the tile grid.
   const liveRuns = chat
     ? [...activeRuns.values()].filter(r => r.chatId === chat.id && r.status === 'running' && r.kind !== 'battle-variant')
     : [];
@@ -82,9 +82,8 @@ export function renderMessages(messages, limitCount) {
   container.scrollTop = container.scrollHeight;
   typesetMath();
   updateChatTokenTotal();
-  // The send/stop button must reflect whichever chat this render just put
-  // on screen, not "is anything streaming anywhere" — covers
-  // switchChat/newChat/deleteChat in one place.
+  // Reflects whichever chat this render just put on screen, not "is
+  // anything streaming anywhere".
   syncComposerStreamingUI();
 }
 
@@ -128,9 +127,8 @@ export function buildMsgEl(msg, idx) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
 
-  // Build bubble content
-  // For user messages: show text parts only, then file chips.
-  // Files (text-file, pdf, images) are never expanded inline in the bubble.
+  // User messages: text parts only, then file chips — files (text-file,
+  // pdf, images) are never expanded inline in the bubble.
   let contentHtml = '';
   if (typeof msg.content === 'string') {
     contentHtml = formatText(msg.content);
@@ -176,9 +174,8 @@ export function buildMsgEl(msg, idx) {
     bubble.appendChild(buildWebSourcesRow(msg._webSources));
   }
 
-  // Knowledge-base sources — populated by db.js's sendMessageCore hook.
-  // Same idea as _webSources above, kept separate since KB citations carry
-  // a source file + page instead of a URL.
+  // KB sources — populated by db.js's sendMessageCore hook. Kept separate
+  // from _webSources since KB citations carry a source file + page, not a URL.
   if (msg._kbSources && msg._kbSources.length && typeof buildKbSourcesRow === 'function') {
     bubble.appendChild(buildKbSourcesRow(msg._kbSources));
   }
@@ -682,11 +679,9 @@ export function confirmEditBubble() {
 }
 
 // Copies a chosen sibling variant's live fields onto its parent message —
-// shared invariant between navigateSibling() (below) and Battle-Modus's
-// chooseBattleWinner() (chat-send.js): both need msg's own fields to
-// mirror whichever variant is now "active" so rerunFromUserMsg's
-// context-building (which reads msg directly, not msg._siblings) picks up
-// the right one.
+// shared invariant between navigateSibling() and Battle-Modus's
+// chooseBattleWinner() (chat-send.js): rerunFromUserMsg's context-building
+// reads msg directly, not msg._siblings, so msg must mirror the active variant.
 export function applySiblingVariant(msg, variant) {
   msg.content   = variant.content;
   msg._model    = variant._model;
@@ -857,12 +852,9 @@ export function toBase64Utf8(str) {
   return btoa(bin);
 }
 
-// escHtml itself now lives in core/html-utils.js (was duplicated there as
-// agent.js's/db.js's esc()) — re-exported here (as a real local binding,
-// not a bare `export {x} from` re-export, since this file also calls
-// escHtml() directly throughout) so every existing
-// `import { escHtml } from '.../chat-render.js'` call site keeps working
-// unchanged.
+// escHtml lives in core/html-utils.js; re-exported here as a real local
+// binding (not a bare re-export) so this file's own escHtml() calls and
+// every `import { escHtml } from '.../chat-render.js'` site keep working.
 export { escHtml };
 
 export function ensureDompurifyNoopenerHook() {
@@ -909,11 +901,10 @@ export function formatText(raw) {
   // Step 1: Code and LaTeX blocks VOR protect from marked
 
   // 4+-Backtick fences: leading [ \t]* tolerates fences indented under a
-  // list item/blockquote (common). Without it, an indented fence isn't
-  // recognized HERE and falls through to the inline-code regex, but
-  // marked.js DOES recognize it per CommonMark and wraps the already-
-  // placeholder-corrupted text in a new code block the Step-3 restore
-  // can't reach. Matching the fence here first avoids the nesting problem.
+  // list item/blockquote. Without it, marked.js still recognizes an
+  // indented fence per CommonMark and wraps the already placeholder-
+  // corrupted text in a new block the Step-3 restore can't reach —
+  // matching it here first avoids that.
   s = s.replace(/^([ \t]*)(`{4,})([^\n]*)\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm, (_, indent, fence, lang, code) => PH(pushCodeBlock(lang, _stripFenceIndent(code, indent))));
 
   // 3-Backtick-Fences
@@ -962,19 +953,16 @@ export function formatText(raw) {
     return pushMathBlock(`<span class="math-inline" data-latex="${latexB64}">\\(${escHtml(math)}\\)</span>`);
   });
 
-  // Step 1a: cap pathological blockquote/list nesting depth. marked's
-  // block parser recurses once per nesting level — deep leading ">" or
-  // list-marker chains can recurse thousands of levels deep, throwing
-  // "Maximum call stack size exceeded" or crashing the tab before any
-  // catch() runs (reproduced with ~2000 lines of nesting). A try/catch
-  // can't protect against that, so depth is capped before marked sees the
-  // text: markers beyond MAX_NEST_DEPTH on a line are escaped to literal
-  // characters, leaving realistic nesting untouched.
+  // Step 1a: cap pathological blockquote/list nesting depth. marked's block
+  // parser recurses once per level — deep ">" or list-marker chains can
+  // throw "Maximum call stack size exceeded" before any catch() runs
+  // (reproduced with ~2000 lines of nesting). Depth is capped before
+  // marked sees the text: markers beyond MAX_NEST_DEPTH are escaped to
+  // literal characters, leaving realistic nesting untouched.
   {
     const MAX_NEST_DEPTH = 20;
-    // Lists can also nest purely via indentation (one marker per line,
-    // each indented further) — capped too via a ceiling on leading
-    // whitespace, since indentation drives CommonMark list nesting depth.
+    // Lists also nest via pure indentation — capped too, since indentation
+    // drives CommonMark list-nesting depth.
     const MAX_INDENT = MAX_NEST_DEPTH * 4;
     const markerRe = /^(>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)/;
     const indentRe = /^[ \t]+/;
@@ -1064,7 +1052,7 @@ export function formatText(raw) {
                      'div','span','button','a','u','sup','sub','mark','small','s','ins',
                      'abbr','cite','kbd','details','summary','blockquote','input','img'],
       ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','data-latex',
-                     'type','checked','disabled','src','alt','loading','start'],
+                     'type','checked','disabled','src','alt','loading','start','open'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],
       ALLOW_DATA_ATTR: false,

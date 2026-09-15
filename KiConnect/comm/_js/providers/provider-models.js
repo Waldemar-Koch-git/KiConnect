@@ -514,6 +514,7 @@ export function applyModelGroupsToUI(allGroups) {
   if (!allGroups.length) {
     ['modelSelector','modelInput'].forEach(id => { const el=document.getElementById(id); if(el) el.innerHTML=ph; });
     if (window.buildCustomDropdownData) buildCustomDropdownData();
+    syncAllModelSelects();
     _pruneBattleSelection(new Set());
     return;
   }
@@ -693,7 +694,23 @@ export function toggleThinking() {
   toast(state.config.thinkingEnabled ? t('js.thinkingEnabled') : t('js.thinkingDisabled'));
 }
 
-export function syncAllModelSelects() {}
+// Extension point: mirrors #modelSelector's catalog to other <select>s
+// that should track it, e.g. the coding agent's "Planner model" picker
+// (agent.js). Add new target ids to MIRROR_TARGET_IDS as needed.
+const MIRROR_TARGET_IDS = ['agentPlannerModelSelect'];
+export function syncAllModelSelects() {
+  const src = document.getElementById('modelSelector');
+  if (!src) return;
+  MIRROR_TARGET_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // Preserve the target's own current selection across the rebuild,
+    // same as #modelSelector's value preservation above.
+    const prevValue = el.value;
+    el.innerHTML = src.innerHTML;
+    if (prevValue && Array.from(el.options).some(o => o.value === prevValue)) el.value = prevValue;
+  });
+}
 
 export function _stripStoredThinking(storedText) {
   const m = /^<thinking>\n[\s\S]*?\n<\/thinking>\n\n([\s\S]*)$/.exec(storedText || '');
@@ -718,10 +735,8 @@ export const AGENTIC_WEB_TOOLS_OPENAI = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({
 }));
 
 // Shared response-shape parsing for Anthropic's /v1/messages, used by both
-// this file's own agentic-web-turn call and agent.js's callModel() — was
-// byte-identical in both places (only what each caller does with the
-// result differed: agent.js also wants data.usage, this file also wants
-// the raw content array).
+// this file's agentic-web-turn call and agent.js's callModel() — was
+// byte-identical in both, so factored out here.
 export function parseAnthropicToolResponse(data) {
   const content = data.content || [];
   const text = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -735,12 +750,10 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
   // variant's own model explicitly so it searches with itself.
   modelId = modelId || splitModelId(state.config.model).modelId;
   if (provider.type === 'anthropic') {
-    // Cache breakpoints on the (tiny but byte-identical-every-turn) tool
-    // schema and system prompt — same idea as kiconnect-agent.js's
-    // callModel(). Cheap here since there are only 2 tools, but the message
-    // history breakpoint below matters a lot across AGENTIC_TOOL_MAX_ITERS
-    // iterations of a single reply, whose tool results otherwise get
-    // rebilled at full price on every iteration.
+    // Cache breakpoints on the tool schema/system prompt, same idea as
+    // agent.js's callModel(). Cheap here (only 2 tools), but the message
+    // history breakpoint matters across many AGENTIC_TOOL_MAX_ITERS
+    // iterations, whose tool results would otherwise be rebilled each time.
     const toolsForModel = AGENTIC_WEB_TOOLS_ANTHROPIC.map(tl => ({ ...tl }));
     toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
     const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages: msgs, tools: toolsForModel, tool_choice: { type: 'auto' } };

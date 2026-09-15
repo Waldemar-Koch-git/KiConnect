@@ -1,10 +1,9 @@
 // Coding-Agent module. A "project" is a sidebar folder with an extra
-// `agentProject` field pointing at a filesystem folder on the proxy; a chat
-// filed into it runs the agent's tool loop, rendered as collapsed <details>
-// cards. Hooks into the host app via an explicit registration API
-// (registerSendMessageOverride etc., see chat-send.js/chat-sidebar.js)
-// instead of monkey-patching, since reassigning an imported ES module
-// binding isn't legal.
+// `agentProject` field pointing at a filesystem folder on the proxy; chats
+// filed into it run the agent's tool loop, rendered as collapsed <details>
+// cards. Hooks into the host app via explicit registration (registerSendMessageOverride
+// etc., see chat-send.js/chat-sidebar.js) rather than monkey-patching, since
+// reassigning an imported ES module binding isn't legal.
 import { state } from './core/state.js';
 import { agentSessionHeader, logoutNow } from './auth/accounts.js';
 import { save } from './auth/storage.js';
@@ -18,16 +17,13 @@ import { deferUntilDomReady, makeSessionFetch, makeToastFn, pollUntilReady, posi
 import { escHtml as esc } from './core/html-utils.js';
 import { tf as hostTf } from './core/i18n.js';
 import { getProviderEndpoint, proxyUrl } from './providers/provider-crud.js';
-import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, parseAnthropicToolResponse, providerForModel, splitModelId, usesTokenBudget } from './providers/provider-models.js';
+import { effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isMistralNativeThinkingModel, isTemperatureSupported, isThinkingCapable, parseAnthropicToolResponse, providerForModel, splitModelId, syncAllModelSelects, usesTokenBudget } from './providers/provider-models.js';
 import { onLanguageChange, toast as hostToast } from './ui/misc-ui.js';
 import { activeProfile } from './ui/profiles.js';
 import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateWebSearchButton } from './websearch/web-search.js';
 
-// ── i18n helper (falls back to the given text if no TRANSLATIONS
-  // entry exists — this module doesn't require editing the i18n file) ─
-  // Core lookup/substitution logic lives in core/bolton-i18n.js (was
-  // duplicated near-identically in db.js and voice.js); this wrapper keeps
-  // agent.js's own fallback semantics unchanged.
+// ── i18n helpers (fall back to the given text if no _lang entry exists;
+  // shared lookup logic lives in core/bolton-i18n.js) ──
   function t(key, fallback) { return boltonT(key, fallback); }
   // Like t(), but substitutes {placeholder} vars; prefers the host app's tf().
   function tf(key, vars) {
@@ -36,15 +32,15 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     }
     return boltonSubstitute(t(key), vars);
   }
+  // Like tf(), but also takes a fallback — for keys not added to _lang/*.js
+  // (e.g. planner strings below), since hostTf() has no fallback param.
+  function tfLocal(key, fallback, vars) { return boltonSubstitute(t(key, fallback), vars); }
   const showToast = makeToastFn(hostToast, msg => console.log('[Agent]', msg));
-  // esc() used to be a local copy of the same escaping logic that lives in
-  // chat-render.js (as escHtml) and used to live in db.js too (also as
-  // esc()) — now a single shared implementation in core/html-utils.js,
-  // aliased back to the name `esc` so none of this file's many esc(...)
-  // call sites need to change.
+  // esc(): shared HTML-escaping impl from core/html-utils.js, aliased to
+  // keep this file's existing esc(...) call sites unchanged.
 
-  // Settings persistence: just the default autonomy mode for new projects.
-  // The model itself always comes from the header's model picker (config.model).
+  // Settings persistence: just the default autonomy mode for new projects
+  // (the model itself comes from the header's model picker, config.model).
   const SETTINGS_KEY = 'kic_agent_settings';
   function loadSettings() {
     try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch { return {}; }
@@ -56,33 +52,31 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   }
   let settings = { autonomy: 'confirm', ...loadSettings() };
 
-  // Runtime state. Runs are tracked per-chat in the shared activeRuns
-  // registry (kind:'agent'), so several project chats can run at once.
-  // `pendingConfirm` is still global — two simultaneous confirm-required
-  // calls queue behind one confirm bar (known limitation).
+  // Runs are tracked per-chat in the shared activeRuns registry (kind:'agent'),
+  // so several project chats can run at once. `pendingConfirm` stays global —
+  // two simultaneous confirm-required calls queue behind one confirm bar
+  // (known limitation).
   let pendingConfirm = null;
 
-  const MAX_ITERATIONS = 200; // fallback/default — see effectiveMaxIterations()
+  const MAX_ITERATIONS = 200; // default — see effectiveMaxIterations()
 
-  // Per-project override for MAX_ITERATIONS, set via the ⚙ Agent Settings
-  // panel's number field. Falls back to the 200 default when unset or
-  // out of the sane 10–1000 range (e.g. corrupted localStorage).
+  // Per-project override, set via the ⚙ Agent Settings panel. Falls back
+  // to MAX_ITERATIONS when unset or outside the sane 10–1000 range.
   function effectiveMaxIterations(folder) {
     const v = parseInt(folder && folder.agentMaxIterations, 10);
     return Number.isFinite(v) && v >= 10 && v <= 1000 ? v : MAX_ITERATIONS;
   }
 
-  // Shrinks old tool_results in `history` to save tokens on providers
-  // WITHOUT automatic prefix caching (see KNOWN_CACHING_PROVIDERS — for
-  // those, mutating history would invalidate the cached prefix instead).
-  // Only touches results older than KEEP_RECENT_TOOL_TURNS, replacing them
-  // with a placeholder the model can re-call if still needed; disk is untouched.
+  // Shrinks old tool_results in `history` to save tokens on providers without
+  // automatic prefix caching (see KNOWN_CACHING_PROVIDERS — mutating history
+  // there would invalidate the cache instead). Replaces results older than
+  // KEEP_RECENT_TOOL_TURNS with a placeholder the model can re-call; disk untouched.
   const KEEP_RECENT_TOOL_TURNS = 6;   // tool-result turns kept 100% intact
-  const COMPACT_MIN_SIZE = 400;       // don't bother compacting tiny results (chars)
+  const COMPACT_MIN_SIZE = 400;       // skip compacting tiny results (chars)
 
-  // Providers with known automatic/session-based prefix caching. Anthropic
-  // is handled separately (explicit cache_control in callModel). Anything
-  // else (e.g. a custom openai-compat endpoint) still gets compacted.
+  // Providers with known automatic/session-based prefix caching (Anthropic is
+  // handled separately via explicit cache_control in callModel). Everything
+  // else still gets compacted.
   const KNOWN_CACHING_PROVIDERS = new Set([
     'anthropic', 'openai-direct', 'kimi', 'deepseek', 'mistral',
     'google', 'xai', 'groq', 'minimax', 'zhipu', 'openrouter',
@@ -122,6 +116,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     copy_file: '📄', copy_files: '📄',
     web_search: '🌐', fetch_url: '🔗', run_command: '⚡',
     git_log: '🕘', git_show_commit: '📜', git_file_at: '👁️', git_list_deleted: '🗑️🕘', git_restore: '♻️',
+    todo_write: '📋',
   };
   // Functions, not plain objects, so they read the CURRENT UI language at
   // render time — lets the header language switcher update open tool traces.
@@ -141,6 +136,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       git_log: t('agent.tool.gitLog', 'Git log'), git_show_commit: t('agent.tool.gitShowCommit', 'Show checkpoint'),
       git_file_at: t('agent.tool.gitFileAt', 'Read file at checkpoint'), git_list_deleted: t('agent.tool.gitListDeleted', 'List deleted files'),
       git_restore: t('agent.tool.gitRestore', 'Git restore'),
+      todo_write: t('agent.tool.todoWrite', 'Update checklist'),
     };
     return LABELS[name] || name;
   }
@@ -159,6 +155,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     if (a.command) return a.command;
     if (a.path) return a.path;
     if (a.from && a.to) return `${a.from} → ${a.to}`;
+    if (Array.isArray(a.todos)) return tf('agent.nItems', { n: a.todos.length });
     const list = Array.isArray(a.paths) ? a.paths : Array.isArray(a.files) ? a.files.map(f => f && f.path)
       : Array.isArray(a.items) ? a.items.map(it => it && it.from && it.to ? `${it.from} → ${it.to}` : (it && it.path)) : null;
     if (list) return list.length <= 3 ? list.filter(Boolean).join(', ') : tf('agent.nItems', { n: list.length });
@@ -196,43 +193,32 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       { type: 'function', function: { name: 'create_directories', description: 'Creates several (possibly nested) folders in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
       { type: 'function', function: { name: 'delete_directory', description: 'Permanently deletes a folder and all of its contents.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
       { type: 'function', function: { name: 'delete_directories', description: 'Permanently deletes several folders (and their contents) in one call.', parameters: { type: 'object', properties: { paths: { type: 'array', items: { type: 'string' } } }, required: ['paths'] } } },
+      { type: 'function', function: { name: 'todo_write', description: 'Creates or updates a visible checklist of steps for the current multi-step task, shown to the user in the UI. Call this once at the start of any task with more than a couple of steps to lay out your plan, then again whenever a step\'s status changes (e.g. mark one "completed" right after finishing it, or add newly discovered steps). Always pass the FULL current list, not just the changed item(s) — each call replaces the whole list. Not required for trivial one- or two-step tasks.', parameters: { type: 'object', properties: { todos: { type: 'array', items: { type: 'object', properties: { text: { type: 'string', description: 'Short description of the step.' }, status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] } }, required: ['text', 'status'] }, description: 'The FULL, current checklist — replaces whatever was there before.' } }, required: ['todos'] } } },
     ];
     // Marks where the always-present "core" tools end and the toggleable
-    // ones (web_search/fetch_url, run_command, git checkpoints — each
-    // gated by its own ⚙ Agent Settings flag) begin. callModel() uses this
-    // to put a SECOND, earlier cache_control breakpoint here (in addition
-    // to the one at the very end of the array): without it, a single
-    // end-of-array breakpoint means flipping ANY one of those toggles
-    // busts the cache for the entire tools+system prefix, even though the
-    // core tools (used on every single request) never changed. With two
-    // breakpoints, toggling web search only re-bills the small toggleable
-    // tail, not the whole prefix. Non-enumerable so it doesn't leak into
-    // JSON.stringify(tools) if that's ever logged/sent anywhere.
+    // ones (web_search/fetch_url, run_command, git checkpoints) begin, so
+    // callModel() can put a SECOND cache_control breakpoint here — toggling
+    // one of those settings then only re-bills the small tail, not the
+    // whole tools+system prefix. Non-enumerable so it doesn't leak into
+    // JSON.stringify(tools).
     Object.defineProperty(tools, '_coreEnd', { value: tools.length, enumerable: false });
-    // web_search/fetch_url are on by default (unlike shell/checkpoints,
-    // which default OFF) — most projects benefit from them and there's no
-    // security dimension, only a token-cost one. `!== false` so existing
-    // folders from before this setting existed (agentWebSearchEnabled is
-    // undefined) keep working exactly as before. Independent of the
-    // composer's own "Web" button/mode (state.config.webSearchMode) — see
-    // ⚙ Agent Settings, and the composer-side clarification in
-    // web-search.js's syncWebContextPopover().
+    // On by default (unlike shell/checkpoints) — no security dimension,
+    // only token cost. `!== false` keeps pre-existing folders (field
+    // undefined) working as before. Independent of the composer's own
+    // "Web" button (state.config.webSearchMode).
     if (!folder || folder.agentWebSearchEnabled !== false) {
       tools.push(
         { type: 'function', function: { name: 'web_search', description: 'Searches the web via the search engine configured in KI Connect and returns title, URL, and short description of the results. Useful for current information, documentation, or library/API research while working on the project.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
         { type: 'function', function: { name: 'fetch_url', description: 'Fetches a single webpage and returns its readable text content (e.g. to read a documentation page or search result more closely).', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
       );
     }
-    // Only offered to the model at all if the user explicitly enabled shell
-    // execution for THIS project (⚙ Agent Settings) — see agentExec().
+    // Only offered if shell execution is enabled for THIS project (⚙ Agent
+    // Settings) — see agentExec().
     if (folder && folder.agentShellEnabled) {
       tools.push({ type: 'function', function: { name: 'run_command', description: 'Runs a terminal command in the project folder (e.g. npm install, pytest, ls) and returns stdout/stderr/exit code. Runs with the same permissions as the local server — use sparingly and precisely.', parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string', description: 'Optional: subfolder relative to the project root in which the command runs.' } }, required: ['command'] } } });
     }
-    // Git/checkpoint tools only make sense — and only ever return non-empty
-    // results — when checkpointing is enabled for THIS project (⚙ Agent
-    // Settings, same toggle as agentCheckpointsEnabled below). Keeping them
-    // out of the schema otherwise saves ~5 verbose tool definitions worth of
-    // tokens on every request for projects that never turned checkpoints on.
+    // Only relevant with checkpointing on for THIS project — keeps ~5 tool
+    // definitions worth of tokens off every request otherwise.
     if (folder && folder.agentCheckpointsEnabled) {
       tools.push(
         { type: 'function', function: { name: 'git_log', description: 'Lists this project\'s local checkpoint history (newest first) — every automatic git commit made as files were changed. Use this to see what has changed over time, find a specific earlier state to inspect or restore, or figure out which checkpoint a bug was introduced in. Pass `path` to only show checkpoints that touched one specific file (useful to find that file\'s own history, including checkpoints from before it was later deleted). Each entry has a `hash` (full) and `shortHash` you can pass to git_show_commit, git_file_at, or git_restore.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Optional: only show checkpoints that touched this file (path relative to the project root).' }, limit: { type: 'integer', description: 'Optional: max number of checkpoints to return (default 200, capped at 500).' } } } } },
@@ -248,16 +234,13 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   function toolSchemaAnthropic(folder) {
     const tools = toolSchema(folder);
     const mapped = tools.map(f => ({ name: f.function.name, description: f.function.description, input_schema: f.function.parameters }));
-    // .map() drops non-enumerable/custom props, so re-attach _coreEnd —
-    // see toolSchema() for what it's for.
+    // .map() drops non-enumerable props, so re-attach _coreEnd.
     Object.defineProperty(mapped, '_coreEnd', { value: tools._coreEnd, enumerable: false });
     return mapped;
   }
   // Internal system prompt, always English regardless of UI language.
-  // `folder` is optional for backwards compatibility with any external
-  // caller that still invokes this with just a name; omitting it just
-  // means the web_search/fetch_url line below is included by default,
-  // matching toolSchema()'s own default-on behavior.
+  // `folder` is optional (backwards compat) — omitting it defaults to
+  // web_search/fetch_url included, matching toolSchema()'s default-on.
   function systemPrompt(projectName, folder) {
     const webSearchOffered = !folder || folder.agentWebSearchEnabled !== false;
     return [
@@ -269,30 +252,26 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       `Prefer the batch tools (read_files, write_files, delete_files, create_directories, delete_directories) over calling their single-file counterparts repeatedly whenever a task touches more than one file — e.g. for "delete all files in this folder" call list_files once, then delete_files once with every matching path, not one delete_file call per file.`,
       `Prefer edit_file over write_file for a small change to an otherwise-large file — it only needs the exact snippet being changed, not the whole file; pass edit_file's \`edits\` array when a file needs several separate changes, instead of calling edit_file once per change. Use move_file to rename/relocate a file or folder instead of reading and rewriting its content — but move_file DELETES the original, so never use it for "copy"/"duplicate" requests; use copy_file (or copy_files for several items) for those instead, since it leaves the original in place. Use replace_in_files instead of read_file+edit_file per file when the exact same text needs to change in several files at once (e.g. renaming a function everywhere it's used) — search_in_files first to find which files are affected.`,
       `Tool results can be large (e.g. a big file's content) and may be shown to you truncated with a note saying how much was cut off. NEVER call write_file on a file you only saw truncated or partially — you would overwrite the rest of the file with content you never actually saw. For reorganizing, reformatting, or otherwise touching most of a large file, use several edit_file/replace_in_files calls on the specific parts that change instead of write_file with the whole new content.`,
-      // Omitted (instead of e.g. "web_search is unavailable") when the tools
-      // themselves aren't offered — no point telling the model about a
-      // capability it doesn't have and that it might otherwise ask the user
-      // to confirm/retry.
+      // Omitted entirely (not "web_search unavailable") when not offered —
+      // no point flagging a capability the model doesn't have.
       webSearchOffered ? `Use web_search and fetch_url when you need current information, documentation, or details about a library/API that you're not sure about.` : null,
       `Only make changes that belong to the given task. At the end, reply in short, plain prose about what you did — that ends the run.`,
       `If important information is missing, make a reasonable assumption, state it briefly, and continue instead of asking back.`,
     ].filter(Boolean).join(' ') + profileAddendum();
   }
 
-  // Appends the active profile's custom system prompt (if any) AFTER the
-  // agent's own rules, so it layers "how to behave" on top of "how to use
-  // these tools". No-op if no profile/prompt is set.
+  // Layers the active profile's custom system prompt (if any) on top of
+  // the agent's own rules. No-op if no profile/prompt is set.
   function profileAddendum() {
     const p = (typeof activeProfile === 'function') ? activeProfile() : null;
     const text = p && p.systemPrompt ? String(p.systemPrompt).trim() : '';
     return text ? `\n\nAdditionally, follow this persona/style guidance for how you communicate: ${text}` : '';
   }
 
-  // Backend calls to /agent/* on the local proxy, carrying the current
-  // agent-session token. A 401 is treated as an expired session (logout).
+  // Backend calls to /agent/* on the proxy, carrying the current agent
+  // session token. A 401 with a token sent means an expired session (logout);
+  // a 401 with none just means "not logged in yet" (same as db.js's kbFetch()).
   /* global agentSessionHeader, logoutNow, toast */
-  // Same shared wrapper as db.js's kbFetch(): a 401 with no token sent
-  // just means "not logged in yet", not an expired session.
   const agentFetch = makeSessionFetch(
     () => (typeof agentSessionHeader === 'function' ? agentSessionHeader() : {}),
     () => {
@@ -439,12 +418,10 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   async function apiGitDeleted(project) {
     return agentJson(`/agent/git/${encodeURIComponent(project)}/deleted`, undefined, true);
   }
-  // Forces a full `git gc --aggressive --prune=now` (see agent_git_gc() in
-  // kiconnect-proxy.py) — storage only, never touches history/content.
-  // Lighter `git gc --auto` housekeeping already runs automatically after
-  // every checkpoint; this is for an on-demand deep repack. Returns byte
-  // counts so the modal can show the effect (a tiny repo can occasionally
-  // grow slightly from packfile overhead — expected).
+  // On-demand `git gc --aggressive --prune=now` (storage only, never
+  // touches history/content — lighter `git gc --auto` already runs after
+  // every checkpoint). Returns byte counts for the modal; a tiny repo can
+  // occasionally grow slightly from packfile overhead — expected.
   async function apiGitGc(project) {
     return agentJson(`/agent/git/${encodeURIComponent(project)}/gc`, { method: 'POST' }, true);
   }
@@ -659,19 +636,21 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   }
 
   // Disk-mutating tools, gating the pre-mutation apiCheckpoint() call below.
-  // Includes create_file/create_directory(ies) too: a brand-new agent-built
-  // project is typically all create_file calls, so excluding them meant
-  // checkpoints never ran for the most common case. Includes git_restore
-  // (captures state right before the restore, in addition to its own
-  // server-side post-restore checkpoint) and run_command (arbitrary shell
-  // commands can mutate the filesystem just as much as write_file). A
-  // command/call that happens not to touch disk just makes the
-  // pre-checkpoint a no-op.
+  // Includes create_file/create_directory(ies) — a brand-new project is
+  // mostly create_file calls, so excluding them would skip checkpoints for
+  // the most common case. Includes git_restore (captures state right before
+  // restore, on top of its own server-side post-restore checkpoint) and
+  // run_command (shell commands can mutate the filesystem too). A call that
+  // doesn't actually touch disk just makes the pre-checkpoint a no-op.
   const MUTATING_TOOL_NAMES = new Set([
     'write_file', 'write_files', 'edit_file', 'delete_file', 'delete_files',
     'move_file', 'copy_file', 'copy_files', 'replace_in_files', 'delete_directory', 'delete_directories',
     'create_file', 'create_directory', 'create_directories', 'git_restore', 'run_command',
   ]);
+  // Heuristic only — good enough to catch the common refusal openers without
+  // false-positiving on a legitimate plan that happens to mention "can't"
+  // mid-sentence (anchored to the start of the text).
+  const PLANNER_REFUSAL_PATTERN = /^\s*(i can'?t|i cannot|i'm sorry|i am sorry|i won'?t|i'm not able|i am not able|i must decline)\b/i;
   const _checkpointWarned = new Set(); // project ids already warned about missing git this session
   function projectCheckpointsEnabled(projectId) {
     const f = state.folders.find(x => x.agentProject === projectId);
@@ -757,6 +736,14 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     if (name === 'git_list_deleted') {
       return apiGitDeleted(project);
     }
+    if (name === 'todo_write') {
+      const todos = Array.isArray(args.todos)
+        ? args.todos.map(x => ({ text: String((x && x.text) || ''), status: (x && x.status) || 'pending' }))
+        : [];
+      const f = state.folders.find(x => x.agentProject === project);
+      if (f) { f.agentTodos = todos; save(); }
+      return { ok: true, count: todos.length };
+    }
 
     // A risky overwrite forces a confirm step regardless of autonomy
     // setting — silently applying it in "Autonomous" mode could destroy
@@ -816,11 +803,11 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     }
 
     // Real mutation about to happen — checkpoint first if enabled, so the
-    // change stays recoverable. `name` hasn't run yet, so this actually
-    // commits the PREVIOUS mutating call's effect — hence the label comes
-    // from `run._pendingCheckpointMsg` (set by that call), not `name`/`args`,
-    // or every checkpoint would be mislabeled one action late. A failed/
-    // unavailable git never blocks the tool call, just surfaces once.
+    // change stays recoverable. This actually commits the PREVIOUS mutating
+    // call's effect (`name` hasn't run yet), so the label comes from
+    // `run._pendingCheckpointMsg` — otherwise every checkpoint would be
+    // mislabeled one action late. A failed/unavailable git never blocks
+    // the tool call, just surfaces once.
     if (MUTATING_TOOL_NAMES.has(name)) {
       if (run) run.hadMutation = true;
       if (project && projectCheckpointsEnabled(project)) {
@@ -937,18 +924,12 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     hideConfirmBar();
   }
 
-  // Chat-completion call. `history` is a provider-neutral turn list (see
-  // runAgentChatTurn). callModel() translates it to the wire format
-  // `provider` needs and normalizes the reply to {text, toolCalls}, applying
-  // the same thinking/reasoning-effort settings as normal chat.
-  //
   // Serializes a tool result for the model. Truncates long STRING FIELDS
-  // individually with an explicit "…N more characters not shown" marker
+  // individually with an explicit "…N more characters not shown" marker,
   // instead of naively slicing the whole JSON string (which produced
-  // invalid JSON mid-string with no signal anything was cut — the model
-  // could then write_file and silently overwrite a file with truncated
-  // content it thought was complete; see shrinkRisk() for the write-side
-  // guard).
+  // invalid JSON with no signal anything was cut — the model could then
+  // write_file and silently overwrite a file with content it thought was
+  // complete; see shrinkRisk() for the write-side guard).
   const TOOL_RESULT_FIELD_LIMIT = 20000; // per individual long string field (e.g. file content)
   const TOOL_RESULT_TOTAL_LIMIT = 24000; // hard ceiling on the final serialized result, just in case
   function truncateLongStrings(value) {
@@ -1015,8 +996,10 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     });
     return out;
   }
-  // `signal` (the run's own AbortController) is passed in explicitly rather
-  // than shared, since several agent runs can be in flight at once.
+  // Chat-completion call: translates the provider-neutral `history` to the
+  // wire format `provider` needs and normalizes the reply to {text, toolCalls}.
+  // `signal` (the run's own AbortController) is explicit since several
+  // agent runs can be in flight at once.
   async function callModel(history, provider, folder, sessionId, signal) {
     if (!provider) throw new Error(t('agent.noModelHdr'));
     if (!provider.apiKey) throw new Error(t('agent.err.noApiKey'));
@@ -1030,30 +1013,22 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       // cache instead of billing fresh input.
       const toolsForModel = toolSchemaAnthropic(folder);
       if (toolsForModel.length) {
-        // Two breakpoints, not one: an earlier one right after the
-        // always-present "core" tools (_coreEnd, set in toolSchema()), and
-        // the usual one at the very end. Without the first, toggling any
-        // per-project tool switch (web search, shell, git checkpoints)
-        // would bust the cache for the ENTIRE tools+system prefix, since
-        // one end-of-array breakpoint covers everything up to it. With
-        // both, the core segment — used on every request regardless of
-        // those toggles — keeps its own independent, unaffected cache;
-        // only the smaller toggleable tail gets reprocessed. Uses our 4th
-        // and last available Anthropic cache_control slot (system + this
-        // + last message = the other 3 — see below and toAnthropicHistory
-        // call site).
+        // Two breakpoints: one right after the always-present "core" tools
+        // (_coreEnd) and the usual one at the end. Without the first,
+        // toggling any per-project tool switch would bust the cache for
+        // the entire tools+system prefix; with both, only the smaller
+        // toggleable tail gets reprocessed. Our 4th and last available
+        // cache_control slot (system + this + last message = the other 3).
         const coreEnd = toolsForModel._coreEnd;
         if (coreEnd && coreEnd > 0 && coreEnd < toolsForModel.length) {
           toolsForModel[coreEnd - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
         }
         toolsForModel[toolsForModel.length - 1].cache_control = { type: 'ephemeral', ttl: '1h' };
       }
-      // Second cache breakpoint on the message history: without it, only
-      // tool schema/system prompt were cached and every follow-up re-billed
-      // the entire growing history (a "read this file, split it up" task
-      // cost ~1.4M tokens reprocessing the whole file each time). Placed on
-      // the last content block of the last message so everything before it
-      // is served from cache.
+      // Second cache breakpoint on the message history — without it, every
+      // follow-up re-billed the entire growing history (a "read this file,
+      // split it up" task cost ~1.4M tokens reprocessing the file each
+      // time). Placed on the last content block of the last message.
       if (messages.length) {
         const lastMsg = messages[messages.length - 1];
         if (Array.isArray(lastMsg.content) && lastMsg.content.length) {
@@ -1067,10 +1042,9 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       const body = { model: modelId, max_tokens: effectiveMaxTokens(), messages, tools: toolsForModel };
       if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }];
       // Native server-side context management (beta), complementing
-      // compactOldToolResults() (which skips Anthropic — see there). Clears
-      // old tool results server-side after the cache-prefix lookup so it
-      // doesn't bust the prompt cache. Beta API; worst case is a surfaced
-      // 400, never silent data loss.
+      // compactOldToolResults() (which skips Anthropic). Clears old tool
+      // results server-side after the cache lookup, so it doesn't bust the
+      // prompt cache. Beta API; worst case is a surfaced 400, never data loss.
       if (state.config.anthropicContextEditing !== false) {
         body.context_management = {
           edits: [{
@@ -1199,6 +1173,72 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     } : null;
     return { text, toolCalls, usage };
   }
+  // Single, tool-less call used ONLY by the optional planner step (see
+  // runAgentCompletion() below) — not a reduced-scope callModel(), since
+  // that function's whole shape (tool schema, dual cache breakpoints,
+  // context_management, thinking budgets, session routing) is irrelevant
+  // to a single short-lived request to a separate model/provider.
+  // Duplicates just the two request-shape branches (Anthropic vs. the
+  // shared OpenAI-compatible one). `system` is always English, same as
+  // systemPrompt() above.
+  async function callPlannerModel(task, provider, modelId, customInstructions, signal) {
+    if (!provider) throw new Error(t('agent.noModelHdr'));
+    if (!provider.apiKey) throw new Error(t('agent.err.noApiKey'));
+    if (provider.enabled === false) throw new Error(t('agent.err.providerDisabled'));
+    const system = 'You are the planning step for an autonomous coding agent that operates inside a local, sandboxed project folder belonging to the person making the request. Ordinary file operations there — including deleting, overwriting, or replacing files — are expected, safe, and not real destructive actions against someone else\'s data; do not hedge or refuse on ordinary coding/file-management tasks. Given the user\'s task, sketch a short, plain-text plan as numbered steps for how the coding agent should approach it. A handful of steps is usually enough for anything but a genuinely large task. Do NOT perform the task yourself, write code, or call any tools — you have none available. Reply with the plan only, no preamble.'
+      + (customInstructions && customInstructions.trim()
+        ? `\n\nAdditional instructions from the project owner:\n${customInstructions.trim()}`
+        : '');
+
+    if (provider.type === 'anthropic') {
+      const body = { model: modelId, max_tokens: 1024, system, messages: [{ role: 'user', content: task }] };
+      const res = await fetch(proxyUrl('https://api.anthropic.com/v1/messages'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json', 'x-api-key': provider.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify(body), signal,
+      });
+      if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+      const data = await res.json();
+      return { text: parseAnthropicToolResponse(data).text, usage: data.usage || null };
+    }
+
+    // Every other provider speaks the OpenAI-compatible /chat/completions
+    // shape — same endpoint resolution as callModel(), minus the extras
+    // (tools, thinking, cache/session routing) that don't apply here.
+    const endpoint = getProviderEndpoint(provider);
+    const reqBody = { model: modelId, messages: [{ role: 'system', content: system }, { role: 'user', content: task }], stream: false };
+    const extraHeaders = {};
+    // Kept from callModel(): not optimizations but requirements some
+    // gateways check (OpenRouter's referer/title) or need for an
+    // English-shaped response (zhipu).
+    if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
+    if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
+    const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
+      body: JSON.stringify(reqBody), signal,
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+    const data = await res.json();
+    const msg = data.choices && data.choices[0] && data.choices[0].message;
+    if (!msg) throw new Error(t('agent.err.invalidModelResponse'));
+    const text = typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content)
+      ? msg.content.filter(c => c && c.type === 'text').map(c => c.text || '').join('')
+      : '');
+    // Same field-name normalization as callModel()'s OpenAI-compatible
+    // branch above (DeepSeek's non-standard cache field included).
+    const usage = data.usage ? {
+      input_tokens: data.usage.prompt_tokens,
+      output_tokens: data.usage.completion_tokens,
+      cache_read_input_tokens: data.usage.prompt_tokens_details?.cached_tokens
+        ?? data.usage.prompt_cache_hit_tokens ?? 0,
+    } : null;
+    return { text, usage };
+  }
   function extractFallbackToolCall(content) {
     if (!content) return null;
     const m = content.match(/\{[\s\S]*\}/);
@@ -1256,12 +1296,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     footer.className = 'agent-run-footer';
     const tokenEl = document.createElement('div');
     tokenEl.className = 'agent-token-counter';
-    if (run.usage) {
-      const cached = run.usage.cache_read_input_tokens || 0;
-      let text = `🔢 ${formatTokenCount(run.usage.input_tokens)} in / ${formatTokenCount(run.usage.output_tokens)} out`;
-      if (cached) text += ` (${formatTokenCount(cached)} cached)`;
-      tokenEl.textContent = text;
-    }
+    if (run.usage) tokenEl.textContent = formatUsageLine(run.usage);
     footer.appendChild(tokenEl);
     footer.appendChild(_buildInlineStopBtn(run.chatId));
     if (bubbleWrap) bubbleWrap.insertBefore(footer, bubble.nextSibling);
@@ -1284,7 +1319,12 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     // position and reapply.
     const openStates = Array.from(liveBubble.querySelectorAll('details.agent-trace')).map(d => d.open);
     liveBubble.innerHTML = formatText(renderRunMarkdown(run.steps)) || '<p>…</p>';
-    liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => { if (openStates[i]) d.open = true; });
+    liveBubble.querySelectorAll('details.agent-trace').forEach((d, i) => {
+      // Existing card: restore its state so a user collapse sticks even
+      // over the plan card's `open` default. New card (i beyond the old
+      // list): leave the template default alone.
+      if (i < openStates.length) d.open = openStates[i];
+    });
     typesetMath(liveBubble);
     // Only auto-scroll to the bottom if the user hasn't scrolled away
     // (pinnedToBottom, tracked in _js/core/state.js).
@@ -1293,6 +1333,13 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
   function renderRunMarkdown(steps) {
     return steps.map(step => {
       if (step.kind === 'text') return step.text;
+      if (step.kind === 'plan') {
+        // Open by default (unlike tool-trace cards) — the plan is worth
+        // reading up front. Usage sits in the summary line, not as a
+        // trailing line in the body.
+        const usagePart = step.usageLine ? ` | ${esc(step.usageLine)}` : '';
+        return `<details class="agent-trace agent-plan-trace" open><summary>🧭 <b>${esc(step.label)}</b>${usagePart}</summary>\n\n${step.text}\n\n</details>`;
+      }
       const summary = `${TOOL_ICONS[step.name] || '🔧'} <b>${esc(toolLabel(step.name))}</b>` +
         (stepSubjectText(step) ? ` <code>${esc(stepSubjectText(step))}</code>` : '') +
         ` — <em>${statusText(step.status)}</em>`;
@@ -1693,8 +1740,61 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     if (bubbleWrap) bubbleWrap.insertBefore(footer, bubble.nextSibling);
     rerenderCurrentRun(run);
 
+    // Optional planning step: ONE tool-less call to a separate (typically
+    // cheaper) model that sketches a short plan before the coder loop below.
+    // Opt-in per project, runs entirely before the loop — not a sub-agent,
+    // never touches the filesystem, so no checkpoint needed. A failure here
+    // is never fatal to the turn (see catch below).
+    let aborted = false;
+    let plannerRefused = false;
+    let plannerPlanText = '';
+    // Declared before the planner block so its usage (parsed the same way
+    // as the coder's) folds into one running total instead of a separate
+    // counter — the coder loop below only ever adds to it.
+    const totalUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    let sawUsage = false;
+    if (folder.agentPlannerEnabled) {
+      if (!folder.agentPlannerModel) {
+        steps.push({ kind: 'text', text: `⚠️ ${t('agent.plannerNoModel', 'Planning step is enabled but no planner model is selected — skipping.')}` });
+        rerenderCurrentRun(run);
+      } else {
+        const plannerProvider = providerForModel(folder.agentPlannerModel);
+        const plannerModelId = splitModelId(folder.agentPlannerModel).modelId;
+        try {
+          const { text: planText, usage: plannerUsage } = await callPlannerModel(task, plannerProvider, plannerModelId, folder.agentPlannerInstructions, run.abortController.signal);
+          if (plannerUsage) {
+            sawUsage = true;
+            addUsage(totalUsage, plannerUsage);
+            updateTokenCounterUI(totalUsage, run);
+          }
+          if (planText && planText.trim()) {
+            plannerPlanText = planText.trim();
+            // Planner's own token line shown inline on its step too —
+            // cosmetic only, same numbers already folded into totalUsage.
+            const plannerLabel = tfLocal('agent.plannerStepLabel', 'Plan ({model})', { model: plannerModelId });
+            steps.push({ kind: 'plan', label: plannerLabel, text: plannerPlanText, usageLine: plannerUsage ? formatUsageLine(plannerUsage) : '' });
+            if (PLANNER_REFUSAL_PATTERN.test(plannerPlanText)) {
+              plannerRefused = true;
+              steps.push({ kind: 'text', text: `⚠️ ${t('agent.plannerRefused', 'The planning step declined this task, so the coding agent was not started. You can disable the planning step in Agent Settings, adjust the planner instructions there, or rephrase the request.')}` });
+            }
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') { aborted = true; }
+          else steps.push({ kind: 'text', text: `⚠️ ${tfLocal('agent.plannerFailed', 'Planning step failed: {error}', { error: esc(err.message) })}` });
+        }
+        rerenderCurrentRun(run);
+      }
+    }
+
+    // Plan text isn't forwarded when plannerRefused — moot anyway since the
+    // loop below is skipped entirely in that case.
     let history = [
-      { role: 'system', text: systemPrompt(folder.name, folder) },
+      {
+        role: 'system',
+        text: systemPrompt(folder.name, folder) + (plannerPlanText && !plannerRefused
+          ? `\n\nA separate planning step already sketched this approach for the task — use it as guidance, but use your own judgment if it turns out to be wrong or incomplete:\n${plannerPlanText}`
+          : ''),
+      },
       ...priorHistory,
       Array.isArray(content) ? { role: 'user', text: task, content } : { role: 'user', text: task },
     ];
@@ -1702,14 +1802,13 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
     // from several turns ago; only duplicate reads within this turn cache.
     _readFileCache.clear();
 
-    let iterations = 0, aborted = false;
+    let iterations = 0;
     const maxIterations = effectiveMaxIterations(folder);
-    // A single agent "turn" can involve several model calls (one per
-    // tool round-trip) — sum them so the badge reflects the full cost.
-    const totalUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-    let sawUsage = false;
     try {
-      while (iterations < maxIterations) {
+      // aborted/plannerRefused can already be true here (Stop hit during
+      // planning, or planner declined) — the loop is then skipped, same
+      // as an abort mid-loop falling through to the message after it.
+      while (!aborted && !plannerRefused && iterations < maxIterations) {
         iterations++;
         // Only compact for providers without confirmed prefix caching (see
         // KNOWN_CACHING_PROVIDERS).
@@ -1723,10 +1822,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
         }
         if (result.usage) {
           sawUsage = true;
-          totalUsage.input_tokens += result.usage.input_tokens || 0;
-          totalUsage.output_tokens += result.usage.output_tokens || 0;
-          totalUsage.cache_read_input_tokens += result.usage.cache_read_input_tokens || 0;
-          totalUsage.cache_creation_input_tokens += result.usage.cache_creation_input_tokens || 0;
+          addUsage(totalUsage, result.usage);
           updateTokenCounterUI(totalUsage, run);
         }
         const toolCalls = result.toolCalls || [];
@@ -1776,7 +1872,7 @@ import { fetchLinkedPage, performWebSearch, registerAgentSettingsOpener, updateW
       const finalMd = renderRunMarkdown(steps);
       // Plain-text version (no tool-call HTML) fed back as context for
       // future agent runs in this chat.
-      const contextText = steps.filter(s => s.kind === 'text').map(s => s.text).join('\n\n');
+      const contextText = steps.filter(s => s.kind === 'text' || s.kind === 'plan').map(s => s.text).join('\n\n');
       // _model uses run.model (frozen at run start), not live config.model
       // — same "header changed mid-run" fix as the chat-stream path.
       const msgObj = { role: 'assistant', content: finalMd, _model: run.model, _agentText: contextText, _agentSteps: steps, _usage: sawUsage ? totalUsage : undefined };
@@ -1915,8 +2011,10 @@ details.agent-trace[data-status="error"]{border-color:var(--red,#e74c3c);}
 details.agent-trace[data-status="pending"]{border-color:#f39c12;}
 details.agent-trace[data-status="simulated"]{border-color:#7c5cfc;}
 details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
+details.agent-plan-trace{border-color:#7c5cfc;background:var(--surface2,rgba(124,92,252,.06));}
 .folder.agent-project-folder .folder-header{border-left:2px solid var(--accent,#3d7eff);}
 .agent-settings-panel{position:fixed;width:300px;max-width:88vw;background:var(--surface,#1c1c1e);border:1px solid var(--border,rgba(128,128,128,.25));border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:14px;z-index:120;display:none;}
+.agent-settings-panel.agent-planner-instr-panel{width:260px;z-index:125;}
 .agent-settings-panel.open{display:block;}
 .agent-toggle-switch{position:relative;display:inline-block;width:36px;height:20px;flex-shrink:0;}
 .agent-toggle-switch input{opacity:0;width:0;height:0;}
@@ -2118,10 +2216,8 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       chip.firstChild.textContent = focused ? '🤖 ' : '📁 ';
       label.textContent = focused ? folder.name : t('agent.noProject');
     }
-    // The gear only leads anywhere useful while a project is focused (its
-    // panel is entirely project-scoped settings + a "pick a project first"
-    // hint otherwise) - hide it in plain-chat mode instead of showing a
-    // button that mostly just tells you it can't do anything yet.
+    // The gear panel is entirely project-scoped, so hide it in plain-chat
+    // mode instead of showing a button that does nothing yet.
     const gearBtn = document.getElementById('agentGearBtn');
     if (gearBtn) gearBtn.hidden = !focused;
     if (hdrBtn && hdrLabel) {
@@ -2129,14 +2225,10 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       hdrBtn.firstChild.textContent = focused ? '🤖 ' : '📁 ';
       hdrLabel.textContent = focused ? folder.name : t('agent.noProject');
     }
-    // The composer's own "Web" button/popover looks and behaves differently
-    // while a project is focused (see web-search.js) — nothing else calls
-    // updateWebSearchButton() on a chat/project switch, only on the web
-    // module's own state changes, so it needs an explicit nudge here.
+    // The composer's "Web" button looks/behaves differently while a project
+    // is focused (web-search.js) — needs an explicit nudge on chat switch.
     updateWebSearchButton();
-    // Same reasoning for Battle-Modus (core/state.js) — it has no meaning
-    // in project/agent mode and needs to hide/show on every chat switch,
-    // not just its own popover's internal state changes.
+    // Same for Battle-Modus (core/state.js): meaningless in agent mode.
     if (typeof window.refreshBattlePopoverUI === 'function') window.refreshBattlePopoverUI();
   }
   // Compact human-readable token count (850 -> "850", 12400 -> "12.4K").
@@ -2146,21 +2238,33 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return String(n);
   }
-  // Live running-cost total under the streaming bubble (composer bar can't
-  // tie to a specific run). Created as a sibling of the bubble so
-  // rerenderCurrentRun()'s innerHTML resets never wipe it; removed when the
-  // run ends. `run` should be passed explicitly by the tool loop; falls
-  // back to _agentRun() otherwise.
+  // Adds one usage object's counts onto a running total in place.
+  function addUsage(totalUsage, usage) {
+    if (!usage) return;
+    totalUsage.input_tokens += usage.input_tokens || 0;
+    totalUsage.output_tokens += usage.output_tokens || 0;
+    totalUsage.cache_read_input_tokens += usage.cache_read_input_tokens || 0;
+    totalUsage.cache_creation_input_tokens += usage.cache_creation_input_tokens || 0;
+  }
+  // Shared by updateTokenCounterUI() and the planner step's summary badge
+  // — same "[ ↑ X in | ↓ Y out | ∑ Z ] (W cached)" shape either way.
+  function formatUsageLine(usage) {
+    const cached = usage.cache_read_input_tokens || 0;
+    const total = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+    let text = `[ ↑ ${formatTokenCount(usage.input_tokens)} in | ↓ ${formatTokenCount(usage.output_tokens)} out | ∑ ${formatTokenCount(total)} ]`;
+    if (cached) text += ` (${formatTokenCount(cached)} cached)`;
+    return text;
+  }
+  // Live running-cost total under the streaming bubble. Sibling of the
+  // bubble so rerenderCurrentRun()'s innerHTML resets never wipe it;
+  // removed when the run ends. `run` falls back to _agentRun().
   function updateTokenCounterUI(usage, run) {
     run = run || _agentRun();
     if (run) run.usage = usage; // stored so a reattached bubble can prefill the counter immediately
     const liveRow = run ? _runBubbleEl(run) : null;
     const liveTokenEl = liveRow ? liveRow.querySelector('.agent-token-counter') : null;
     if (!liveTokenEl) return;
-    const cached = usage.cache_read_input_tokens || 0;
-    let text = `🔢 ${formatTokenCount(usage.input_tokens)} in / ${formatTokenCount(usage.output_tokens)} out`;
-    if (cached) text += ` (${formatTokenCount(cached)} cached)`;
-    liveTokenEl.textContent = text;
+    liveTokenEl.textContent = formatUsageLine(usage);
   }
 
   // Settings popover (provider / model / autonomy / manage projects)
@@ -2196,6 +2300,15 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         </div>
         <div class="agent-hint" id="agentCheckpointHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.checkpointHint'))}</div>
         <button class="agent-small-btn" id="agentOpenHistoryBtn" style="margin-top:6px;width:100%;padding:6px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:none;color:var(--text,#eee);cursor:pointer;font-size:11.5px;">🕘 ${esc(t('agent.gitHistory'))}</button>
+        <div class="setting-label" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;">
+          <span id="agentPlannerLabel">🧭 ${esc(t('agent.plannerLabel', 'Planning step'))}</span>
+          <label class="agent-toggle-switch"><input type="checkbox" id="agentPlannerToggle"><span class="agent-toggle-slider"></span></label>
+        </div>
+        <div class="agent-hint" id="agentPlannerHint" style="font-size:10px;color:var(--muted);">${esc(t('agent.plannerHint', 'A separate, usually cheaper model sketches a short plan before the coding agent starts — visible as its own step in the chat.'))}</div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <select class="setting-input" id="agentPlannerModelSelect" style="flex:1;min-width:0;" disabled></select>
+          <button class="agent-small-btn" id="agentPlannerInstrBtn" title="${esc(t('agent.plannerInstructionsBtn', 'Planner instructions'))}" style="flex-shrink:0;width:34px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:none;color:var(--text,#eee);cursor:pointer;font-size:13px;">📝</button>
+        </div>
         <div class="setting-group" style="margin-top:12px;">
           <div class="setting-label" style="display:flex;align-items:center;justify-content:space-between;">
             <span id="agentMaxIterLabel">🔁 ${esc(t('agent.maxIterLabel'))}</span>
@@ -2208,7 +2321,12 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       <div id="agentProjList"></div>
     `;
     document.body.appendChild(panel);
-    document.getElementById('agentSettingsClose').addEventListener('click', () => panel.classList.remove('open'));
+    injectPlannerInstrPanel();
+    document.getElementById('agentSettingsClose').addEventListener('click', () => {
+      panel.classList.remove('open');
+      const instrPanel = document.getElementById('agentPlannerInstrPanel');
+      if (instrPanel) instrPanel.classList.remove('open');
+    });
     document.getElementById('agentAutonomyRow').addEventListener('click', e => {
       const chip = e.target.closest('.agent-chip'); if (!chip) return;
       const folder = currentProjectFolder();
@@ -2272,6 +2390,28 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       panel.classList.remove('open');
       openGitHistoryPanel(folder);
     });
+    document.getElementById('agentPlannerToggle').addEventListener('change', e => {
+      // Purely client-side, like agentWebSearchToggle above — no server
+      // call to await, so no try/catch/revert needed.
+      const folder = currentProjectFolder();
+      const box = e.target;
+      if (!folder) { box.checked = false; return; }
+      folder.agentPlannerEnabled = box.checked;
+      save();
+      const select = document.getElementById('agentPlannerModelSelect');
+      if (select) select.disabled = !box.checked;
+      showToast(box.checked ? t('agent.plannerOn', 'Planning step enabled') : t('agent.plannerOff', 'Planning step disabled'));
+    });
+    document.getElementById('agentPlannerModelSelect').addEventListener('change', e => {
+      const folder = currentProjectFolder();
+      if (!folder) return;
+      folder.agentPlannerModel = e.target.value || '';
+      save();
+    });
+    document.getElementById('agentPlannerInstrBtn').addEventListener('click', e => {
+      e.stopPropagation();
+      togglePlannerInstrPanel();
+    });
     document.getElementById('agentMaxIterInput').addEventListener('change', e => {
       const folder = currentProjectFolder();
       const input = e.target;
@@ -2285,6 +2425,45 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     // Close on any click elsewhere — gear button and panel handlers both
     // stop propagation, so clicking inside never triggers this.
     document.addEventListener('click', () => panel.classList.remove('open'));
+  }
+
+  // Small popover for the planner-instructions textarea, anchored to the
+  // 📝 button next to the planner model select — its own floating panel
+  // (same mechanics as agentSettingsPanel) so the settings panel doesn't
+  // grow when opened. Appended to <body> as a sibling, not a child.
+  function injectPlannerInstrPanel() {
+    const panel = document.createElement('div');
+    panel.className = 'agent-settings-panel agent-planner-instr-panel';
+    panel.id = 'agentPlannerInstrPanel';
+    panel.innerHTML = `
+      <div class="agent-settings-title"><span id="agentPlannerInstrTitle">📝 ${esc(t('agent.plannerInstructionsTitle', 'Planner instructions'))}</span><button class="close-btn" id="agentPlannerInstrClose">✕</button></div>
+      <div class="agent-hint" id="agentPlannerInstrHintText" style="font-size:10px;color:var(--muted);margin-bottom:6px;">${esc(t('agent.plannerInstructionsHint', 'Optional, separate from the chat profile — extra instructions just for the planning step (e.g. focus areas, risk notes to call out).'))}</div>
+      <textarea id="agentPlannerInstructions" rows="6" placeholder="${esc(t('agent.plannerInstructionsPlaceholder', 'Optional: extra instructions just for the planning step (e.g. focus areas, risk notes to call out)...'))}" style="width:100%;resize:vertical;background:none;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:6px;color:var(--text,#eee);font-size:11.5px;padding:6px;font-family:inherit;"></textarea>
+    `;
+    document.body.appendChild(panel);
+    document.getElementById('agentPlannerInstrClose').addEventListener('click', () => panel.classList.remove('open'));
+    document.getElementById('agentPlannerInstructions').addEventListener('change', e => {
+      const folder = currentProjectFolder();
+      if (!folder) return;
+      folder.agentPlannerInstructions = e.target.value || '';
+      save();
+    });
+    // Same stop-propagation-then-close-on-document-click pattern as
+    // agentSettingsPanel above — keeps this popover independent of it, so
+    // opening/closing one never affects the other.
+    panel.addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => panel.classList.remove('open'));
+  }
+  function togglePlannerInstrPanel() {
+    const panel = document.getElementById('agentPlannerInstrPanel');
+    const btn = document.getElementById('agentPlannerInstrBtn');
+    if (!panel || !btn) return;
+    if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+    const folder = currentProjectFolder();
+    const ta = document.getElementById('agentPlannerInstructions');
+    if (ta) ta.value = (folder && folder.agentPlannerInstructions) || '';
+    panel.classList.add('open');
+    requestAnimationFrame(() => positionPanelNearAnchor(panel, btn, { fallbackWidth: 260, aboveThreshold: 200 }));
   }
 
   // Folder picker: browse real OS folders to pick/create a project root.
@@ -2445,6 +2624,20 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
     if (webSearchToggle) webSearchToggle.checked = folder.agentWebSearchEnabled !== false;
     const checkpointToggle = document.getElementById('agentCheckpointToggle');
     if (checkpointToggle) checkpointToggle.checked = !!folder.agentCheckpointsEnabled;
+    const plannerToggle = document.getElementById('agentPlannerToggle');
+    if (plannerToggle) plannerToggle.checked = !!folder.agentPlannerEnabled;
+    const plannerSelect = document.getElementById('agentPlannerModelSelect');
+    if (plannerSelect) {
+      // Belt-and-suspenders re-sync — syncAllModelSelects() also runs
+      // whenever provider-models.js reloads the catalog, but the panel
+      // may have opened between provider loads (or before the very first
+      // one), so make sure the options are current before setting .value.
+      syncAllModelSelects();
+      plannerSelect.disabled = !folder.agentPlannerEnabled;
+      plannerSelect.value = folder.agentPlannerModel || '';
+    }
+    const plannerInstructions = document.getElementById('agentPlannerInstructions');
+    if (plannerInstructions) plannerInstructions.value = folder.agentPlannerInstructions || '';
     const maxIterInput = document.getElementById('agentMaxIterInput');
     if (maxIterInput) maxIterInput.value = effectiveMaxIterations(folder);
     document.querySelectorAll('#agentAutonomyRow .agent-chip').forEach(c => c.classList.toggle('selected', c.dataset.mode === mode));
@@ -3050,12 +3243,22 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   function toggleAgentSettingsPanel() {
     const panel = document.getElementById('agentSettingsPanel');
     if (!panel) return;
-    if (panel.classList.contains('open')) { panel.classList.remove('open'); return; }
+    if (panel.classList.contains('open')) {
+      panel.classList.remove('open');
+      const instrPanel = document.getElementById('agentPlannerInstrPanel');
+      if (instrPanel) instrPanel.classList.remove('open');
+      return;
+    }
     openAgentSettingsPanel();
   }
   window.addEventListener('resize', () => {
     const panel = document.getElementById('agentSettingsPanel');
     if (panel && panel.classList.contains('open')) positionAgentSettingsPanel();
+    const instrPanel = document.getElementById('agentPlannerInstrPanel');
+    const instrBtn = document.getElementById('agentPlannerInstrBtn');
+    if (instrPanel && instrBtn && instrPanel.classList.contains('open')) {
+      positionPanelNearAnchor(instrPanel, instrBtn, { fallbackWidth: 260, aboveThreshold: 200 });
+    }
   });
   //  Wiring into the host app (send interception, sidebar icons)
   function installHooks() {
@@ -3101,13 +3304,9 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
   }
 
   // Applies t(key) to a batch of elements found by id, in place. Centralizes
-  // the repetitive "getElementById -> null-guard -> set text/title/
-  // placeholder from a translation, maybe with an icon prefix" triple that
-  // used to be hand-rolled per element below. Adding a new translated hint
-  // now means adding one row to a table next to its siblings, instead of a
-  // standalone getElementById/if/set block that's easy to leave out (see:
-  // agentMaxIterLabel/agentMaxIterHint, which shipped in the settings panel
-  // markup but were missing here until this pass).
+  // the repetitive getElementById→null-guard→set-text triple, so a new
+  // translated hint is one table row instead of a standalone block that's
+  // easy to leave out.
   // entries: [elementId, i18nKey, { attr?: 'textContent'|'title'|'placeholder', prefix?: string }]
   function _applyI18nBatch(entries) {
     entries.forEach(([id, key, opts]) => {
@@ -3157,6 +3356,9 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
         ['agentMaxIterHint', 'agent.maxIterHint'],
         ['agentProjectsLabel', 'agent.projects'],
         ['agentOpenHistoryBtn', 'agent.gitHistory', { prefix: '🕘 ' }],
+        ['agentPlannerLabel', 'agent.plannerLabel', { prefix: '🧭 ' }],
+        ['agentPlannerHint', 'agent.plannerHint'],
+        ['agentPlannerInstrBtn', 'agent.plannerInstructionsBtn', { attr: 'title' }],
       ]);
       const chipAuto = panel.querySelector('.agent-chip[data-mode="auto"]');
       if (chipAuto) chipAuto.textContent = t('agent.autoMode');
@@ -3166,6 +3368,13 @@ details.agent-trace[data-status="rejected"]{border-color:var(--red,#e74c3c);}
       if (chipSimulate) chipSimulate.textContent = t('agent.simulateMode');
       if (panel.classList.contains('open')) { renderAutonomyChips(); renderProjectList(); }
     }
+
+    // Planner-instructions popover: static chrome only, its own panel.
+    _applyI18nBatch([
+      ['agentPlannerInstrTitle', 'agent.plannerInstructionsTitle', { prefix: '📝 ' }],
+      ['agentPlannerInstrHintText', 'agent.plannerInstructionsHint'],
+      ['agentPlannerInstructions', 'agent.plannerInstructionsPlaceholder', { attr: 'placeholder' }],
+    ]);
 
     // Folder picker modal
     const fpTitle = document.querySelector('#agentFolderPickerModal .agent-modal-title span');
