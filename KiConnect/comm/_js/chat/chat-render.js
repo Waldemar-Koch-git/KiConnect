@@ -4,7 +4,7 @@ import { renderEditFileChips } from './chat-attachments.js';
 import { _buildBattleTileGridRow, _buildLiveRunBubble, activeRuns, regenerate, syncComposerStreamingUI } from './chat-send.js';
 import { currentChat, getActivePath, renderSidebar } from './chat-sidebar.js';
 import { escHtml } from '../core/html-utils.js';
-import { retranslateCodeBlockButtons, t, tf } from '../core/i18n.js';
+import { retranslateCodeBlockButtons, retranslateChatgptErrors, t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { buildKbSourcesRow } from '../db.js';
 import { splitModelId } from '../providers/provider-models.js';
@@ -187,6 +187,7 @@ export function buildMsgEl(msg, idx) {
   row.appendChild(avatarCol); row.appendChild(wrap);
 
   _buildBubbleChrome(row, wrap, bubble, msg, idx);
+  retranslateChatgptErrors(row);
   return row;
 }
 
@@ -1051,7 +1052,7 @@ export function formatText(raw) {
                      'ul','ol','li','code','pre','hr','table','thead','tbody','tr','th','td',
                      'div','span','button','a','u','sup','sub','mark','small','s','ins',
                      'abbr','cite','kbd','details','summary','blockquote','input','img'],
-      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','data-latex',
+      ALLOWED_ATTR: ['style','class','href','target','rel','title','data-b64','data-latex','data-chatgpt-error',
                      'type','checked','disabled','src','alt','loading','start','open'],
       FORBID_ATTR:  ['onerror','onload','onmouseover','onfocus','onblur','onclick',
                      'onmouseout','onkeydown','onkeyup','onkeypress','onchange','oninput'],

@@ -884,6 +884,29 @@ textarea.setting-input      { resize: vertical; min-height: 70px; max-height: no
 }
 .type-chip.selected { border-color: var(--accent); color: var(--text); background: rgba(61, 126, 255, 0.12); }
 
+/* ChatGPT account login has a separate visual identity across all themes. */
+.provider-item.provider-item-chatgpt {
+  border: 2px solid #218b79;
+  border-inline-start-width: 5px;
+}
+.provider-item.provider-item-chatgpt:hover {
+  border-color: #31b59e;
+}
+.type-chip[data-type="chatgpt"] {
+  border: 2px solid #218b79;
+}
+.type-chip[data-type="chatgpt"].selected {
+  border-color: #31b59e;
+  background: rgba(33, 139, 121, 0.14);
+  box-shadow: 0 0 0 1px rgba(49, 181, 158, 0.25);
+}
+.chatgpt-login-group {
+  padding: 12px;
+  border: 2px solid #218b79;
+  border-radius: 10px;
+  background: rgba(33, 139, 121, 0.06);
+}
+
 
 /* Profile panel */
 

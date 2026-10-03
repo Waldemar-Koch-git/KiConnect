@@ -1,3 +1,4 @@
+import { providerReady, providerAuthHeaders, providerRequestBody, createChatgptError, providerResponseError } from '../providers/chatgpt-auth.js';
 import { _pullBackForOpenBlock } from '../auth/accounts.js';
 import { save } from '../auth/storage.js';
 import { _runStreamAndAttach, buildAttachmentContent, clearAttachments, renderAttachments } from './chat-attachments.js';
@@ -8,7 +9,7 @@ import { bt, btf, t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
 import { buildKbAugmentedContent, buildKbSourcesRow, kbClearActiveSelection, kbRetrieveForQuery } from '../db.js';
 import { getProviderEndpoint, openProviderPanel, proxyUrl } from '../providers/provider-crud.js';
-import { _stripStoredThinking, callModelForAgenticWebTurn, effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isTemperatureSupported, isThinkingCapable, providerForModel, splitModelId, usesTokenBudget } from '../providers/provider-models.js';
+import { _stripStoredThinking, callModelForAgenticWebTurn, effectiveMaxTokens, isAdaptiveThinkingModel, isMistralAdjustableThinkingModel, isTemperatureSupported, isThinkingCapable, isThinkingCapableForProvider, providerForModel, splitModelId, usesOpenAIReasoningParameters, usesTokenBudget } from '../providers/provider-models.js';
 import { getMaxImageStorageBytes, openSettings, setStatus, toast } from '../ui/misc-ui.js';
 import { buildLinkedPageAugmentedContent, buildWebAugmentedContent, extractReadableHttpUrls, fetchLinkedPage, fetchLinkedPagesFromText, performWebSearch, renderDetectedLinks, shouldAutoWebSearch, shouldUseWebSearch, updateWebSearchButton, webEngineNeedsKey } from '../websearch/web-search.js';
 
@@ -202,13 +203,15 @@ export function _toAnthropicContent(content) {
   });
 }
 
-export function _toOpenAIContent(content) {
+export function _toOpenAIContent(content, provider) {
   if (!Array.isArray(content)) return content;
   return content.map(p => {
     if (p.type === 'pdf_text')
       return { type: 'text', text: `${tf('js.fileContent',{name:p.name})}\n${p.text}\n${t('js.fileEnd')}` };
     if (p.type === 'pdf_base64')
-      return { type: 'text', text: `[PDF: ${p.name}]` }; // b64 not supported in OpenAI text mode
+      return provider?.type === 'chatgpt'
+        ? { type: 'file', file: { filename: p.name || 'document.pdf', file_data: 'data:application/pdf;base64,' + p.data } }
+        : { type: 'text', text: `[PDF: ${p.name}]` };
     if (p.type === 'text')
       return { type: 'text', text: p.text || '' };
     return p;
@@ -310,6 +313,7 @@ export function renderStreamingBubble(bubbleEl, thinkingText, assistantText) {
 }
 
 export function _finalizeStreamingBubble(bubbleEl, assistantText) {
+  bubbleEl.querySelector('.dots')?.remove();
   const stableEl = bubbleEl.querySelector('.msg-stable');
   const tailEl = bubbleEl.querySelector('.msg-tail');
   const full = assistantText || '';
@@ -319,6 +323,8 @@ export function _finalizeStreamingBubble(bubbleEl, assistantText) {
     if (remaining) stableEl.insertAdjacentHTML('beforeend', formatText(remaining));
     tailEl.innerHTML = '';
     _streamStableCache.set(bubbleEl, { len: full.length });
+  } else if (full) {
+    bubbleEl.innerHTML = formatText(full);
   }
   typesetMath(bubbleEl);
 }
@@ -340,6 +346,18 @@ export function _finishLiveStreamUI() {
 // Read SSE body -> yield lines, carrying partial lines across chunks.
 async function* _sseLines(res) {
   const reader = res.body.getReader(), decoder = new TextDecoder();
+  const chatgpt = res.url.includes('/chatgpt/');
+  let completed = false;
+  function check(line) {
+    if (chatgpt && line.startsWith('data:')) {
+      const payload = line.slice(5).trim();
+      if (payload === '[DONE]') completed = true;
+      else {
+        let event; try { event = JSON.parse(payload); } catch { return; }
+        if (event.error) throw createChatgptError(event.error.key ? event.error : event.error.message || 'chatgpt.streamFailed');
+      }
+    }
+  }
   let buf = '';
   while (true) {
     const { done, value } = await reader.read();
@@ -347,8 +365,24 @@ async function* _sseLines(res) {
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split('\n');
     buf = lines.pop();
-    for (const line of lines) yield line;
+    for (const line of lines) { check(line); yield line; }
   }
+  buf += decoder.decode();
+  if (buf) { check(buf); yield buf; }
+  if (chatgpt && !completed) throw createChatgptError('chatgpt.interrupted');
+}
+
+function _moveTypingDotsToBubble(typingId, aiEl) {
+  const typingEl = document.getElementById(typingId);
+  const dots = typingEl?.querySelector('.dots');
+  const bubble = aiEl?.querySelector('.bubble');
+  if (dots && bubble) bubble.appendChild(dots);
+  removeTyping(typingId);
+}
+
+function _isKiConnectProvider(provider) {
+  return provider.type === 'kiconnect-nrw' ||
+    (provider.type === 'openai-compat' && (provider.serverUrl || '').includes('kiconnect.nrw'));
 }
 
 // Anthropic /v1/messages request body.
@@ -410,6 +444,7 @@ function _buildOpenAiApiMessages(messages, includeToolStuff) {
     if (m.role === 'user' || m.role === 'assistant') {
       const msg = { role: m.role, content: m.content };
       if (includeToolStuff && m.tool_calls) msg.tool_calls = m.tool_calls;
+      if (includeToolStuff && m._chatgpt_output) msg._chatgpt_output = m._chatgpt_output;
       apiMsgs.push(msg);
     } else if (includeToolStuff && m.role === 'tool') {
       apiMsgs.push({ role: 'tool', tool_call_id: m.tool_call_id, content: m.content });
@@ -420,15 +455,16 @@ function _buildOpenAiApiMessages(messages, includeToolStuff) {
 
 // o-series/GPT-5 use max_completion_tokens + reasoning_effort instead of
 // max_tokens/temperature; identical branch in both callers.
-function _applyOaiEffortAndTokens(reqBody, modelId) {
-  const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
+function _applyOaiEffortAndTokens(reqBody, modelId, provider) {
+  const isOSeries = usesOpenAIReasoningParameters(modelId);
+  const capable = isThinkingCapableForProvider(provider, modelId);
   if (isOSeries) {
     reqBody.max_completion_tokens = effectiveMaxTokens();
-    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
+    if (state.config.thinkingEnabled && capable) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
   } else {
     reqBody.temperature = state.config.temperature;
     reqBody.max_tokens = effectiveMaxTokens();
-    if (state.config.thinkingEnabled && isThinkingCapable(modelId)) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
+    if (state.config.thinkingEnabled && capable) reqBody.reasoning_effort = OAI_EFFORT[state.config.thinkingIntensity || 2];
   }
 }
 
@@ -441,11 +477,11 @@ function _buildOpenAiExtraHeaders(provider, { zhipuAcceptLanguage = false } = {}
 }
 
 // OpenAI-compatible streaming fetch call. Identical shape in both callers.
-function _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, signal) {
+async function _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, signal) {
   return fetch(proxyUrl(`${endpoint}/chat/completions`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
-    body: JSON.stringify(reqBody),
+    headers: { 'Content-Type': 'application/json', ...providerAuthHeaders(provider), ...extraHeaders },
+    body: await providerRequestBody(provider, reqBody),
     signal,
   });
 }
@@ -492,8 +528,8 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
     const body = _buildAnthropicBody(modelId, messages);
     const res = await _fetchAnthropicStream(provider, body, run.abortController.signal);
     if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-    removeTyping(typingId);
     const aiEl = appendEmptyAI(run.model, runId);
+    _moveTypingDotsToBubble(typingId, aiEl);
     run.bubbleEl = aiEl;
     let thinkingText = '', inThinkingBlock = false;
     for await (const line of _sseLines(res)) {
@@ -539,7 +575,7 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
     // GPT-5 is a reasoning model like the o-series: rejects `temperature`
     // and `max_tokens`, requires `max_completion_tokens` — same branch as
     // o1/o3/o4.
-    _applyOaiEffortAndTokens(reqBody, modelId);
+    _applyOaiEffortAndTokens(reqBody, modelId, provider);
     if (documentIds?.length) reqBody.documents = documentIds;
     if (provider.type !== 'zhipu') {
       reqBody.stream_options = { include_usage: true };
@@ -571,15 +607,16 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
     }
     const extraHeaders = _buildOpenAiExtraHeaders(provider, { zhipuAcceptLanguage: true });
     const res = await _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, run.abortController.signal);
-    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-    removeTyping(typingId);
+    if (!res.ok) throw await providerResponseError(provider, res, 0);
     const aiEl = appendEmptyAI(run.model, runId);
+    _moveTypingDotsToBubble(typingId, aiEl);
     run.bubbleEl = aiEl;
     let thinkingText = '';
     const isZhipu = provider.type === 'zhipu';
     const isMinimax = provider.type === 'minimax';
     const isMistral = provider.type === 'mistral' && isThinkingCapable(modelId);
-    const showsThinking = isZhipu || isMinimax || isMistral;
+    const isKiConnect = _isKiConnectProvider(provider);
+    const showsThinking = isZhipu || isMinimax || isMistral || isKiConnect;
     // MiniMax's delta.reasoning_details[].text arrives cumulative (each chunk
     // repeats everything so far), unlike GLM's incremental reasoning_content —
     // so track the previously-seen length to extract only the new suffix.
@@ -600,7 +637,7 @@ export async function _streamAIResponse(messages, provider, typingId, documentId
           reasoningDelta = parsed.reasoning || chunk.choices?.[0]?.delta?.reasoning_content || '';
         } else {
           delta = rawContent || '';
-          if (isZhipu) {
+          if (isZhipu || isKiConnect) {
             reasoningDelta = chunk.choices?.[0]?.delta?.reasoning_content || '';
           } else if (isMinimax) {
             const details = chunk.choices?.[0]?.delta?.reasoning_details;
@@ -723,11 +760,11 @@ export async function _streamBattleVariant(chat, msg, i, provider, modelId, mess
       // on `assistant`). No-op for non-agentic sends.
       const apiMsgs = _buildOpenAiApiMessages(messages, true);
       const reqBody = { model: modelId, messages: apiMsgs, stream: true };
-      _applyOaiEffortAndTokens(reqBody, modelId);
+      _applyOaiEffortAndTokens(reqBody, modelId, provider);
       if (provider.type !== 'zhipu') reqBody.stream_options = { include_usage: true };
       const extraHeaders = _buildOpenAiExtraHeaders(provider);
       const res = await _fetchOpenAiCompatStream(provider, endpoint, reqBody, extraHeaders, run.abortController.signal);
-      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      if (!res.ok) throw await providerResponseError(provider, res, 0);
       for await (const line of _sseLines(res)) {
         if (!line.startsWith('data: ')) continue;
         const payload = line.slice(6).trim(); if (payload === '[DONE]') continue;
@@ -774,7 +811,7 @@ export async function _streamBattleVariant(chat, msg, i, provider, modelId, mess
 export async function _runBattleVariant(chat, msg, i, fullModelId, messages) {
   const provider = providerForModel(fullModelId);
   const { modelId } = splitModelId(fullModelId);
-  if (!provider || !provider.apiKey || provider.enabled === false) {
+  if (!provider || !providerReady(provider) || provider.enabled === false) {
     msg._siblings[i].error = bt('battle.noProviderForModel');
     msg._siblings[i]._pending = false;
     if (!msg._battleDoneOrder) msg._battleDoneOrder = [];
@@ -790,7 +827,7 @@ export async function _runBattleVariant(chat, msg, i, fullModelId, messages) {
     wireMessages = messages.map(m => ({ role: m.role, content: _toAnthropicContent(m.content) }));
     _applyPromptCache(wireMessages);
   } else {
-    wireMessages = messages.map(m => ({ role: m.role, content: _toOpenAIContent(m.content) }));
+    wireMessages = messages.map(m => ({ role: m.role, content: _toOpenAIContent(m.content, provider) }));
   }
   // Agentic web search: each model decides for itself whether/what to
   // search, so unlike manual search (shared once, see sendBattleMessage)
@@ -983,7 +1020,7 @@ export async function rerunFromUserMsg(userMsg) {
   if(!state.currentChatId) newChat();
   const chat=currentChat(); if(!chat) return;
   const provider=providerForModel(state.config.model)||state.providers[0];
-  if(!provider||!provider.apiKey){toast(t('js.noProvider'));openProviderPanel();return;}
+  if(!provider||!providerReady(provider)){toast(t('js.noProvider'));openProviderPanel();return;}
   if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
 
   const typingId=showTyping();
@@ -1003,7 +1040,7 @@ export async function rerunFromUserMsg(userMsg) {
     _applyPromptCache(messages);
   } else {
     messages=histSlice.filter(m=>m.role==='user'||m.role==='assistant')
-      .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
+      .map(m=>({role:m.role,content:_toOpenAIContent(m.content, provider)}));
   }
   if (isAgenticWebMode()) {
     const { msgs: augmentedMessages, traceHtml } = await runAgenticWebToolLoop(messages, provider);
@@ -1170,6 +1207,7 @@ export async function runAgenticWebToolLoop(initialMsgs, provider, modelId) {
     } else {
       msgs.push({
         role: 'assistant', content: turn.text || null,
+        ...(turn._chatgpt_output ? { _chatgpt_output: turn._chatgpt_output } : {}),
         tool_calls: turn.toolCalls.map(c => ({
           id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) },
           // Gemini 2.5+/3.x needs the thought_signature echoed back or the
@@ -1219,7 +1257,7 @@ export async function sendMessageOriginal() {
   if(!state.config.model){toast(t('js.noModel'));return;}
   const provider=providerForModel(state.config.model)||state.providers[0];
   if(!provider){toast(t('js.noProvider'));openProviderPanel();return;}
-  if(!provider.apiKey){toast(t('js.noApiKey'));openProviderPanel();return;}
+  if(!providerReady(provider)){toast(t('js.noApiKey'));openProviderPanel();return;}
   if(provider.enabled===false){toast(t('js.providerDisabledToast'));openProviderPanel();return;}
   if ((shouldUseWebSearch(text) || isAgenticWebMode()) && webEngineNeedsKey(state.config.webSearchEngine || 'free') && !(state.config.webSearchApiKey || '').trim()) {
     toast(t('web.noKey'));
@@ -1402,8 +1440,8 @@ export async function sendMessageCore(text, att) {
     // OpenAI-compat: system prompt injected by _streamAIResponse; pass only history + new user msg
     // expand pdf_text/pdf_base64 for OpenAI-compat too
     const hist=activePath.slice(0,-1).filter(m=>m.role==='user'||m.role==='assistant')
-      .map(m=>({role:m.role,content:_toOpenAIContent(m.content)}));
-    messages=[...hist,{role:'user',content:_toOpenAIContent(userContent)}];
+      .map(m=>({role:m.role,content:_toOpenAIContent(m.content, provider)}));
+    messages=[...hist,{role:'user',content:_toOpenAIContent(userContent, provider)}];
   }
   // The retrieved context is now part of this outgoing message. Clear the
   // selected KBs so they are not used again for the next prompt.
@@ -1425,7 +1463,7 @@ export async function autoGenerateChatTitle(chat, userText) {
   if(!chat) return;
   try {
     const provider = providerForModel(state.config.model) || state.providers[0];
-    if(!provider || !provider.apiKey || provider.enabled===false) return;
+    if(!provider || !providerReady(provider) || provider.enabled===false) return;
 
     const snippet = (userText||'').slice(0, 500);
     if(!snippet) return;
@@ -1463,7 +1501,7 @@ export async function autoGenerateChatTitle(chat, userText) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${provider.apiKey}`,
+          ...providerAuthHeaders(provider),
           ...extraHeaders
         },
         body: JSON.stringify({

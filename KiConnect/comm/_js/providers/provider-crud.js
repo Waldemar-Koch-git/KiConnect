@@ -1,11 +1,15 @@
 import { save } from '../auth/storage.js';
 import { t, ta, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
-import { _modelGroupsCache, fetchModels, providerStatus, resetEmbedModelPicker } from './provider-models.js';
-import { toast } from '../ui/misc-ui.js';
+import { _modelGroupsCache, fetchModels, providerStatus, resetEmbedModelPicker, updateThinkingUI, updateModelMaxInfo } from './provider-models.js';
+import { toast, onLanguageChange } from '../ui/misc-ui.js';
 import { TOUR_STEPS, nextTourStep } from '../ui/tour.js';
+import { providerReady, chatgptRequest, clearProviderPdfConsent, setChatgptMessage, chatgptToast, createChatgptError } from './chatgpt-auth.js';
+import { onSessionLock } from '../auth/accounts.js';
+import { activeRuns } from '../chat/chat-send.js';
 
 export const PROVIDER_TYPES = {
+  'chatgpt': { get label() { return t('chatgpt.type'); }, needsUrl:false },
   'openai-compat':   { label:'OpenAI-kompatibel (...)',	           needsUrl:true  },
   'kiconnect-nrw':   { label:'KI Connect NRW (Gateway)',           needsUrl:false },
   'anthropic':       { label:'Anthropic (Claude)',                 needsUrl:false },
@@ -22,6 +26,7 @@ export const PROVIDER_TYPES = {
 };
 
 export const PROVIDER_HINTS = {
+  'chatgpt': 'chatgpt.hint',
   'openai-compat':  '💡 Server URL + opt. API Key · for LM Studio, Ollama, custom instances … · non-localhost addresses need a one-time double confirmation',
   'kiconnect-nrw':  '💡 API Key : chat.kiconnect.nrw · KI Connect NRW · OpenAI-compatible',
   'anthropic':      '💡 API Key : console.anthropic.com · 🧠 Extended Thinking Claude 3/4/5+',
@@ -43,6 +48,7 @@ export function normalizeOpenAIBaseUrl(url) {
 
 export function getProviderEndpoint(provider) {
   if (!provider) return null;
+  if (provider.type === 'chatgpt') return '/chatgpt/' + encodeURIComponent(provider.id);
   if (provider.type === 'openai-compat') return normalizeOpenAIBaseUrl(provider.serverUrl);
   if (provider.type === 'kiconnect-nrw') return 'https://chat.kiconnect.nrw/api/v1';
   if (provider.type === 'anthropic')     return 'https://api.anthropic.com';
@@ -98,6 +104,7 @@ export function _isLanConfirmedUrl(url) {
 }
 
 export function proxyUrl(url, allowProviderEditorUrl = false, lanConfirmed = false) {
+  if (/^\/chatgpt\/[A-Za-z0-9_-]+\/(?:models|chat\/completions)$/.test(url)) return url;
   // A provider being created isn't in `providers` yet, so the allow-list
   // can't know its host; this lets "discover/test" validate before saving.
   const validEditorUrl = allowProviderEditorUrl && (() => {
@@ -138,7 +145,7 @@ export function updateActiveProviderInfo() {
     const tp = PROVIDER_TYPES[p.type] || {};
     const st = providerStatus[p.id];
     let icon = '…', color = 'var(--muted)';
-    if (!p.apiKey) { icon = '○'; }
+    if (!providerReady(p)) { icon = '○'; }
     else if (st === 'ok') { icon = '✓'; color = 'var(--green)'; }
     else if (st === 'error') { icon = '✗'; color = 'var(--red)'; }
     const line = document.createElement('span');
@@ -148,7 +155,7 @@ export function updateActiveProviderInfo() {
     bold.textContent = p.name;
     const sub = document.createElement('span');
     sub.style.cssText = 'color:var(--muted);font-size:11px;';
-    sub.textContent = ` ${tp.label || p.type}`;
+    sub.textContent = ` ${p.type === 'chatgpt' ? t('chatgpt.type') : (tp.label || p.type)}`;
     if (st === 'error') {
       const err = document.createElement('span');
       err.style.cssText = 'color:var(--red);font-size:11px;';
@@ -177,10 +184,11 @@ export function renderProviderList() {
   const list = document.getElementById('providerList');
   const editor = document.getElementById('providerEditor');
   // The editor may currently be parked inside this list (see editProvider()).
-  // Detach it before wiping the list with innerHTML='', or a re-render
-  // triggered elsewhere while editing would delete the open editor from the DOM.
+  // Park it at its home position before clearing the list. Removing it from
+  // the document makes getElementById('providerEditor') lose it, so the later
+  // placement cannot restore it and every editor action fails until reload.
   const wasInList = editor && list.contains(editor);
-  if (wasInList) editor.remove();
+  if (wasInList) _placeProviderEditor(null);
   list.innerHTML = '';
   if (!state.providers.length) {
     const msg = document.createElement('div');
@@ -195,13 +203,13 @@ export function renderProviderList() {
     const enabled = p.enabled !== false;
     let badgeCls, badgeTxt;
     if (!enabled)          { badgeCls = '';     badgeTxt = t('js.providerDisabled'); }
-    else if (!p.apiKey)    { badgeCls = 'warn'; badgeTxt = t('js.noKey'); }
-    else if (st === 'ok')  { badgeCls = 'ok';   badgeTxt = t('js.keyOk'); }
+    else if (!providerReady(p)) { badgeCls = 'warn'; badgeTxt = p.type === 'chatgpt' ? t('chatgpt.notConnected') : t('js.noKey'); }
+    else if (st === 'ok')  { badgeCls = 'ok';   badgeTxt = p.type === 'chatgpt' ? t('chatgpt.connected') : t('js.keyOk'); }
     else if (st === 'error') { badgeCls = 'warn'; badgeTxt = t('js.keyError'); }
     else                   { badgeCls = '';     badgeTxt = t('js.keyPending'); }
 
     const item = document.createElement('div');
-    item.className = 'provider-item' + (enabled ? '' : ' disabled');
+    item.className = 'provider-item' + (p.type === 'chatgpt' ? ' provider-item-chatgpt' : '') + (enabled ? '' : ' disabled');
     item.draggable = true;
     item.dataset.id = p.id;
     item.addEventListener('dragstart', e => {
@@ -252,7 +260,7 @@ export function renderProviderList() {
     nameEl.textContent = p.name;
     const descEl = document.createElement('div');
     descEl.className = 'provider-item-desc';
-    descEl.textContent = (ptype.label || p.type)
+    descEl.textContent = (p.type === 'chatgpt' ? t('chatgpt.type') : (ptype.label || p.type))
       + (p.serverUrl ? ' · ' + p.serverUrl.replace(/^https?:\/\//, '').slice(0, 30) : '')
       + ((p.embeddingModel || '').trim() ? ' · 🧬 ' + p.embeddingModel.trim() : '');
     info.appendChild(nameEl); info.appendChild(descEl);
@@ -294,6 +302,7 @@ export function toggleProviderEnabled(id) {
 }
 
 export function startNewProvider() {
+  stopChatgptPolling();
   state.editingProviderId = null;
   document.getElementById('pvNameInput').value  = '';
   document.getElementById('pvServerUrl').value  = '';
@@ -313,6 +322,7 @@ export function _showProviderEditor() {
 }
 
 export function editProvider(id) {
+  stopChatgptPolling();
   const p = state.providers.find(x => x.id === id); if (!p) return;
   state.editingProviderId = id;
   document.getElementById('pvNameInput').value  = p.name || '';
@@ -328,13 +338,30 @@ export function editProvider(id) {
 }
 
 export function selectProviderType(type) {
+  stopChatgptPolling();
+  document.getElementById('pvApiKeyGroup').style.display = type === 'chatgpt' ? 'none' : 'block';
+  document.getElementById('pvEmbedGroup').style.display = type === 'chatgpt' ? 'none' : 'block';
+  document.getElementById('pvChatgptGroup').style.display = type === 'chatgpt' ? 'block' : 'none';
+  if (type === 'chatgpt') {
+    const provider = state.providers.find(p => p.id === state.editingProviderId);
+    setChatgptMessage(document.getElementById('pvChatgptStatus'), provider?.chatgptConnected ? { key: 'chatgpt.connectedAs', vars: { name: provider.chatgptEmail || provider.name } } : 'chatgpt.saveFirst');
+    document.getElementById('pvChatgptLogin').onclick = loginChatgpt;
+    document.getElementById('pvChatgptLogout').onclick = logoutChatgpt;
+    document.getElementById('pvChatgptLogout').disabled = !provider?.chatgptConnected;
+    document.getElementById('pvChatgptModels').onclick = inspectChatgptModels;
+    chatgptCatalogReport = null;
+    document.getElementById('pvChatgptModelReport').hidden = true;
+    document.getElementById('pvChatgptModelReport').textContent = '';
+    delete document.getElementById('pvChatgptModelReport').dataset.i18n;
+    delete document.getElementById('pvChatgptModelReport').dataset.i18nVars;
+  }
   document.querySelectorAll('.type-chip').forEach(el => el.classList.toggle('selected', el.dataset.type === type));
   document.getElementById('pvServerUrlGroup').style.display = (type === 'openai-compat') ? 'block' : 'none';
   // kiconnect-nrw uses a fixed URL – no manual input needed
   const hint = document.getElementById('pvProviderHint');
   if (hint) {
     const hintText = PROVIDER_HINTS[type];
-    if (hintText) { hint.textContent = hintText; hint.style.display = 'block'; }
+    if (hintText) { if (type === 'chatgpt') setChatgptMessage(hint, 'chatgpt.hint'); else { delete hint.dataset.i18n; delete hint.dataset.i18nVars; hint.textContent = hintText; } hint.style.display = 'block'; }
     else hint.style.display = 'none';
   }
 }
@@ -357,7 +384,7 @@ export async function saveProviderEditor() {
   const type = getSelectedProviderType();
   const serverUrl = normalizeOpenAIBaseUrl(document.getElementById('pvServerUrl').value);
   if (type === 'openai-compat' && !serverUrl) { toast(t('js.urlRequired')); return; }
-  const apiKey = document.getElementById('pvApiKey').value.trim();
+  const apiKey = type === 'chatgpt' ? '' : document.getElementById('pvApiKey').value.trim();
 
   // Non-localhost server URLs need an explicit, double-confirmed opt-in,
   // or the proxy won't forward requests. Skipped only if this exact host
@@ -379,7 +406,7 @@ export async function saveProviderEditor() {
     }
   }
 
-  const embeddingModel = document.getElementById('pvEmbedModel').value.trim();
+  const embeddingModel = type === 'chatgpt' ? '' : document.getElementById('pvEmbedModel').value.trim();
   const data = { name, type, serverUrl: type==='openai-compat'?serverUrl:'', apiKey, embeddingModel, netConfirmed, netConfirmedHost };
   if (state.editingProviderId) {
     const idx = state.providers.findIndex(p => p.id === state.editingProviderId);
@@ -395,12 +422,174 @@ export async function saveProviderEditor() {
   }
 }
 
-export function cancelProviderEditor() { document.getElementById('providerEditor').style.display = 'none'; }
+export function cancelProviderEditor() { stopChatgptPolling(); document.getElementById('providerEditor').style.display = 'none'; }
 
-export function deleteProvider(id) {
+export async function deleteProvider(id) {
+  const provider = state.providers.find(p => p.id === id);
+  if (provider?.type === 'chatgpt') {
+    abortChatgptRuns(id);
+    try {
+      const data = await chatgptRequest(id, 'logout', 'POST');
+      if (!data.revocation_confirmed) chatgptToast('chatgpt.revoke');
+    } catch (error) { chatgptToast(error); return; }
+  }
+  stopChatgptPolling();
   state.providers = state.providers.filter(p => p.id !== id);
   delete _modelGroupsCache[id];
   save(); renderProviderList(); fetchModels();
+}
+
+let chatgptPollTimer = null;
+let chatgptPollGeneration = 0;
+let chatgptCatalogReport = null;
+
+function renderChatgptCatalogReport() {
+  const report = document.getElementById('pvChatgptModelReport');
+  const result = chatgptCatalogReport;
+  if (!report || report.hidden || !result) return;
+  delete report.dataset.i18n; delete report.dataset.i18nVars;
+  const listed = result.catalog.filter(model => model.visibility === 'list').length;
+  report.textContent = [
+    tf('chatgpt.catalog', { date: new Date(result.fetched_at * 1000).toLocaleString(state.currentLang) }),
+    tf('chatgpt.counts', { total: result.catalog.length, listed, hidden: result.catalog.length - listed }),
+    '',
+    ...result.catalog.map(model => `${model.label} (${model.id}) — ${model.visibility === 'list' ? t('chatgpt.listed') : tf('chatgpt.hidden', { visibility: model.visibility || t('chatgpt.unspecified') })}`),
+  ].join('\n');
+}
+
+onLanguageChange(() => {
+  renderChatgptCatalogReport();
+  updateThinkingUI();
+  updateModelMaxInfo();
+  if (state._agentSessionToken) {
+    state.providers.filter(provider => provider.type === 'chatgpt').forEach(provider => {
+      // Also update standalone OAuth windows opened on the other loopback origin.
+      chatgptRequest(provider.id, 'status').catch(() => {});
+    });
+  }
+});
+function stopChatgptPolling() {
+  chatgptPollGeneration++;
+  if (chatgptPollTimer) clearTimeout(chatgptPollTimer);
+  chatgptPollTimer = null;
+}
+onSessionLock(stopChatgptPolling);
+
+function abortChatgptRuns(id) {
+  clearProviderPdfConsent(id);
+  activeRuns.forEach(run => {
+    if (run.provider === 'chatgpt' && (run.model || '').startsWith(id + '::')) run.abortController?.abort();
+  });
+}
+
+async function loginChatgpt() {
+  const status = document.getElementById('pvChatgptStatus');
+  const button = document.getElementById('pvChatgptLogin');
+  if (button.disabled) return;
+  button.disabled = true;
+  setChatgptMessage(status, 'chatgpt.preparing');
+  try {
+    if (!document.getElementById('pvNameInput').value.trim()) document.getElementById('pvNameInput').value = 'ChatGPT';
+    if (state.editingProviderId) {
+      const id = state.editingProviderId;
+      await saveProviderEditor();
+      editProvider(id);
+    } else {
+      // Save a real provider first, so the OAuth registration has a stable owner.
+      const before = new Set(state.providers.map(p => p.id));
+      await saveProviderEditor();
+      const created = state.providers.find(p => !before.has(p.id));
+      if (!created) throw createChatgptError('chatgpt.saveFailed');
+      editProvider(created.id);
+    }
+    const id = state.editingProviderId;
+    stopChatgptPolling();
+    const generation = chatgptPollGeneration;
+    setChatgptMessage(status, 'chatgpt.preparing');
+    const data = await chatgptRequest(id, 'login', 'POST');
+    if (generation !== chatgptPollGeneration) return;
+    const url = new URL(data.url);
+    if (url.origin !== 'https://auth.openai.com' || url.pathname !== '/api/accounts/authorize') {
+      throw createChatgptError('chatgpt.loginUrl');
+    }
+    // Open only a real authorization URL. Keep a clickable fallback because
+    // browsers may block a new tab after asynchronous preparation.
+    const link = document.createElement('a');
+    link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    link.dataset.i18n = 'chatgpt.openLogin';
+    link.textContent = t('chatgpt.openLogin');
+    delete status.dataset.i18n; delete status.dataset.i18nVars;
+    const browserHint = document.createElement('span');
+    browserHint.dataset.i18n = 'chatgpt.browserFinish'; browserHint.textContent = t('chatgpt.browserFinish');
+    status.replaceChildren(link, document.createTextNode(' · '), browserHint);
+    window.open(url.href, '_blank', 'noopener,noreferrer');
+    const deadline = Date.now() + 600000;
+    async function poll() {
+      if (generation !== chatgptPollGeneration) return;
+      if (Date.now() > deadline) { setChatgptMessage(status, 'chatgpt.expired'); return; }
+      try {
+        const result = await chatgptRequest(id, 'status');
+        if (generation !== chatgptPollGeneration) return;
+        if (result.error) { setChatgptMessage(status, result.error); return; }
+        if (!result.pending && result.connection?.connected && result.connection.plan_enabled) {
+          const provider = state.providers.find(p => p.id === id);
+          if (!provider) return;
+          provider.chatgptConnected = true;
+          provider.chatgptEmail = result.connection.email || '';
+          await save();
+          setChatgptMessage(status, { key: 'chatgpt.connectedAs', vars: { name: provider.chatgptEmail || provider.name } });
+          document.getElementById('pvChatgptLogout').disabled = false;
+          await fetchModels();
+          return;
+        }
+        if (!result.pending) { setChatgptMessage(status, 'chatgpt.ended'); return; }
+      } catch (error) { setChatgptMessage(status, error); return; }
+      chatgptPollTimer = setTimeout(poll, 1500);
+    }
+    chatgptPollTimer = setTimeout(poll, 1000);
+  } catch (error) { setChatgptMessage(status, error); chatgptToast(error); }
+  finally { button.disabled = false; }
+}
+
+async function inspectChatgptModels() {
+  const id = state.editingProviderId;
+  const report = document.getElementById('pvChatgptModelReport');
+  const button = document.getElementById('pvChatgptModels');
+  chatgptCatalogReport = null;
+  report.hidden = false;
+  if (!id) { setChatgptMessage(report, 'chatgpt.saveFirst'); return; }
+  button.disabled = true;
+  setChatgptMessage(report, 'chatgpt.loadingModels');
+  try {
+    const result = await chatgptRequest(id, 'models');
+    if (!Array.isArray(result.catalog)) {
+      setChatgptMessage(report, 'chatgpt.restartModels');
+      return;
+    }
+    chatgptCatalogReport = result;
+    renderChatgptCatalogReport();
+    await fetchModels();
+  } catch (error) { chatgptCatalogReport = null; setChatgptMessage(report, error); }
+  finally { button.disabled = false; }
+}
+
+async function logoutChatgpt() {
+  const id = state.editingProviderId;
+  if (!id) {
+    setChatgptMessage(document.getElementById('pvChatgptStatus'), 'chatgpt.noConnection');
+    return;
+  }
+  stopChatgptPolling();
+  abortChatgptRuns(id);
+  try {
+    const data = await chatgptRequest(id, 'logout', 'POST');
+    const provider = state.providers.find(p => p.id === id);
+    if (provider) { provider.chatgptConnected = false; provider.chatgptEmail = ''; }
+    delete _modelGroupsCache[id];
+    await save(); await fetchModels();
+    setChatgptMessage(document.getElementById('pvChatgptStatus'), data.revocation_confirmed ? 'chatgpt.loggedOut' : 'chatgpt.revoke');
+    document.getElementById('pvChatgptLogout').disabled = true;
+  } catch (error) { chatgptToast(error); }
 }
 
 export function moveProvider(id, dir) {

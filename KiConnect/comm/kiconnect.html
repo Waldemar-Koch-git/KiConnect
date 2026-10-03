@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="no-referrer">
-  <title>AI✨ Chat/Agent (4.0.6)</title>
+  <title>AI✨ Chat/Agent (4.1.0)</title>
   <link rel="stylesheet" href="kiconnect.css">
   <!-- Local render dependencies in _render/ (offline): MathJax 4.1.2, marked, DOMPurify, PDF.js. -->
   <!-- MathJax 4.1.2 config (must load BEFORE tex-chtml.js) -->
@@ -400,6 +400,7 @@
       <div class="type-chip" data-type="kiconnect-nrw">KI Connect NRW</div>
       <div class="type-chip" data-type="anthropic">Anthropic (Claude)</div>
       <div class="type-chip" data-type="openai-direct">OpenAI (GPT)</div>
+      <div class="type-chip" data-type="chatgpt" data-i18n="chatgpt.type"></div>
       <div class="type-chip" data-type="openrouter">OpenRouter (...)</div>
       <div class="type-chip" data-type="mistral">Mistral AI (Mistral)</div>
       <div class="type-chip" data-type="google">Google (Gemini)</div>
@@ -416,11 +417,20 @@
       <input class="setting-input" type="url" id="pvServerUrl" placeholder="https://chat.kiconnect.nrw/api/v1">
       <div style="font-size:10px;color:var(--muted);margin-top:3px;font-family:'IBM Plex Mono',monospace;" data-i18n="provider.serverHint">Full base URL</div>
     </div>
-    <div style="margin-top:10px;">
+    <div id="pvApiKeyGroup" style="margin-top:10px;">
       <div class="setting-label" data-i18n="provider.apiKey">API Key</div>
       <input class="setting-input" type="password" id="pvApiKey" placeholder="sk-...">
     </div>
-    <div style="margin-top:10px;">
+    <div id="pvChatgptGroup" class="chatgpt-login-group" style="display:none;margin-top:10px;">
+      <p id="pvChatgptStatus" data-i18n="chatgpt.notConnected" role="status" style="font-size:12px;"></p>
+      <button type="button" class="ghost-btn" id="pvChatgptLogin" data-i18n="chatgpt.login"></button>
+      <button type="button" class="edit-cancel-btn" id="pvChatgptLogout" data-i18n="chatgpt.logout"></button>
+      <button type="button" class="edit-cancel-btn" id="pvChatgptModels" data-i18n="chatgpt.models"></button>
+      <pre id="pvChatgptModelReport" hidden style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:240px;overflow:auto;user-select:text;"></pre>
+      <p data-i18n="chatgpt.description" style="font-size:11px;color:var(--muted);line-height:1.5;"></p>
+      <a data-i18n="chatgpt.manage" href="https://chatgpt.com/#settings" target="_blank" rel="noopener noreferrer" style="font-size:12px;"></a>
+    </div>
+    <div id="pvEmbedGroup" style="margin-top:10px;">
       <div class="setting-label" data-i18n="provider.embedModelLabel">Embedding model (optional)</div>
       <div style="display:flex;gap:6px;">
         <select class="setting-input" id="pvEmbedModelSelect" style="flex:1;display:none;"></select>

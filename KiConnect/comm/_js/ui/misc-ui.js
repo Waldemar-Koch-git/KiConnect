@@ -223,7 +223,7 @@ export function copyFullChat() {
   navigator.clipboard.writeText(text).then(()=>toast(t('js.chatCopied'))).catch(()=>toast(t('js.copyFailed')));
 }
 
-export function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
+export function toast(msg){const t=document.getElementById('toast');delete t.dataset.i18n;delete t.dataset.i18nVars;t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);}
 
 export function openSettings(){syncSettingsPanel();applyTheme(localStorage.getItem('kic_theme')||'dark');document.getElementById('settingsPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="settingsPanel"]')?.classList.add('active');initSettingsSectionCollapse();}
 

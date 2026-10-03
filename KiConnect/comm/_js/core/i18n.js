@@ -2,22 +2,20 @@ import { renderAccountGrid } from '../auth/accounts.js';
 import { escHtml } from '../chat/chat-render.js';
 import { renderSidebar } from '../chat/chat-sidebar.js';
 import { state } from './state.js';
-import { renderProviderList } from '../providers/provider-crud.js';
+import { renderProviderList, updateActiveProviderInfo } from '../providers/provider-crud.js';
 import { configureThinkingSlider, renderModelMaxList, splitModelId, updateThinkingIntensityUI } from '../providers/provider-models.js';
 import { _languageChangeListeners } from '../ui/misc-ui.js';
 import { renderProfileList, updateProfileBadge } from '../ui/profiles.js';
 import { TOUR_STEPS } from '../ui/tour.js';
 import { getWebSearchLocale } from '../websearch/web-search.js';
+import { resolveTranslation } from './translation-utils.js';
 
 export function t(key) {
-  const lang = TRANSLATIONS[state.currentLang] || TRANSLATIONS['en'];
-  return lang[key] ?? TRANSLATIONS['en'][key] ?? key;
+  return resolveTranslation(TRANSLATIONS, state.currentLang, key);
 }
 
 export function tf(key, vars) {
-  let s = t(key);
-  if (vars) Object.entries(vars).forEach(([k,v]) => { s = s.replaceAll(`{${k}}`, v); });
-  return s;
+  return resolveTranslation(TRANSLATIONS, state.currentLang, key, vars);
 }
 
 export function bt(key) { return t(key); }
@@ -27,7 +25,9 @@ export function btf(key, vars) { return tf(key, vars); }
 export function applyTranslations() {
   document.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
-    const val = t(key);
+    let vars = {};
+    try { vars = JSON.parse(el.getAttribute('data-i18n-vars') || '{}'); } catch { /* Keep the plain label. */ }
+    const val = tf(key, vars);
     const attr = el.getAttribute('data-i18n-attr');
     if (attr === 'placeholder') {
       el.placeholder = val;
@@ -68,6 +68,8 @@ export function setLang(code) {
   }
   if (typeof syncCustomDropdown === 'function') syncCustomDropdown();
   (_languageChangeListeners || []).forEach(fn => fn());
+  retranslateChatgptErrors();
+  if (document.getElementById('activeProviderInfo')) updateActiveProviderInfo();
   if (typeof renderSidebar === 'function') renderSidebar();
   // These panels build their content with t() at render time instead of
   // static data-i18n markup, so re-render them if open.
@@ -96,6 +98,17 @@ export function setLang(code) {
   } else {
     closeLangDropdown();
   }
+}
+
+export function retranslateChatgptErrors(root = document) {
+  root.querySelectorAll('[data-chatgpt-error]').forEach(element => {
+    try {
+      const info = JSON.parse(element.dataset.chatgptError);
+      if (!info.key?.startsWith('chatgpt.') ||
+          !['js.errorPrefix', 'agent.err.modelCallFailed', 'agent.plannerFailed'].includes(info.wrapper)) return;
+      element.textContent = (info.prefix || '') + tf(info.wrapper, { [info.param]: tf(info.key, info.vars) });
+    } catch { /* Ignore malformed message metadata. */ }
+  });
 }
 
 export function renderLangDropdown() {

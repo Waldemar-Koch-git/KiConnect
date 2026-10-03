@@ -4,6 +4,7 @@ import { _finishLiveStreamUI, _makeRunId, _runBubbleEl, _streamAIResponse, activ
 import { currentChat, getActiveContainer, getActivePath, renderSidebar } from './chat-sidebar.js';
 import { t, tf } from '../core/i18n.js';
 import { state } from '../core/state.js';
+import { chatgptErrorMarkup } from '../providers/chatgpt-auth.js';
 import { modelSupportsPdfBase64 } from '../providers/provider-models.js';
 import { getMaxImageStorageBytes, setMaxImageStorageBytes, setStatus, toast } from '../ui/misc-ui.js';
 
@@ -74,9 +75,12 @@ export async function _runStreamAndAttach(chat, messages, provider, typingId, do
       assistantText = partialText || t('js.generationStopped');
       usageData = run?.usage || usageData;
       streamEl = _runBubbleEl(run);
+      const pendingBubble = streamEl?.querySelector('.bubble');
+      if (pendingBubble?.querySelector('.dots')) pendingBubble.textContent = assistantText;
       _finishLiveStreamUI();
     } else {
-      assistantText = tf('js.errorPrefix', { e: escHtml(e.message) });
+      _runBubbleEl(activeRuns.get(runId))?.remove();
+      assistantText = chatgptErrorMarkup(e, 'js.errorPrefix', 'e') || tf('js.errorPrefix', { e: escHtml(e.message) });
       const errEl = buildMsgEl({ role: 'assistant', content: assistantText }, undefined);
       appendToMessages(errEl); scrollToBottom(); setStatus('red');
     }

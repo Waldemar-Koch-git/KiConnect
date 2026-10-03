@@ -207,6 +207,18 @@ AGENT_IGNORE_DIRS = {
     'dist', 'build', '.idea', '.vscode', '.pytest_cache', '.mypy_cache',
     'target', '.next', '.svelte-kit',
 }
+
+def _is_git_component(segment):
+    # Win32 ignores trailing dots/spaces in path components, so spellings
+    # such as ".git." can resolve to the actual .git metadata directory.
+    if os.name == 'nt':
+        segment = segment.rstrip(' .')
+    return segment.casefold() == '.git'
+
+def _path_has_git_component(path):
+    normalized = os.path.normpath(path).replace('\\', '/')
+    return any(_is_git_component(part) for part in normalized.split('/'))
+
 # Files the agent may never touch - secrets, credentials, sandbox-escape risks.
 AGENT_BLOCKED_SUFFIXES = ('.env', '.key', '.pem', '.pfx', '.p12', '.crt')
 AGENT_BLOCKED_NAMES = {'.env', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
@@ -311,8 +323,8 @@ def _is_blocked_root(target):
 
 def _project_root_for_id(pid, sess):
     """Resolve a project id to its confined, still-valid real folder path.
-    None if the id is unknown, the folder is gone, or it now encloses the
-    app's own files (re-checked every call, never cached). Requires an
+    None if the id is unknown, the folder is gone, or it reaches app-owned
+    files/Git metadata (re-checked every call, never cached). Requires an
     unlocked agent session."""
     if not _SAFE_PROJECT_ID_RE.match(pid or ''):
         return None
@@ -321,35 +333,41 @@ def _project_root_for_id(pid, sess):
     if not entry:
         return None
     target = os.path.realpath(entry.get('path') or '')
-    if not os.path.isdir(target) or _is_blocked_root(target):
+    if not os.path.isdir(target) or _is_blocked_root(target) or _path_has_git_component(target):
         return None
     return target
 
 def _safe_rel_path(project_dir, rel_path):
     """Resolve+confine a path inside a project dir. Rejects '..', absolute
-    paths, null bytes, blocked filenames, any symlink escape, and anything
-    inside the project's own .git/ (config, hooks, etc. - never exposed to
-    the agent's generic file read/write/delete, since e.g. a written
-    .git/config with core.fsmonitor/core.pager/hooksPath would get run by
-    git itself on the very next automatic checkpoint commit)."""
+    paths, null bytes, blocked filenames, any symlink escape, and paths
+    addressing .git metadata directories or pointer files anywhere below the
+    project root (config, hooks, etc.). Direct requests to these paths are
+    blocked; recursive operations on an ancestor directory can still affect
+    nested repositories. A written .git/config with core.fsmonitor,
+    core.pager, or hooksPath could run code during a later Git operation.
+    This does not constrain the separately opted-in arbitrary shell runner."""
     if rel_path is None:
         return None
     rel_path = rel_path.replace('\\', '/').strip('/')
     if not rel_path or '\x00' in rel_path or '..' in rel_path.split('/'):
         return None
     segments = rel_path.split('/')
-    if segments[0].lower() == '.git':
+    if any(_is_git_component(segment) for segment in segments):
         return None
     basename = os.path.basename(rel_path).lower()
     if basename in AGENT_BLOCKED_NAMES or any(basename.endswith(s) for s in AGENT_BLOCKED_SUFFIXES):
         return None
     full = os.path.realpath(os.path.join(project_dir, rel_path))
-    if full != project_dir and not full.startswith(project_dir + os.sep):
+    try:
+        common = os.path.commonpath((project_dir, full))
+    except ValueError:
         return None
-    # Belt-and-braces: a symlink inside the project could otherwise still
-    # resolve into .git/ despite the check above.
-    git_dir = os.path.realpath(os.path.join(project_dir, '.git'))
-    if full == git_dir or full.startswith(git_dir + os.sep):
+    if os.path.normcase(common) != os.path.normcase(project_dir):
+        return None
+    # Belt-and-braces: a symlink/junction inside the project could otherwise
+    # resolve into a .git/ directory despite the lexical component check.
+    real_rel = os.path.relpath(full, project_dir).replace('\\', '/')
+    if any(_is_git_component(segment) for segment in real_rel.split('/')):
         return None
     return full
 
@@ -431,8 +449,10 @@ def agent_session_rekey(old_sess):
         return _agent_error('Invalid key.', 400)
     with _store_lock:
         registry = _load_agent_registry(old_sess)
+        chatgpt = _load_encrypted_registry(old_sess, 'chatgpt_connections', 'connections')
         new_sess = {'accountId': old_sess['accountId'], 'key': new_key_bytes, 'ts': time.time()}
         _save_agent_registry(new_sess, registry)
+        _save_encrypted_registry(new_sess, 'chatgpt_connections', chatgpt)
     old_token = request.headers.get('X-Agent-Session', '')
     new_token = os.urandom(24).hex()
     with _agent_session_lock:
@@ -529,12 +549,14 @@ def agent_browse():
     return _agent_ok(out)
 
 # Resolves+validates a raw folder path for project registration/re-pointing:
-# realpath it, optionally create it, check it exists and isn't a blocked
-# root. Returns (target, None) or (None, error_response).
+# realpath it, reject Git metadata paths, optionally create it, and check it
+# exists and isn't another blocked root. Returns (target, None) or an error.
 def _resolve_project_folder(raw_path, create):
     if not raw_path:
         return None, _agent_error('Please provide a folder path.')
     target = os.path.realpath(raw_path)
+    if _path_has_git_component(target):
+        return None, _agent_error('A Git metadata folder cannot be used as an agent project.', 403)
     if create and not os.path.isdir(target):
         try:
             os.makedirs(target, exist_ok=True)
@@ -557,7 +579,8 @@ def agent_projects(sess):
             target = os.path.realpath(p.get('path') or '')
             projects.append({
                 'id': p.get('id'), 'name': p.get('name'), 'path': target,
-                'missing': not (os.path.isdir(target) and not _is_blocked_root(target)),
+                'missing': not (os.path.isdir(target) and not _is_blocked_root(target)
+                                and not _path_has_git_component(target)),
                 'shell': bool(p.get('shell')),
                 'checkpoints': bool(p.get('checkpoints')),
             })
@@ -584,15 +607,16 @@ def agent_projects(sess):
         _save_agent_registry(sess, registry)
     return _agent_ok({'id': pid, 'name': name, 'path': target})
 
-# Git checkpointing: best-effort safety net for agent file mutations (see
-# MUTATING_TOOL_NAMES in agent.js). With 'checkpoints' enabled, the frontend
-# calls POST /agent/checkpoint/<id> before each mutating tool call - stages
-# and commits whatever changed since the last checkpoint. The PUT endpoint
-# below also fires one immediately on enable, so a freshly scaffolded
-# project gets a baseline commit right away. Purely local (init/config
-# repo-local/add/commit/gc --auto) - never push/remote, not a replacement
-# for the user's own git workflow. A failed git op is swallowed as
-# {ok:false} rather than blocking the tool call.
+# Git checkpoints/history: best-effort local Git operations for a project.
+# With checkpoints enabled, the frontend calls POST /agent/checkpoint/<id>
+# before mutating agent tools; this commits what the project-root repository
+# stages. Enabling also attempts an immediate baseline checkpoint. The history
+# UI additionally supports restore/discard, squash, tags/notes, export and
+# garbage collection (see the /agent/git routes below). These managed routes
+# do not contact remotes or push/pull/fetch. Shell execution is a separate,
+# explicit opt-in and runs arbitrary commands as the proxy's OS user; it is
+# not constrained by the path checks below. Git failures are best-effort and
+# do not block the agent's mutation.
 _git_available_cache = None
 
 def _git_available():
@@ -601,15 +625,29 @@ def _git_available():
         _git_available_cache = shutil.which('git') is not None
     return _git_available_cache
 
+def _has_checkpoint_repo_dir(pdir):
+    """Only treat a .git directory at this project root as its history.
+    This avoids Git's parent-directory discovery and excludes .git pointer
+    files used by linked worktrees/submodules, which the history routes do
+    not support."""
+    return os.path.isdir(os.path.join(pdir, '.git'))
+
 def _git_checkpoint(pdir, message):
-    """Stages all changes in pdir and commits them as a checkpoint. Never
-    raises. Returns a small status dict the frontend can silently ignore
-    or (on repeated failure) surface once to the user."""
+    """Stages the project-root repository's changes and commits them as a
+    checkpoint. Nested repository contents are not recursively included.
+    Never raises; returns a small status dict the frontend can ignore or
+    surface to the user."""
     if not _git_available():
         return {'ok': False, 'reason': 'git-not-installed'}
     import subprocess as _sp
     try:
-        if not os.path.isdir(os.path.join(pdir, '.git')):
+        git_path = os.path.join(pdir, '.git')
+        if os.path.isfile(git_path):
+            # Linked worktrees/submodules store a gitdir pointer in this
+            # file. The history API expects a repository-local .git dir;
+            # do not run git init/config against the linked repository.
+            return {'ok': False, 'reason': 'linked-worktree-unsupported'}
+        if not _has_checkpoint_repo_dir(pdir):
             _sp.run(['git', 'init', '-q'], cwd=pdir, check=True, capture_output=True, timeout=15)
             # Local-only identity, scoped to this repo - never touches the
             # user's own global git config.
@@ -684,9 +722,10 @@ def agent_checkpoint(sess, pid):
 # ── Git history / restore ─────────────────────────────────────────────
 # Read-only browsing (log/commit/file-at/deleted) plus one write op
 # (restore), scoped to a project's own repo via the same confinement every
-# /agent/* file endpoint uses. Restore never runs `git reset --hard` or
-# rewrites history - it checks out old content and makes a new checkpoint
-# commit, so a restore can itself always be undone.
+# /agent/* file endpoint uses. Restore does not run `git reset --hard` or
+# rewrite existing commits: it checks out old content and attempts a new
+# checkpoint commit. If that commit fails, the response reports the failure
+# and the restored state is not guaranteed to be undoable from this history.
 
 def _run_git(pdir, args, timeout=30, text=True):
     import subprocess as _sp
@@ -757,7 +796,7 @@ def agent_git_log(sess, pid):
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
     if not _git_available():
         return _agent_error('git is not installed on this machine.', 400)
-    if not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _has_checkpoint_repo_dir(pdir):
         return _agent_ok({'commits': []})
     try:
         limit = min(max(int(request.args.get('limit', 200)), 1), 500)
@@ -789,7 +828,7 @@ def agent_git_search(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_ok({'commits': []})
     q = (request.args.get('q') or '').strip()
     if not q:
@@ -820,6 +859,8 @@ def agent_git_commit(sess, pid, hash_):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     ref = _require_git_ref(hash_)
     if not ref:
         return _agent_error('Invalid commit reference.')
@@ -855,6 +896,8 @@ def agent_git_file_at(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     ref = _require_git_ref(request.args.get('hash'))
     if not ref:
         return _agent_error('Invalid commit reference.')
@@ -881,7 +924,7 @@ def agent_git_deleted(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_ok({'files': []})
     res = _run_git(pdir, ['log', '--diff-filter=D', '--name-status', '--pretty=format:%x01%H%x02%ci'])
     if res.returncode != 0:
@@ -906,8 +949,9 @@ def agent_git_deleted(sess, pid):
 # /agent/git/<id>/restore - bring back an old checkpoint's content. With
 # `paths`, restores just those files/folders (recreates deleted ones too);
 # without, restores the ENTIRE project (removes anything that didn't exist
-# yet at `hash`). Either way ends with a fresh checkpoint of the result, so
-# the restore is itself undoable.
+# yet at `hash`, except Git-ignored files and nested Git repositories or
+# linked worktrees). It attempts a fresh checkpoint afterward; if that Git
+# operation fails, the restore may not be undoable through this history.
 @app.route('/agent/git/<pid>/restore', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_git_restore(sess, pid):
@@ -918,7 +962,7 @@ def agent_git_restore(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _has_checkpoint_repo_dir(pdir):
         return _agent_error('This project has no checkpoint history yet.', 400)
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
@@ -960,8 +1004,22 @@ def agent_git_restore(sess, pid):
     # target ref. `discard` already gets this right via `git clean -fd`
     # (no -x), which likewise leaves ignored files alone.
     candidates = []
+    protected_git_roots = set()
     for root, dirs, files in os.walk(pdir):
-        dirs[:] = [d for d in dirs if d != '.git']
+        root_rel = os.path.relpath(root, pdir).replace('\\', '/')
+        is_project_root = root_rel == '.'
+        has_git_dir = any(_is_git_component(d) for d in dirs)
+        has_git_file = any(_is_git_component(fname) for fname in files)
+        # A nested repository uses either a .git directory or a .git pointer
+        # file. Preserve its entire checkout; the project's own root .git
+        # directory is metadata and is simply omitted from traversal.
+        if not is_project_root and (has_git_dir or has_git_file):
+            protected_git_roots.add(root_rel)
+            dirs[:] = []
+            continue
+        # Git treats .git as metadata on Windows too, even if its on-disk
+        # spelling is .GIT. Never let a whole-project restore walk into it.
+        dirs[:] = [d for d in dirs if not _is_git_component(d)]
         for fname in files:
             full = os.path.join(root, fname)
             rel = os.path.relpath(full, pdir).replace(os.sep, '/')
@@ -989,7 +1047,12 @@ def agent_git_restore(sess, pid):
             pass
     # Clean up now-empty directories left behind by the removals above.
     for root, dirs, files in os.walk(pdir, topdown=False):
-        if root == pdir or os.path.basename(root) == '.git' or '.git' + os.sep in root:
+        rel_root = os.path.relpath(root, pdir).replace('\\', '/')
+        if root == pdir or any(_is_git_component(part) for part in rel_root.split('/')):
+            continue
+        rel_key = rel_root.casefold()
+        if any(rel_key == git_root.casefold() or rel_key.startswith(git_root.casefold() + '/')
+               for git_root in protected_git_roots):
             continue
         try:
             if not os.listdir(root):
@@ -1012,9 +1075,10 @@ def _dir_size(pdir):
 
 # /agent/git/<id>/gc - forces a full `git gc --aggressive --prune=now`
 # repack, the on-demand counterpart to the lightweight `--auto` that already
-# runs after every checkpoint. Storage only, never touches history/content.
-# Reports before/after .git size (a very small repo can occasionally grow
-# slightly from packfile overhead - expected, not a bug).
+# runs after commits. Reachable commits are unchanged, but unreachable
+# objects (including commits no longer kept by refs/reflogs) can be
+# permanently removed. Reports before/after .git size (a very small repo can
+# occasionally grow slightly from packfile overhead - expected, not a bug).
 @app.route('/agent/git/<pid>/gc', methods=['POST', 'OPTIONS'])
 @_agent_authed
 def agent_git_gc(sess, pid):
@@ -1024,7 +1088,7 @@ def agent_git_gc(sess, pid):
     if not _git_available():
         return _agent_error('git is not installed on this machine.', 400)
     git_dir = os.path.join(pdir, '.git')
-    if not os.path.isdir(git_dir):
+    if not _has_checkpoint_repo_dir(pdir):
         return _agent_error('This project has no checkpoint history yet.', 400)
     before = _dir_size(git_dir)
     res = _run_git(pdir, ['gc', '--aggressive', '--prune=now'], timeout=120)
@@ -1051,6 +1115,8 @@ def agent_git_manual_commit(sess, pid):
     message = (body.get('message') or 'Manual checkpoint').strip()[:200] or 'Manual checkpoint'
     result = _git_checkpoint(pdir, message)
     if not result.get('ok'):
+        if result.get('reason') == 'linked-worktree-unsupported':
+            return _agent_error('Linked worktrees and submodules are not supported for checkpoints yet.', 400)
         return _agent_error(result.get('reason') or 'Commit failed.')
     if not result.get('committed'):
         return _agent_ok({**result, 'info': 'Nothing to commit - no changes since the last checkpoint.'})
@@ -1069,6 +1135,8 @@ def agent_git_note(sess, pid, hash_):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     ref = _require_git_ref(hash_)
     if not ref:
         return _agent_error('Invalid commit reference.')
@@ -1101,6 +1169,8 @@ def agent_git_diff(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     from_ref = _require_git_ref(request.args.get('from'))
     if not from_ref:
         return _agent_error('Invalid "from" commit reference.')
@@ -1136,7 +1206,7 @@ def agent_git_discard(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_error('This project has no checkpoint history yet.', 400)
     head = _run_git(pdir, ['rev-parse', 'HEAD'])
     if head.returncode != 0:
@@ -1165,7 +1235,7 @@ def agent_git_milestones(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_ok({'milestones': []})
     # NB: unlike `git log --pretty=format`, `for-each-ref --format` has no
     # %x02-style hex-byte escape - that sequence would print literally as
@@ -1193,7 +1263,7 @@ def agent_git_add_milestone(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_error('This project has no checkpoint history yet.', 400)
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
@@ -1216,6 +1286,8 @@ def agent_git_remove_milestone(sess, pid, name):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     if not _SAFE_TAG_NAME_RE.match(name or ''):
         return _agent_error('Invalid milestone name.')
     res = _run_git(pdir, ['tag', '-d', _milestone_tag(name)])
@@ -1231,6 +1303,8 @@ def agent_git_export(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
+    if not _has_checkpoint_repo_dir(pdir):
+        return _agent_error('This project has no checkpoint history yet.', 400)
     ref = _require_git_ref(request.args.get('hash'))
     if not ref:
         return _agent_error('Invalid commit reference.')
@@ -1252,7 +1326,7 @@ def agent_git_squash(sess, pid):
     pdir = _project_root_for_id(pid, sess)
     if not pdir:
         return _agent_error('Project folder not found - was it moved or deleted?', 404)
-    if not _git_available() or not os.path.isdir(os.path.join(pdir, '.git')):
+    if not _git_available() or not _has_checkpoint_repo_dir(pdir):
         return _agent_error('This project has no checkpoint history yet.', 400)
     try: body = request.get_json(force=True, silent=True) or {}
     except Exception: body = {}
@@ -1550,6 +1624,10 @@ def agent_search(sess, pid):
         for fname in sorted(files):
             if len(matches) >= MAX_MATCHES or files_scanned >= MAX_FILES:
                 break
+            # Linked worktrees use a .git pointer file rather than a
+            # directory; keep that metadata out of search results too.
+            if _is_git_component(fname):
+                continue
             fpath = os.path.join(root, fname)
             try:
                 if os.path.getsize(fpath) > MAX_AGENT_FILE_SIZE:
@@ -1590,6 +1668,10 @@ def agent_tree(sess, pid):
         for fname in sorted(files):
             if count >= MAX_AGENT_TREE_ENTRIES:
                 break
+            # Linked worktrees use a .git pointer file rather than a
+            # directory; do not expose that metadata in the file listing.
+            if _is_git_component(fname):
+                continue
             rel = fname if rel_root == '.' else f'{rel_root}/{fname}'
             try:
                 size = os.path.getsize(os.path.join(root, fname))
@@ -2829,7 +2911,7 @@ def kb_upload_files(sess, kb_id):
 
 @app.before_request
 def check_origin():
-    if request.path.startswith('/proxy/') or request.path.startswith('/store') or request.path.startswith('/agent'):
+    if request.path.startswith(('/proxy/', '/store', '/agent', '/chatgpt/', '/auth/callback')):
         origin = request.headers.get('Origin', '')
         host   = request.headers.get('Host', '')
         if origin and origin not in ALLOWED_ORIGINS:
@@ -3062,6 +3144,12 @@ def add_security_headers(response):
     return response
 
 # Statische Dateien
+if STATIC_DIR not in sys.path:
+    sys.path.insert(0, STATIC_DIR)  # Windows embeddable Python omits the script directory.
+from chatgpt_provider import register_chatgpt
+register_chatgpt(app, _agent_session_or_401, _load_encrypted_registry,
+                 _save_encrypted_registry, _store_lock, DATA_DIR, _atomic_write)
+
 @app.route('/')
 def index():
     return send_from_directory(STATIC_DIR, 'kiconnect.html')
@@ -3154,9 +3242,15 @@ def _proxy_request(target_url):
                         if k.lower() not in EXCLUDED_RESP_HEADERS}
         resp_headers.update(CORS_HEADERS); resp_headers.update(SECURITY_HEADERS)
 
+        is_event_stream = upstream.headers.get('Content-Type', '').lower().startswith('text/event-stream')
+        if is_event_stream:
+            resp_headers['X-Accel-Buffering'] = 'no'
+
         def generate():
             try:
-                for chunk in upstream.iter_content(chunk_size=8192):
+                # Small SSE reads avoid waiting for 8 KiB of upstream data
+                # before forwarding the first tokens to the browser.
+                for chunk in upstream.iter_content(chunk_size=256 if is_event_stream else 8192):
                     if chunk: yield chunk
             except Exception as e:
                 print(f'  Stream error: {type(e).__name__}')

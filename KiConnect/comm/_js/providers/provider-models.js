@@ -1,3 +1,4 @@
+import { providerReady, providerAuthHeaders, providerRequestBody, providerResponseError } from './chatgpt-auth.js';
 import { _saveOrCache, save } from '../auth/storage.js';
 import { renderAttachments } from '../chat/chat-attachments.js';
 import { escHtml } from '../chat/chat-render.js';
@@ -6,6 +7,7 @@ import { state } from '../core/state.js';
 import { getProviderEndpoint, getSelectedProviderType, normalizeOpenAIBaseUrl, providerEditorProxyUrl, proxyUrl, renderProviderList, updateActiveProviderInfo } from './provider-crud.js';
 import { setStatus, toast } from '../ui/misc-ui.js';
 import { activeProfile } from '../ui/profiles.js';
+import { chatgptRequest } from './chatgpt-auth.js';
 
 export const THINKING_MODELS = new Set([
   'o1','o1-mini','o1-pro','o3','o3-mini','o4-mini','o4-mini-high',
@@ -110,7 +112,7 @@ export function getModelDefaultMax(modelId) {
   if (/gemma/i.test(modelId)) return 8192;
   if (/deepseek-v4/i.test(modelId)) return 384000;
   if (/deepseek-r|reasoner/i.test(modelId)) return 8192;
-  if (/^gpt-5/i.test(modelId)) return 128000;
+  if (/^gpt-(?:[5-9]|[1-9]\d+)(?:[.-]|$)/i.test(modelId)) return 128000;
   if (/gpt-4/i.test(modelId)) return 8192;
   if (/gemini-3/i.test(modelId)) return 65536;
   if (/gemini/i.test(modelId)) return 8192;
@@ -340,10 +342,27 @@ export async function fetchModels() {
   let allGroups = [], anyOk = false, anyError = false;
   for (const provider of state.providers) {
     if (provider.enabled === false) { providerStatus[provider.id] = 'disabled'; continue; }
-    if (!provider.apiKey) { providerStatus[provider.id] = 'nokey'; continue; }
+    if (provider.type !== 'chatgpt' && !providerReady(provider)) { providerStatus[provider.id] = 'nokey'; continue; }
     const groupModels = []; let provOk = false;
 
-    if (provider.type === 'anthropic') {
+    if (provider.type === 'chatgpt') {
+      try {
+        const status = await chatgptRequest(provider.id, 'status');
+        provider.chatgptConnected = !!(status.connection?.connected && status.connection.plan_enabled);
+        provider.chatgptEmail = status.connection?.email || '';
+        if (!provider.chatgptConnected) {
+          providerStatus[provider.id] = 'nokey'; delete _modelGroupsCache[provider.id]; continue;
+        }
+        const data = await chatgptRequest(provider.id, 'models');
+        (data.data || []).forEach(model => groupModels.push({
+          fullId: makeModelId(provider.id, model.id), label: model.label, modelId: model.id,
+        }));
+        provOk = true;
+      } catch (error) {
+        providerStatus[provider.id] = 'error'; anyError = true;
+        delete _modelGroupsCache[provider.id]; continue;
+      }
+    } else if (provider.type === 'anthropic') {
       try {
         const res = await fetch(proxyUrl('https://api.anthropic.com/v1/models'), {
           headers: { 'x-api-key': provider.apiKey, 'anthropic-version': '2023-06-01',
@@ -387,15 +406,18 @@ export async function fetchModels() {
     } else if (provider.type === 'openai-direct') {
       try {
         const res = await fetch(proxyUrl('https://api.openai.com/v1/models'), {
-          headers: { 'Authorization': `Bearer ${provider.apiKey}` }
+          headers: { ...providerAuthHeaders(provider) }
         });
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
         const CHAT_PATTERN = /^(gpt-|o\d|chatgpt-)/;
         const EXCLUDE_PATTERN = /embed|whisper|tts|dall-e|realtime|audio|preview-\d{4}|transcribe|search$/;
-        const PRIORITY_ORDER = ['gpt-4.1','gpt-4o','o4','o3','o1','gpt-4.5','gpt-4-turbo','gpt-3'];
+        // Pro model slugs require the Responses API; this provider currently
+        // sends Chat Completions requests.
+        const RESPONSES_ONLY_PATTERN = /^(?:gpt-5(?:\.\d+)?|o\d+)-pro(?:-|$)/;
+        const PRIORITY_ORDER = ['gpt-6','gpt-5.6','gpt-5','o4','o3','o1','gpt-4.1','gpt-4o','gpt-4.5','gpt-4-turbo','gpt-3'];
         const liveModels = (data.data || [])
-          .filter(m => CHAT_PATTERN.test(m.id) && !EXCLUDE_PATTERN.test(m.id))
+          .filter(m => CHAT_PATTERN.test(m.id) && !EXCLUDE_PATTERN.test(m.id) && !RESPONSES_ONLY_PATTERN.test(m.id))
           .sort((a, b) => {
             const pa = PRIORITY_ORDER.findIndex(p => a.id.startsWith(p));
             const pb = PRIORITY_ORDER.findIndex(p => b.id.startsWith(p));
@@ -408,12 +430,12 @@ export async function fetchModels() {
             if (seenIds.has(m.id)) return;
             seenIds.add(m.id);
             groupModels.push({
-              fullId: makeModelId(provider.id, m.id), label: KNOWN_MODELS[m.id]?.label || m.id, modelId: m.id
+              fullId: makeModelId(provider.id, m.id), label: openAIDirectModelLabel(m.id, KNOWN_MODELS[m.id]?.label || m.id), modelId: m.id
             });
           });
         } else {
           OPENAI_MODELS.forEach(m => groupModels.push({
-            fullId: makeModelId(provider.id, m.id), label: m.label, modelId: m.id
+            fullId: makeModelId(provider.id, m.id), label: openAIDirectModelLabel(m.id, m.label), modelId: m.id
           }));
         }
         provOk = true;
@@ -434,7 +456,7 @@ export async function fetchModels() {
           extraHeaders['Accept-Language'] = 'en-US,en';
         }
         const res = await fetch(proxyUrl(`${endpoint}/models`), {
-          headers: { 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders }
+          headers: { ...providerAuthHeaders(provider), ...extraHeaders }
         });
         if (!res.ok) throw new Error(res.status);
         const data = await res.json();
@@ -560,7 +582,7 @@ export function applyModelGroupsToUI(allGroups) {
 export function rebuildModelDropdownFromCache() {
   const allGroups = [];
   state.providers.forEach(provider => {
-    if (provider.enabled === false || !provider.apiKey) return;
+    if (provider.enabled === false || !providerReady(provider)) return;
     const cached = _modelGroupsCache[provider.id];
     if (cached && cached.models.length) {
       allGroups.push({ providerId: provider.id, providerName: provider.name, models: cached.models });
@@ -573,7 +595,9 @@ export function updateModelMaxInfo() {
   const { modelId } = splitModelId(state.config.model);
   const max = getModelMaxOutput(modelId);
   const el = document.getElementById('modelMaxInfo');
-  if (el) el.textContent = modelId ? tf('js.modelMax', {n: max.toLocaleString()}) : '';
+  if (el) el.textContent = providerForModel(state.config.model)?.type === 'chatgpt'
+    ? t('chatgpt.limit')
+    : modelId ? tf('js.modelMax', {n: max.toLocaleString()}) : '';
 }
 
 export function isThinkingCapable(modelId) {
@@ -584,6 +608,31 @@ export function isThinkingCapable(modelId) {
     isGeminiThinkingModel(bare) || isMiniMaxThinkingModel(bare) || isMistralThinkingModel(bare) ||
     /thinking|reason/i.test(bare) || /deepseek-r|deepseek-v4|qwen.*think|qwq|llama.*reason/i.test(bare) ||
     /^glm-(5|4\.[567])/i.test(bare);
+}
+
+// GPT-5 and later numbered GPT generations use the reasoning request shape.
+// Keep this shared with the chat and agent request builders so new generations
+// do not appear as Thinking-capable while receiving old max_tokens parameters.
+export function usesOpenAIReasoningParameters(modelId) {
+  return /^o\d/.test(modelId || '') ||
+    /^(?:chatgpt-)?gpt-(?:[5-9]|[1-9]\d+)(?:[.-]|$)/i.test(modelId || '');
+}
+
+// The original OpenAI catalog has non-reasoning GPT-4.1 and Chat variants;
+// generic provider heuristics must not mark them as reasoning models.
+export function isOpenAIDirectThinkingModel(modelId) {
+  const id = (modelId || '').toLowerCase();
+  return (/^o\d/.test(id) || /^gpt-(?:[5-9]|[1-9]\d+)(?:[.-]|$)/.test(id)) &&
+    !/-chat(?:-|$)/.test(id);
+}
+
+export function isThinkingCapableForProvider(provider, modelId) {
+  return ['openai-direct', 'chatgpt'].includes(provider?.type) ? isOpenAIDirectThinkingModel(modelId) : isThinkingCapable(modelId);
+}
+
+function openAIDirectModelLabel(modelId, label) {
+  const plainLabel = label.replace(/\s*\(Thinking\)$/i, '');
+  return plainLabel + (isOpenAIDirectThinkingModel(modelId) ? ' 🧠' : '');
 }
 
 export function isGeminiThinkingModel(modelId) {
@@ -631,8 +680,13 @@ export function usesTokenBudget(modelId) {
 }
 
 export function updateThinkingUI() {
+  const chatgpt = providerForModel(state.config.model)?.type === 'chatgpt';
+  ['temperature', 'peTemp', 'maxTokens', 'peMaxTokensSlider', 'peUseModelMax'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) { input.disabled = chatgpt; input.title = chatgpt ? t('chatgpt.notAdjustable') : ''; }
+  });
   const { modelId } = splitModelId(state.config.model);
-  const capable = isThinkingCapable(modelId);
+  const capable = isThinkingCapableForProvider(providerForModel(state.config.model), modelId);
   const group = document.getElementById('thinkingGroup');
   if (group) group.style.display = capable ? 'flex' : 'none';
   if (!capable && state.config.thinkingEnabled) {
@@ -686,7 +740,7 @@ export function updateThinkingIntensityUI() {
 
 export function toggleThinking() {
   const { modelId } = splitModelId(state.config.model);
-  if (!isThinkingCapable(modelId)) return;
+  if (!isThinkingCapableForProvider(providerForModel(state.config.model), modelId)) return;
   state.config.thinkingEnabled = !state.config.thinkingEnabled;
   document.getElementById('thinkingToggle')?.classList.toggle('active', state.config.thinkingEnabled);
   document.getElementById('thinkingIntensity')?.classList.toggle('visible', state.config.thinkingEnabled);
@@ -769,7 +823,7 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+    if (!res.ok) throw await providerResponseError(provider, res);
     const data = await res.json();
     const { text, toolCalls, content } = parseAnthropicToolResponse(data);
     return { text, toolCalls, rawContent: content };
@@ -779,19 +833,22 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
   const apiMsgs = [];
   if (state.config.profilesEnabled && state.config.systemPrompt) apiMsgs.push({ role: 'system', content: state.config.systemPrompt });
   apiMsgs.push(...msgs);
-  const isOSeries = /^o\d/.test(modelId) || /^(chatgpt-)?gpt-5/.test(modelId);
+  const isOSeries = usesOpenAIReasoningParameters(modelId);
   const reqBody = { model: modelId, messages: apiMsgs, tools: AGENTIC_WEB_TOOLS_OPENAI, tool_choice: 'auto', stream: false };
   if (isOSeries) reqBody.max_completion_tokens = effectiveMaxTokens();
   else { reqBody.temperature = state.config.temperature; reqBody.max_tokens = effectiveMaxTokens(); }
+  if (['openai-direct', 'chatgpt'].includes(provider.type) && state.config.thinkingEnabled && isOpenAIDirectThinkingModel(modelId)) {
+    reqBody.reasoning_effort = { 1: 'low', 2: 'medium', 3: 'high' }[state.config.thinkingIntensity || 2];
+  }
   const extraHeaders = {};
   if (provider.type === 'openrouter') { extraHeaders['HTTP-Referer'] = window.location.origin; extraHeaders['X-Title'] = 'KI Connect NRW'; }
   if (provider.type === 'zhipu') extraHeaders['Accept-Language'] = 'en-US,en';
   const res = await fetch(proxyUrl(`${endpoint}/chat/completions`), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}`, ...extraHeaders },
-    body: JSON.stringify(reqBody),
+    headers: { 'Content-Type': 'application/json', ...providerAuthHeaders(provider), ...extraHeaders },
+    body: await providerRequestBody(provider, reqBody),
   });
-  if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 400)}`);
+  if (!res.ok) throw await providerResponseError(provider, res);
   const data = await res.json();
   const msg = data.choices && data.choices[0] && data.choices[0].message;
   if (!msg) throw new Error('Invalid response from the model.');
@@ -804,10 +861,10 @@ export async function callModelForAgenticWebTurn(msgs, provider, modelId) {
       })
     : [];
   const text = typeof msg.content === 'string' ? msg.content : '';
-  return { text, toolCalls };
+  return { text, toolCalls, _chatgpt_output: msg._chatgpt_output };
 }
 
-export function modelSupportsPdfBase64(mid){return /claude|gemini|gpt-4o/i.test(mid||'');}
+export function modelSupportsPdfBase64(mid){return providerForModel(mid)?.type === 'chatgpt' || /claude|gemini|gpt-4o/i.test(mid||'');}
 
 export function openModelMaxPanel(){renderModelMaxList();document.getElementById('modelMaxPanel').classList.add('open');document.getElementById('overlay').classList.add('show');document.querySelector('[data-panel="modelMaxPanel"]')?.classList.add('active');}
 
